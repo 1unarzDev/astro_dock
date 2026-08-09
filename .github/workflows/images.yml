@@ -151,6 +151,21 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and persist the Shaderc cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          file: .devcontainer/Dockerfile.jetson
+          target: shaderc-builder
+          platforms: linux/arm64
+          network: host
+          push: false
+          build-args: |
+            BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-shaderc
+            type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson
+          cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-shaderc,mode=max
       - uses: docker/build-push-action@v6
         with:
           context: .devcontainer
@@ -165,7 +180,9 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=ros-jazzy_zed-5.4.1_l4t-r36.4
-          cache-from: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-shaderc
+            type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson
           cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson,mode=max
 
   validate-and-promote-jetson:

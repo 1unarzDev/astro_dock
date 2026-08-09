@@ -10,7 +10,7 @@
   "postCreateCommand": ".devcontainer/postcreate.sh",
   "containerUser": "roboboat",
   "remoteUser": "roboboat",
-  "updateRemoteUserUID": false,
+  "updateRemoteUserUID": true,
   "overrideCommand": true,
   "customizations": {
     "vscode": {

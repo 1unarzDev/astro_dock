@@ -1,7 +1,7 @@
 ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
 ARG JETSON_PLATFORM=linux/arm64
 
-FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS ros-builder
+FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS shaderc-builder
 
 ARG ROS_DISTRO=jazzy
 ARG ZED_WRAPPER_REF=v5.4.1
@@ -37,6 +37,11 @@ RUN echo "[jetson] Building Shaderc ${SHADERC_REF} for Gazebo" \
         -DSHADERC_SKIP_TESTS=ON \
     && cmake --build build --parallel 2 \
     && cmake --install build
+
+
+FROM shaderc-builder AS ros-builder
+
+ARG ZED_WRAPPER_REF=v5.4.1
 
 RUN echo "[jetson] Generating the ROS ${ROS_DISTRO} source closure" \
     && rosdep update \
