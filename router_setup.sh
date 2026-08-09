@@ -300,7 +300,8 @@ probe_router() {
         BACKUP_ENCODING=hex
         info "Router has no base64 utility; NVRAM backups will use portable hexadecimal encoding."
     else
-        die "This build has neither base64 nor od, so a safe NVRAM backup cannot be created"
+        BACKUP_ENCODING=none
+        warn "Router has neither base64 nor od; configuration can continue, but no automatic NVRAM backup can be created."
     fi
     mapfile -t RADIOS < <(awk -F= '/^radio=/{print $2}' <<<"$probe" | sort -u)
     ((${#RADIOS[@]})) || die "No supported DD-WRT physical radio (wl*, ath*, or wlan*) was detected"
@@ -312,6 +313,11 @@ probe_router() {
 
 make_backup() {
     local stamp
+    if [[ $BACKUP_ENCODING == none ]]; then
+        BACKUP_FILE=""
+        warn "Proceeding without an NVRAM backup because this DD-WRT build lacks encoding tools."
+        return
+    fi
     stamp=$(date +%Y%m%d-%H%M%S)
     if [[ $BACKUP_ENCODING == base64 ]]; then
         BACKUP_FILE="$KEY_DIR/nvram-$stamp.b64"
@@ -422,6 +428,7 @@ DHCP pool           : ${ROUTER_IP%.*}.$DHCP_START - ${ROUTER_IP%.*}.$((DHCP_STAR
 WAN / router NAT    : disabled
 Router name / SSID  : $ROUTER_NAME / $SSID
 Detected radios     : ${RADIOS[*]}
+NVRAM backup        : $([[ $BACKUP_ENCODING == none ]] && printf 'unavailable on this build' || printf '%s encoding' "$BACKUP_ENCODING")
 Wi-Fi security      : WPA2-Personal / AES
 Web-admin user      : $ADMIN_USER
 SSH login           : root, generated key retained, password login enabled
@@ -462,7 +469,7 @@ verify_router() {
 }
 
 configure_router() {
-    local answer apply_script
+    local answer apply_script confirmation
     edit_settings
     validate_settings
     initialize_state
@@ -475,12 +482,25 @@ configure_router() {
         info "Dry run complete; no router settings, credentials, commits, or reboots were performed."
         return
     fi
-    read -r -p "Back up NVRAM and apply this configuration? Type APPLY to continue: " answer
-    [[ $answer == APPLY ]] || { info "Cancelled without router changes."; return; }
+    if [[ $BACKUP_ENCODING == none ]]; then
+        confirmation=APPLY-NO-BACKUP
+        warn "These changes cannot be restored automatically on this router build."
+        read -r -p "Type $confirmation to apply without a backup: " answer
+    else
+        confirmation=APPLY
+        read -r -p "Back up NVRAM and apply this configuration? Type $confirmation to continue: " answer
+    fi
+    [[ $answer == "$confirmation" ]] || { info "Cancelled without router changes."; return; }
     make_backup
     apply_script=$(build_apply_script)
     info "Applying one NVRAM transaction..."
-    printf '%s\n' "$apply_script" | router_ssh 'sh -s' || die "Apply failed; backup is at $BACKUP_FILE"
+    if ! printf '%s\n' "$apply_script" | router_ssh 'sh -s'; then
+        if [[ -n $BACKUP_FILE ]]; then
+            die "Apply failed; backup is at $BACKUP_FILE"
+        else
+            die "Apply failed; no NVRAM backup was available on this router build"
+        fi
+    fi
     info "Settings committed. Rebooting DD-WRT..."
     router_ssh 'reboot' >/dev/null 2>&1 || true
     AUTH_MODE=key
