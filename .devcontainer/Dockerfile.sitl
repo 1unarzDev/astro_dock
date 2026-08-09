@@ -5,17 +5,35 @@ ARG USERNAME=ardupilot
 ARG USER_UID=1000
 ARG USER_GID=1000
 ARG ARDUPILOT_REF=Rover-4.6.2
-ENV DEBIAN_FRONTEND=noninteractive USER=${USERNAME}
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    USER=${USERNAME}
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git locales sudo \
+    && apt-get install -y --no-install-recommends debconf-utils git locales sudo \
+    && printf '%s\n' \
+        'keyboard-configuration keyboard-configuration/layoutcode string us' \
+        'keyboard-configuration keyboard-configuration/layout string English (US)' \
+        'keyboard-configuration keyboard-configuration/modelcode string pc105' \
+        'keyboard-configuration keyboard-configuration/model string Generic 105-key PC' \
+        'keyboard-configuration keyboard-configuration/variantcode string' \
+        'keyboard-configuration keyboard-configuration/optionscode string' \
+        'tzdata tzdata/Areas select Etc' \
+        'tzdata tzdata/Zones/Etc select UTC' \
+        | debconf-set-selections \
+    && apt-get install -y --no-install-recommends keyboard-configuration tzdata \
+    && ln -snf /usr/share/zoneinfo/Etc/UTC /etc/localtime \
+    && echo Etc/UTC > /etc/timezone \
+    && dpkg-reconfigure -f noninteractive keyboard-configuration tzdata \
     && if getent passwd "${USER_UID}" >/dev/null; then userdel "$(getent passwd "${USER_UID}" | cut -d: -f1)"; fi \
     && if getent group "${USER_GID}" >/dev/null; then groupdel "$(getent group "${USER_GID}" | cut -d: -f1)"; fi \
     && groupadd --gid "${USER_GID}" "${USERNAME}" \
     && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
     && usermod -aG dialout,video,sudo "${USERNAME}" \
     && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
+    && printf 'Defaults env_keep += "DEBIAN_FRONTEND TZ"\n' > /etc/sudoers.d/keep-build-env \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
+    && chmod 0440 /etc/sudoers.d/keep-build-env \
     && locale-gen en_US.UTF-8
 
 USER ${USERNAME}
@@ -23,7 +41,7 @@ WORKDIR /home/${USERNAME}
 RUN git clone --branch "${ARDUPILOT_REF}" --depth 1 https://github.com/ArduPilot/ardupilot.git \
     && cd ardupilot \
     && git submodule update --init --recursive --depth 1 \
-    && ./Tools/environment_install/install-prereqs-ubuntu.sh -y \
+    && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC ./Tools/environment_install/install-prereqs-ubuntu.sh -y \
     && ./waf configure --board sitl \
     && ./waf build
 
