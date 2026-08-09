@@ -366,7 +366,10 @@ build_apply_script() {
     script+="command -v nvram >/dev/null"$'\n'
     script+=$(nvset_line wan_proto disabled)$'\n'
     script+=$(nvset_line wk_mode router)$'\n'
-    script+=$(nvset_line lan_proto static)$'\n'
+    # DD-WRT uses lan_proto=dhcp for the Basic Setup "DHCP Server: Enable"
+    # state even though the router's own LAN address remains statically defined
+    # by lan_ipaddr and lan_netmask.
+    script+=$(nvset_line lan_proto dhcp)$'\n'
     script+=$(nvset_line lan_ipaddr "$ROUTER_IP")$'\n'
     script+=$(nvset_line lan_netmask "$NETMASK")$'\n'
     script+=$(nvset_line lan_gateway "$LAPTOP_IP")$'\n'
@@ -431,6 +434,7 @@ Client LAN route    : ${ROUTER_IP%.*}.0 / $NETMASK (router UI remains directly r
 Client DNS          : $DNS_PRIMARY, $DNS_SECONDARY
 DHCP pool           : ${ROUTER_IP%.*}.$DHCP_START - ${ROUTER_IP%.*}.$((DHCP_START + DHCP_COUNT - 1))
 WAN / router NAT    : disabled
+DHCP server         : enabled (DD-WRT LAN protocol: dhcp)
 Router name / SSID  : $ROUTER_NAME / $SSID
 Detected radios     : ${RADIOS[*]}
 NVRAM backup        : $([[ $BACKUP_ENCODING == none ]] && printf 'unavailable on this build' || printf '%s encoding' "$BACKUP_ENCODING")
@@ -462,11 +466,12 @@ wait_for_router() {
 
 verify_router() {
     local result
-    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'") \
+    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'lan_proto='; nvram get lan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'") \
         || die "Post-reboot verification failed"
     grep -qx "lan=$ROUTER_IP" <<<"$result" || die "Router LAN address verification failed"
     grep -qx "gateway=$LAPTOP_IP" <<<"$result" || die "Router gateway verification failed"
     grep -qx 'wan=disabled' <<<"$result" || die "WAN-disable verification failed"
+    grep -qx 'lan_proto=dhcp' <<<"$result" || die "DD-WRT reports its LAN DHCP-server state as disabled"
     grep -qx 'dhcp=1' <<<"$result" || die "DHCP-server enable verification failed"
     grep -qx 'dnsmasq=1' <<<"$result" || die "DNSMasq enable verification failed"
     grep -qx 'dnsmasq_process=yes' <<<"$result" || die "DHCP was enabled in NVRAM, but DNSMasq did not start after reboot"
