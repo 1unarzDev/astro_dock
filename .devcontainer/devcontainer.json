@@ -8,8 +8,9 @@
   "runServices": ["dev"],
   "workspaceFolder": "/home/roboboat/roboboat_ws",
   "postCreateCommand": ".devcontainer/postcreate.sh",
+  "containerUser": "roboboat",
   "remoteUser": "roboboat",
-  "updateRemoteUserUID": true,
+  "updateRemoteUserUID": false,
   "overrideCommand": true,
   "customizations": {
     "vscode": {

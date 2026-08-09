@@ -14,6 +14,7 @@ services:
       ROS_WS: /home/roboboat/roboboat_ws
     volumes:
       - ${PWD}:/home/roboboat/roboboat_ws
+    user: roboboat
     working_dir: /home/roboboat/roboboat_ws
     command: sleep infinity
 

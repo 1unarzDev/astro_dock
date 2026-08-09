@@ -60,7 +60,7 @@ jobs:
         run: |
           docker run --rm \
             "${REGISTRY_IMAGE}:core-${{ matrix.arch }}-${GITHUB_SHA}" \
-            bash -lc 'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix ros_gz_bridge && sudo -n true'
+            bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && source /opt/ros/jazzy/setup.bash && ros2 pkg prefix ros_gz_bridge && sudo -n true'
 
   core-manifest:
     needs: core
@@ -117,7 +117,7 @@ jobs:
         run: |
           if [ "$TAG" = cuda ]; then
             docker run --rm "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}" \
-              bash -lc 'source /opt/ros/jazzy/setup.bash && source /opt/zed_ros2/setup.bash && sudo -n true'
+              bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && source /opt/ros/jazzy/setup.bash && source /opt/zed_ros2/setup.bash && sudo -n true'
           else
             docker run --rm "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}" \
               bash -lc 'test -x ./build/sitl/bin/ardurover && sudo -n true'

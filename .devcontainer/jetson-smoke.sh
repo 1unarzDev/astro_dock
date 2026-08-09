@@ -14,6 +14,7 @@ docker run -d --name "$container" \
     "$image" sleep infinity
 
 docker exec "$container" bash -lc 'source /opt/ros/jazzy/setup.bash && ros2 doctor --report'
+docker exec "$container" bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && sudo -n true'
 docker exec "$container" bash -lc 'test -d /usr/local/zed && test -f /opt/zed_ros2/setup.bash'
 docker exec "$container" bash -lc 'test -x /usr/local/zed/tools/ZED_Diagnostic'
 docker exec "$container" bash -lc 'compgen -G "/dev/serial/by-id/*Cube*" >/dev/null'
