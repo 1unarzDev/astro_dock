@@ -160,7 +160,7 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY_IMAGE }}:jetson-${{ github.sha }}
           build-args: |
-            BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:2510ad8bc81bf97825600943769a317951447e47829f00c70de550eca2b89f22
+            BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
             ZED_WRAPPER_REF=v5.4.1
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}

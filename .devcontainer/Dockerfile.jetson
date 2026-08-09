@@ -1,54 +1,100 @@
-ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:2510ad8bc81bf97825600943769a317951447e47829f00c70de550eca2b89f22
-FROM ${BASE_IMAGE}
+ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
+ARG JETSON_PLATFORM=linux/arm64
+
+FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS ros-builder
 
 ARG ROS_DISTRO=jazzy
-ARG USERNAME=roboboat
-ARG USER_UID=1000
-ARG USER_GID=1000
 ARG ZED_WRAPPER_REF=v5.4.1
-ENV DEBIAN_FRONTEND=noninteractive \
-    ROS_DISTRO=${ROS_DISTRO} \
-    ROS_WS=/home/roboboat/roboboat_ws \
-    PATH=/workspace/venv/bin:${PATH}
-
-COPY requirements.txt /tmp/astro/requirements.txt
-COPY pip.conf /etc/pip.conf
+ENV DEBIAN_FRONTEND=noninteractive ROS_DISTRO=${ROS_DISTRO}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential ca-certificates cmake curl git gnupg2 locales \
-        python3-pip python3-venv \
-        sudo udev \
+        python3-pip python3-venv sudo udev \
     && python3 -m pip install --no-cache-dir \
-        colcon-common-extensions \
-        rosdep \
-        rosinstall-generator \
-        vcstool
+        colcon-common-extensions rosdep rosinstall-generator 'setuptools<81' vcstool
 
 RUN rosdep init 2>/dev/null || true
 
-# JetPack 6 / L4T r36 is Ubuntu 22.04, where Jazzy has no binary release.
-# Generate the complete source closure once in CI and publish the result.
-RUN rosdep update \
+RUN echo "[jetson] Generating the ROS ${ROS_DISTRO} source closure" \
+    && rosdep update \
     && mkdir -p /tmp/jazzy_ws/src \
     && rosinstall_generator \
         desktop navigation2 nav2_bringup ros_gz gz_ros2_control mavros \
         robot_localization rtabmap_ros slam_toolbox twist_mux \
         velodyne_driver velodyne_pointcloud vision_msgs_rviz_plugins zed_msgs \
         --rosdistro "${ROS_DISTRO}" --deps --tar \
-        > /tmp/jazzy_ws/jazzy.rosinstall \
-    && vcs import /tmp/jazzy_ws/src < /tmp/jazzy_ws/jazzy.rosinstall \
+        > /tmp/jazzy_ws/jazzy.rosinstall
+
+RUN echo "[jetson] Downloading the ROS source closure" \
+    && vcs import --recursive --retry 3 /tmp/jazzy_ws/src \
+        < /tmp/jazzy_ws/jazzy.rosinstall
+
+RUN echo "[jetson] Installing ROS system dependencies" \
     && rosdep install --from-paths /tmp/jazzy_ws/src --ignore-src \
-        --rosdistro "${ROS_DISTRO}" -y --skip-keys fastcdr \
+        --rosdistro "${ROS_DISTRO}" -y --skip-keys fastcdr
+
+RUN echo "[jetson] Building ROS ${ROS_DISTRO}" \
     && cd /tmp/jazzy_ws \
     && colcon build --merge-install --install-base /opt/ros/${ROS_DISTRO} \
-        --cmake-args -DCMAKE_BUILD_TYPE=Release \
+        --event-handlers console_direct+ \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+RUN echo "[jetson] Downloading ZED ROS wrapper ${ZED_WRAPPER_REF}" \
     && git clone --branch "${ZED_WRAPPER_REF}" --depth 1 --recursive \
-        https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed_ws/src/zed-ros2-wrapper \
-    && . /opt/ros/${ROS_DISTRO}/setup.sh \
-    && rosdep install --from-paths /tmp/zed_ws/src --ignore-src --rosdistro "${ROS_DISTRO}" -y \
+        https://github.com/stereolabs/zed-ros2-wrapper.git \
+        /tmp/zed_ws/src/zed-ros2-wrapper
+
+RUN echo "[jetson] Installing and building the ZED ROS wrapper" \
+    && source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && rosdep install --from-paths /tmp/zed_ws/src --ignore-src \
+        --rosdistro "${ROS_DISTRO}" -y \
     && cd /tmp/zed_ws \
-    && colcon build --merge-install --install-base /opt/zed_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && colcon build --merge-install --install-base /opt/zed_ros2 \
+        --event-handlers console_direct+ \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+# Preserve only package manifests for runtime rosdep resolution. The source
+# and build trees stay in this disposable stage instead of bloating the image.
+RUN cd /tmp \
+    && find jazzy_ws/src zed_ws/src -name package.xml -print0 \
+        | tar --null --files-from=- -czf /tmp/rosdep-manifests.tar.gz \
+    && test -s /tmp/rosdep-manifests.tar.gz
+
+
+FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS runtime
+
+ARG ROS_DISTRO=jazzy
+ARG USERNAME=roboboat
+ARG USER_UID=1000
+ARG USER_GID=1000
+ENV DEBIAN_FRONTEND=noninteractive \
+    ROS_DISTRO=${ROS_DISTRO} \
+    ROS_WS=/home/roboboat/roboboat_ws \
+    PATH=/workspace/venv/bin:${PATH}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+COPY --from=ros-builder /opt/ros/${ROS_DISTRO} /opt/ros/${ROS_DISTRO}
+COPY --from=ros-builder /opt/zed_ros2 /opt/zed_ros2
+COPY --from=ros-builder /tmp/rosdep-manifests.tar.gz /tmp/rosdep-manifests.tar.gz
+COPY requirements.txt /tmp/astro/requirements.txt
+COPY pip.conf /etc/pip.conf
+
+RUN echo "[jetson] Installing runtime dependencies" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates locales python3-pip python3-venv sudo udev \
+    && python3 -m pip install --no-cache-dir rosdep
+
+RUN rosdep init 2>/dev/null || true
+
+RUN rosdep update \
+    && mkdir -p /tmp/rosdep-src \
+    && tar -xzf /tmp/rosdep-manifests.tar.gz -C /tmp/rosdep-src \
+    && rosdep install --from-paths /tmp/rosdep-src --ignore-src \
+        --rosdistro "${ROS_DISTRO}" --dependency-types exec \
+        -y --skip-keys fastcdr \
     && /opt/ros/${ROS_DISTRO}/lib/mavros/install_geographiclib_datasets.sh \
     && python3 -m venv --system-site-packages /workspace/venv \
     && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
@@ -61,7 +107,8 @@ RUN rosdep update \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
     && mkdir -p "${ROS_WS}" \
     && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" /opt/zed_ros2 \
-    && rm -rf /tmp/jazzy_ws /tmp/zed_ws /tmp/astro /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /tmp/astro /tmp/rosdep-src /tmp/rosdep-manifests.tar.gz /var/lib/apt/lists/*
 
 USER ${USERNAME}
 WORKDIR ${ROS_WS}
