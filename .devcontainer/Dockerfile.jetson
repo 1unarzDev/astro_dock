@@ -17,9 +17,13 @@ COPY pip.conf /etc/pip.conf
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential ca-certificates cmake curl git gnupg2 locales \
-        python3-colcon-common-extensions python3-pip python3-rosdep python3-venv python3-vcstool \
+        python3-pip python3-venv \
         sudo udev \
-    && python3 -m pip install --no-cache-dir rosinstall-generator
+    && python3 -m pip install --no-cache-dir \
+        colcon-common-extensions \
+        rosdep \
+        rosinstall-generator \
+        vcstool
 
 RUN rosdep init 2>/dev/null || true
 
