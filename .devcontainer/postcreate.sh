@@ -1,32 +1,27 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-echo "[postcreate] Appending custom bashrc..."
-cat .devcontainer/dev.bashrc >> ~/.bashrc
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "[postcreate] Creating helper text file..."
-touch ~/.helper.txt
-cat .devcontainer/dev.helper.txt >> ~/.helper.txt
+ensure_source_line() {
+    local source_file="$1"
+    local target_file="$2"
+    local line="source \"${source_file}\""
+    grep -Fqx "$line" "$target_file" 2>/dev/null || printf '\n%s\n' "$line" >> "$target_file"
+}
 
-echo "[postcreate] Updating apt packages..."
-sudo apt update -y
+ensure_source_line "$repo_root/.devcontainer/dev.bashrc" "$HOME/.bashrc"
+ln -sfn "$repo_root/.devcontainer/dev.helper.txt" "$HOME/.helper.txt"
 
-echo "[postcreate] Updating rosdep..."
-rosdep update
+if [[ "${ASTRO_ROSDEP_INSTALL:-0}" == "1" && -d "$repo_root/src" ]]; then
+    mapfile -t skip_keys < <(sed '/^[[:space:]]*$/d' "$repo_root/.devcontainer/package-ignore.txt")
+    rosdep_args=(install --from-paths "$repo_root/src" --ignore-src -y)
+    if ((${#skip_keys[@]})); then
+        rosdep_args+=(--skip-keys "${skip_keys[*]}")
+    fi
+    rosdep "${rosdep_args[@]}"
+else
+    echo "[postcreate] Skipping rosdep install; set ASTRO_ROSDEP_INSTALL=1 when manifests change."
+fi
 
-echo "[postcreate] Install geoid dataset for mavros..."
-#sudo geographiclib-get-geoids egm96-5
-sudo wget -O /tmp/egm96-5.tar.bz2 'https://psychz.dl.sourceforge.net/project/geographiclib/geoids-distrib/egm96-5.tar.bz2?viasf=1' #this link came to me in a dream
-sudo tar -xf /tmp/egm96-5.tar.bz2 -C /usr/share/GeographicLib/
-sudo rm -rf /tmp/egm96-5.tar.bz2
-
-echo "[postcreate] Installing workspace dependencies..."
-rosdep install --from-paths src --ignore-src -y \
-  --skip-keys="$(tr '\n' ' ' < .devcontainer/package-ignore.txt)"
-
-echo "[postcreate] GPU permissions..."
-sudo chown -R $USER:$USER /dev 2> /dev/null
-sudo chown -R $USER:$USER /workspace/venv || true 2> /dev/null
-sudo chgrp video /dev/nvhost-gpu /tmp/argus_socket || true 2> /dev/null
-sudo chmod 660 /dev/nvhost-gpu /tmp/argus_socket || true 2> /dev/null
-
-echo "[postcreate] Done!"
+echo "[postcreate] Workspace ready."

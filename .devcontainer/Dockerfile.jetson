@@ -1,0 +1,65 @@
+ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:2510ad8bc81bf97825600943769a317951447e47829f00c70de550eca2b89f22
+FROM ${BASE_IMAGE}
+
+ARG ROS_DISTRO=jazzy
+ARG USERNAME=roboboat
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG ZED_WRAPPER_REF=v5.4.1
+ENV DEBIAN_FRONTEND=noninteractive \
+    ROS_DISTRO=${ROS_DISTRO} \
+    ROS_WS=/home/roboboat/roboboat_ws \
+    PATH=/workspace/venv/bin:${PATH}
+
+COPY requirements.txt /tmp/astro/requirements.txt
+COPY pip.conf /etc/pip.conf
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates cmake curl git gnupg2 locales \
+        python3-colcon-common-extensions python3-pip python3-rosdep python3-venv python3-vcstool \
+        sudo udev \
+    && python3 -m pip install --no-cache-dir rosinstall-generator
+
+RUN rosdep init 2>/dev/null || true
+
+# JetPack 6 / L4T r36 is Ubuntu 22.04, where Jazzy has no binary release.
+# Generate the complete source closure once in CI and publish the result.
+RUN rosdep update \
+    && mkdir -p /tmp/jazzy_ws/src \
+    && rosinstall_generator \
+        desktop navigation2 nav2_bringup ros_gz gz_ros2_control mavros \
+        robot_localization rtabmap_ros slam_toolbox twist_mux \
+        velodyne_driver velodyne_pointcloud vision_msgs_rviz_plugins zed_msgs \
+        --rosdistro "${ROS_DISTRO}" --deps --tar \
+        > /tmp/jazzy_ws/jazzy.rosinstall \
+    && vcs import /tmp/jazzy_ws/src < /tmp/jazzy_ws/jazzy.rosinstall \
+    && rosdep install --from-paths /tmp/jazzy_ws/src --ignore-src \
+        --rosdistro "${ROS_DISTRO}" -y --skip-keys fastcdr \
+    && cd /tmp/jazzy_ws \
+    && colcon build --merge-install --install-base /opt/ros/${ROS_DISTRO} \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && git clone --branch "${ZED_WRAPPER_REF}" --depth 1 --recursive \
+        https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed_ws/src/zed-ros2-wrapper \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && rosdep install --from-paths /tmp/zed_ws/src --ignore-src --rosdistro "${ROS_DISTRO}" -y \
+    && cd /tmp/zed_ws \
+    && colcon build --merge-install --install-base /opt/zed_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && /opt/ros/${ROS_DISTRO}/lib/mavros/install_geographiclib_datasets.sh \
+    && python3 -m venv --system-site-packages /workspace/venv \
+    && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
+    && if getent passwd "${USER_UID}" >/dev/null; then userdel "$(getent passwd "${USER_UID}" | cut -d: -f1)"; fi \
+    && if getent group "${USER_GID}" >/dev/null; then groupdel "$(getent group "${USER_GID}" | cut -d: -f1)"; fi \
+    && groupadd --gid "${USER_GID}" "${USERNAME}" \
+    && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
+    && usermod -aG dialout,video,sudo "${USERNAME}" \
+    && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
+    && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
+    && mkdir -p "${ROS_WS}" \
+    && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" /opt/zed_ros2 \
+    && rm -rf /tmp/jazzy_ws /tmp/zed_ws /tmp/astro /var/lib/apt/lists/*
+
+USER ${USERNAME}
+WORKDIR ${ROS_WS}
+ENV SHELL=/bin/bash
+CMD ["sleep", "infinity"]

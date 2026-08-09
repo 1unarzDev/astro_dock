@@ -1,6 +1,6 @@
 ## Introduction
 
-Welcome to the MHSeals Docker container, serving as an ultra-portable development tool, whether you are working with an NVIDIA Jetson, using a Raspberry Pi, running Windows, using an Arch-based distro, or using a Red Hat distro, you can run this container on anything.
+Welcome to the MHSeals ROS 2 Jazzy development environment. The same Compose project runs on native Linux, NVIDIA Jetson, Raspberry Pi, immutable Fedora-family hosts, Windows, and macOS. Normal startup pulls prebuilt images from `lunarzdev/astro` instead of rebuilding ROS, Gazebo, CUDA, ZED, or ArduPilot locally.
 
 ## Installation
 
@@ -22,11 +22,16 @@ git submodule foreach '
 '
 ```
 
-For your convenience, an environment setup script for each OS has been provided. Simply run the following (`<OS>` corresponds to either `linux`, `mac`, or `windows`):
+For your convenience, an environment setup script for each OS has been provided. On Linux, inspect the proposed host changes before approving them:
 
 ```bash
-./setup.<OS>.sh
+./setup.linux.sh --dry-run
+./setup.linux.sh
 ```
+
+The Linux setup detects Debian/Ubuntu, Arch, Fedora, RHEL 8–10 derivatives, rpm-ostree/bootc hosts, and Ubuntu Core. It previews every command and asks before Docker, NVIDIA toolkit, udev, developer-tool, and Compose stages. Use `--components docker,devices,compose` to limit its scope or `--non-interactive --yes` for provisioning. It never installs an NVIDIA driver or recursively changes `/dev`.
+
+On macOS or Windows, run `./setup.mac.sh` or `setup.windows.bat` as before.
 
 Alternatively, you may manually install the following necessary dependencies as you see fit:
 - Docker
@@ -74,6 +79,30 @@ Not much to do here, but for manual Docker installation instructions, visit the 
 > ```
 
 Anything else you would like to install manually, reference the installation scripts for help on figuring out how to install them.
+
+### Container images and local builds
+
+The capability tags are `core`, `cuda`, `jetson`, and `sitl`. The host probe selects an adapter and writes the ignored `.devcontainer/docker-compose.override.yml`; the devcontainer then pulls the corresponding image. All development services are privileged, and native Linux adapters bind `/dev` for robotics hardware access.
+
+Image maintainers can opt into a local build without changing the normal Compose file:
+
+```bash
+docker compose \
+  -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.override.yml \
+  -f .devcontainer/docker-compose.build.yml \
+  build
+```
+
+Workspace dependency installation is intentionally excluded from normal container creation. After package manifests change, run `ASTRO_ROSDEP_INSTALL=1 .devcontainer/postcreate.sh` once inside the container.
+
+To diagnose a camera or Cube Orange connection, run `.devcontainer/device-diagnostics.sh`. Scoped host udev rules keep CubePilot, ZED USB, and video devices accessible across reconnects, while passwordless sudo remains available inside the privileged container for targeted recovery. Do not recursively change ownership or permissions beneath `/dev`.
+
+### Image automation
+
+GitHub Actions requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets. `core` uses native hosted amd64 and arm64 runners; `cuda` and `sitl` use hosted amd64. The large JetPack 6/Jazzy source build requires a persistent self-hosted builder labeled `self-hosted`, `linux`, `x64`, and `astro-builder` with at least 100 GB free. Its BuildKit cache is stored in Docker Hub.
+
+Jetson builds initially publish only `jetson-<commit>`. To advance `jetson`, manually dispatch the image workflow with `promote_jetson` enabled. A protected `boat-hardware` environment and an ephemeral runner labeled `self-hosted`, `linux`, `ARM64`, `jetson`, `orin`, and `jp6` must approve the candidate by checking ROS, ZED camera frames, and Cube Orange enumeration.
 
 ### Windows
 
@@ -130,7 +159,17 @@ For the Unity physics sim, visit [this page](https://github.com/MHSeals/mhseals_
 
 The ROS packages/nodes you run for navigation are all completely up to you depending on what needs to be tested; however, be sure to always use the `ros_tcp_endpoint` package by running `ros2 run ros_tcp_endpoint default_server_endpoint --ros-args -p <arg>:=<value>` (`ROS_IP` and `ROS_TCP_PORT` are useful args for matching the connection with Unity).
 
-Finally, in order to start the Ardupilot SITL, you must start the devcontainer. After it's running, in VSCode, open the activity bar. From there, select the "Remote Explorer" option. In the "Other Containers" section, should should be able to attach a VSCode window to `mhseals_docker_devcontainer (ardupilot_sitl)` (you may also just open it through a local terminal by running `docker run -it ardupilot_sitl bash`). After you have access to the terminal, run the following command below (please note it will fail initially unless the Unity connection is already up):
+ArduPilot SITL is optional rather than part of every devcontainer startup. Start it with the Compose profile, then attach a terminal to `ardupilot_sitl`:
+
+```bash
+docker compose \
+  -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.override.yml \
+  --profile sitl up -d sitl
+docker exec -it ardupilot_sitl bash
+```
+
+After you have access to the terminal, run the following command (it will initially fail unless the Unity connection is already up):
 
 ```bash
 Tools/autotest/sim_vehicle.py -v "$VEHICLE" $SITL_EXTRA_ARGS

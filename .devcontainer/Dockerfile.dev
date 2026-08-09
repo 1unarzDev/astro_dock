@@ -1,61 +1,59 @@
-ARG BASE_IMAGE=ros:humble
-FROM $BASE_IMAGE
+ARG BASE_IMAGE=ros:jazzy-ros-base-noble
+FROM ${BASE_IMAGE}
 
-ARG USERNAME
-ARG USER_UID
-ARG USER_GID
-ARG TARGET_PLATFORM
-ENV USER=${USERNAME}
-ENV TARGET_PLATFORM=${TARGET_PLATFORM}
+ARG USERNAME=roboboat
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG ZED_WRAPPER_REF=v5.4.1
+ENV DEBIAN_FRONTEND=noninteractive \
+    ROS_DISTRO=jazzy \
+    ROS_WS=/home/roboboat/roboboat_ws \
+    PATH=/workspace/venv/bin:${PATH}
 
-# Delete user if it exists in container
-RUN if id -u $USER_UID ; then userdel `id -un $USER_UID` ; fi
+COPY apt-packages.txt requirements.txt /tmp/astro/
+COPY pip.conf /etc/pip.conf
 
-# Needed setup dependencies (no update to fix base source lists)
-RUN apt-get install -y --no-install-recommends \
-        curl gnupg2 ca-certificates sudo
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash-completion build-essential ca-certificates curl git gnupg2 \
+        python3-pip python3-venv sudo udev \
+    && if ! ls /etc/apt/sources.list.d/ros2* >/dev/null 2>&1; then \
+         curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+           | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg; \
+         printf 'deb [arch=%s signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu noble main\n' \
+           "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/ros2.list; \
+         apt-get update; \
+       fi \
+    && apt-get install -y --no-install-recommends python3-colcon-common-extensions python3-rosdep \
+    && xargs -r apt-get install -y --no-install-recommends < /tmp/astro/apt-packages.txt \
+    && python3 -m venv --system-site-packages /workspace/venv \
+    && /workspace/venv/bin/pip install --upgrade pip \
+    && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
+    && /opt/ros/${ROS_DISTRO}/lib/mavros/install_geographiclib_datasets.sh \
+    && if getent passwd "${USER_UID}" >/dev/null; then userdel "$(getent passwd "${USER_UID}" | cut -d: -f1)"; fi \
+    && if getent group "${USER_GID}" >/dev/null; then groupdel "$(getent group "${USER_GID}" | cut -d: -f1)"; fi \
+    && groupadd --gid "${USER_GID}" "${USERNAME}" \
+    && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
+    && usermod -aG dialout,video,sudo "${USERNAME}" \
+    && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
+    && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
+    && mkdir -p "${ROS_WS}" \
+    && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/astro
 
-# Ensure ROS package list available
-RUN set -eux; \
-    if ! apt-get update -y; then \
-        rm -f /etc/apt/sources.list.d/ros2-latest.list /usr/share/keyrings/ros-archive-keyring.gpg; \
-        curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-            | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg; \
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu jammy main" \
-            > /etc/apt/sources.list.d/ros2.list; \
-        apt-get update -y; \
+RUN if [ -d /usr/local/zed ]; then \
+      git clone --branch "${ZED_WRAPPER_REF}" --depth 1 --recursive \
+        https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed_ws/src/zed-ros2-wrapper; \
+      . /opt/ros/${ROS_DISTRO}/setup.sh; \
+      rosdep update; \
+      rosdep install --from-paths /tmp/zed_ws/src --ignore-src --rosdistro "${ROS_DISTRO}" -y; \
+      cd /tmp/zed_ws; \
+      colcon build --merge-install --install-base /opt/zed_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release; \
+      rm -rf /tmp/zed_ws /var/lib/apt/lists/*; \
     fi
 
-# Create the user
-RUN groupadd --gid $USER_GID $USERNAME \
-    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME \
-    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
-    && chmod 0440 /etc/sudoers.d/$USERNAME
-
-# Prepare installation and work environment
-WORKDIR /home/${USERNAME}/roboboat_ws
-COPY requirements.txt .
-COPY apt-packages.txt .
-COPY package-ignore.txt .
-
-# Install dependencies
-RUN apt-get update && apt-get upgrade -y && apt-get install -y python3-pip python3-venv build-essential \
-    && grep -vFf package-ignore.txt apt-packages.txt | xargs apt-get -y -o Dpkg::Options::="--force-overwrite" install --no-install-recommends \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Virtualize and install Python packages
-COPY pip.conf /etc/pip.conf
-ENV PIP_INDEX_URL=""
-ENV PIP_EXTRA_INDEX_URL=""
-RUN python3 -m venv --system-site-packages /workspace/venv \
-    && /workspace/venv/bin/pip install --upgrade pip \
-    && /workspace/venv/bin/pip install --no-cache-dir -r requirements.txt
-ENV PATH=/workspace/venv/bin:$PATH
-
-# Startup setup
-RUN chown -R $USER:$USER /workspace/venv 
-RUN usermod -aG video,dialout $USERNAME
-USER $USERNAME
+USER ${USERNAME}
+WORKDIR ${ROS_WS}
 ENV SHELL=/bin/bash
-CMD ["/bin/bash"]
+CMD ["sleep", "infinity"]

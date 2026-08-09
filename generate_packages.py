@@ -88,7 +88,8 @@ for package_xml in workspace.rglob("package.xml"):
                         continue
                 apt_packages.add(dep_name)
 
-apt_packages = {f"ros-humble-{p.replace('_', '-')}" for p in apt_packages}
+ros_distro = os.environ.get("ROS_DISTRO", "jazzy")
+apt_packages = {f"ros-{ros_distro}-{p.replace('_', '-')}" for p in apt_packages}
 apt_file = Path("apt-packages.txt")
 if apt_packages:
     added_count = append_to_file(apt_file, apt_packages)

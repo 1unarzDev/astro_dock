@@ -1,0 +1,178 @@
+name: Build container images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+    inputs:
+      promote_jetson:
+        description: Validate on Jetson hardware and promote the moving tag
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY_IMAGE: lunarzdev/astro
+
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          file: .devcontainer/Dockerfile.dev
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ env.REGISTRY_IMAGE }}:core-${{ matrix.arch }}-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=ros-jazzy
+          cache-from: type=gha,scope=core-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=core-${{ matrix.arch }}
+      - name: Smoke-test core image
+        run: |
+          docker run --rm \
+            "${REGISTRY_IMAGE}:core-${{ matrix.arch }}-${GITHUB_SHA}" \
+            bash -lc 'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix ros_gz_bridge && sudo -n true'
+
+  core-manifest:
+    needs: core
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish multi-architecture core tags
+        run: |
+          docker buildx imagetools create \
+            --tag "${REGISTRY_IMAGE}:core-${GITHUB_SHA}" \
+            --tag "${REGISTRY_IMAGE}:core" \
+            "${REGISTRY_IMAGE}:core-amd64-${GITHUB_SHA}" \
+            "${REGISTRY_IMAGE}:core-arm64-${GITHUB_SHA}"
+
+  amd64-images:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: cuda
+            dockerfile: .devcontainer/Dockerfile.dev
+            build_args: |
+              BASE_IMAGE=stereolabs/zed:5.4.1-gl-devel-cuda12.8-ubuntu24.04@sha256:45a8c195b6aeece79f4660ef5c6ced3c449d8f1bb560f316f1a4d00d3ac3e90e
+              ZED_WRAPPER_REF=v5.4.1
+          - tag: sitl
+            dockerfile: .devcontainer/Dockerfile.sitl
+            build_args: |
+              ARDUPILOT_REF=Rover-4.6.2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGISTRY_IMAGE }}:${{ matrix.tag }}-${{ github.sha }}
+          build-args: ${{ matrix.build_args }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.tag }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.tag }}
+      - name: Smoke-test immutable image
+        env:
+          TAG: ${{ matrix.tag }}
+        run: |
+          if [ "$TAG" = cuda ]; then
+            docker run --rm "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}" \
+              bash -lc 'source /opt/ros/jazzy/setup.bash && source /opt/zed_ros2/setup.bash && sudo -n true'
+          else
+            docker run --rm "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}" \
+              bash -lc 'test -x ./build/sitl/bin/ardurover && sudo -n true'
+          fi
+      - name: Promote moving tag
+        env:
+          TAG: ${{ matrix.tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${REGISTRY_IMAGE}:${TAG}" \
+            "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}"
+
+  jetson-candidate:
+    runs-on: [self-hosted, linux, x64, astro-builder]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          file: .devcontainer/Dockerfile.jetson
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY_IMAGE }}:jetson-${{ github.sha }}
+          build-args: |
+            BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:2510ad8bc81bf97825600943769a317951447e47829f00c70de550eca2b89f22
+            ZED_WRAPPER_REF=v5.4.1
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=ros-jazzy_zed-5.4.1_l4t-r36.4
+          cache-from: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson
+          cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson,mode=max
+
+  validate-and-promote-jetson:
+    if: github.event_name == 'workflow_dispatch' && inputs.promote_jetson
+    needs: jetson-candidate
+    runs-on: [self-hosted, linux, ARM64, jetson, orin, jp6]
+    environment: boat-hardware
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Pull and validate candidate on hardware
+        env:
+          CANDIDATE: ${{ env.REGISTRY_IMAGE }}:jetson-${{ github.sha }}
+        run: .devcontainer/jetson-smoke.sh "$CANDIDATE"
+      - name: Promote validated Jetson image
+        run: |
+          docker buildx imagetools create \
+            --tag "${REGISTRY_IMAGE}:jetson" \
+            "${REGISTRY_IMAGE}:jetson-${GITHUB_SHA}"

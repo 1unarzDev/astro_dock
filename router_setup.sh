@@ -19,7 +19,7 @@ DNS_PRIMARY=1.1.1.1
 DNS_SECONDARY=8.8.8.8
 ROUTER_NAME=mhseals
 SSID=mhseals
-ADMIN_USER=roboboat
+ADMIN_USER=mhseals
 ADMIN_PASSWORD=roboboat
 WIFI_PASSWORD=roboboat
 
@@ -357,7 +357,10 @@ build_apply_script() {
     else
         merged_keys=$PUBLIC_KEY
     fi
-    dns_options="dhcp-option=3,$LAPTOP_IP"$'\n'"dhcp-option=6,$DNS_PRIMARY,$DNS_SECONDARY"
+    # Explicitly advertise the LAN mask as well as the laptop gateway. With a
+    # correct connected route, clients reach the DD-WRT UI at .1 directly while
+    # sending only off-subnet traffic to the forwarding laptop at .2.
+    dns_options="dhcp-option=1,$NETMASK"$'\n'"dhcp-option=3,$LAPTOP_IP"$'\n'"dhcp-option=6,$DNS_PRIMARY,$DNS_SECONDARY"
 
     script+="set -e"$'\n'
     script+="command -v nvram >/dev/null"$'\n'
@@ -373,6 +376,7 @@ build_apply_script() {
     script+=$(nvset_line dhcp_num "$DHCP_COUNT")$'\n'
     script+=$(nvset_line dhcp_lease 1440)$'\n'
     script+=$(nvset_line dhcpfwd_enable 0)$'\n'
+    script+=$(nvset_line dhcpd_enable 1)$'\n'
     script+=$(nvset_line dnsmasq_enable 1)$'\n'
     script+=$(nvset_line dhcp_dnsmasq 1)$'\n'
     script+=$(nvset_line dns_dnsmasq 1)$'\n'
@@ -423,6 +427,7 @@ Configuration preview
 Target/current host : $HOST
 Router LAN address  : $ROUTER_IP / $NETMASK
 Client gateway      : $LAPTOP_IP (the forwarding laptop)
+Client LAN route    : ${ROUTER_IP%.*}.0 / $NETMASK (router UI remains directly reachable)
 Client DNS          : $DNS_PRIMARY, $DNS_SECONDARY
 DHCP pool           : ${ROUTER_IP%.*}.$DHCP_START - ${ROUTER_IP%.*}.$((DHCP_START + DHCP_COUNT - 1))
 WAN / router NAT    : disabled
@@ -457,11 +462,14 @@ wait_for_router() {
 
 verify_router() {
     local result
-    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'") \
+    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'") \
         || die "Post-reboot verification failed"
     grep -qx "lan=$ROUTER_IP" <<<"$result" || die "Router LAN address verification failed"
     grep -qx "gateway=$LAPTOP_IP" <<<"$result" || die "Router gateway verification failed"
     grep -qx 'wan=disabled' <<<"$result" || die "WAN-disable verification failed"
+    grep -qx 'dhcp=1' <<<"$result" || die "DHCP-server enable verification failed"
+    grep -qx 'dnsmasq=1' <<<"$result" || die "DNSMasq enable verification failed"
+    grep -qx 'dnsmasq_process=yes' <<<"$result" || die "DHCP was enabled in NVRAM, but DNSMasq did not start after reboot"
     if ! grep -q "^route=.*via $LAPTOP_IP" <<<"$result"; then
         warn "DD-WRT saved LAN gateway $LAPTOP_IP but did not expose a matching default route yet."
     fi

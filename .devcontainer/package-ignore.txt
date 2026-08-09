@@ -1,2 +1,0 @@
-gazebo_ros_pkgs
-gazebo_ros2_control

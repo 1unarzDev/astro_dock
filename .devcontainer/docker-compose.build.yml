@@ -1,0 +1,20 @@
+services:
+  dev:
+    image: astro:core-local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        BASE_IMAGE: ros:jazzy-ros-base-noble
+        USERNAME: roboboat
+
+  sitl:
+    image: astro:sitl-local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile.sitl
+      args:
+        USERNAME: ardupilot
+        ARDUPILOT_REF: ${ARDUPILOT_REF:-Rover-4.6.2}

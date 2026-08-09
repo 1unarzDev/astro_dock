@@ -1,28 +1,15 @@
 {
-  "name": "Roboboat Development Container",
+  "name": "Roboboat Jazzy Development Container",
   "dockerComposeFile": [
     "docker-compose.yml",
     "docker-compose.override.yml"
   ],
-  "features": {
-    "./features/gazebo": {
-      "variant": "none"
-    },
-    "./features/zed-sdk": {
-      "zed_sdk_version": "5.1",
-      "cuda_version": "12.8",
-      "ubuntu_release_year": "22",
-      "l4t_version": "36.4"
-    }
-  },
   "service": "dev",
-  "runServices": [
-    "dev",
-    "sitl"
-  ],
+  "runServices": ["dev"],
   "workspaceFolder": "/home/roboboat/roboboat_ws",
   "postCreateCommand": ".devcontainer/postcreate.sh",
   "remoteUser": "roboboat",
+  "updateRemoteUserUID": true,
   "overrideCommand": true,
   "customizations": {
     "vscode": {
@@ -36,7 +23,5 @@
       ]
     }
   },
-  "forwardPorts": [
-    10000
-  ]
+  "forwardPorts": [10000]
 }

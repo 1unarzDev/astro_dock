@@ -1,50 +1,36 @@
 services:
   dev:
-    image: lunarzdev/mhseals-dev:linux
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-      args:
-        USERNAME: roboboat
-        USER_UID: ${UID-1000}
-        USER_GID: ${GID-1000}
-        TARGET_PLATFORM: linux
-        BASE_IMAGE: ros:humble
+    image: ${ASTRO_IMAGE:-lunarzdev/astro:core}
+    pull_policy: ${ASTRO_PULL_POLICY:-always}
     container_name: roboboat_dev
     privileged: true
-    network_mode: "host"
-    ipc: "host"
-    pid: "host"
+    network_mode: host
+    ipc: host
+    pid: host
+    shm_size: 2gb
     environment:
       ROS_LOCALHOST_ONLY: "0"
       ROS_DOMAIN_ID: "42"
-      ROS_WS: "/home/roboboat/roboboat_ws"
-      DISPLAY: ${DISPLAY}
+      ROS_WS: /home/roboboat/roboboat_ws
     volumes:
       - ${PWD}:/home/roboboat/roboboat_ws
-      - /tmp/.X11-unix:/tmp/.X11-unix:cached
-      - /dev:/dev 
-    user: "${UID:-1000}:${GID:-1000}"
     working_dir: /home/roboboat/roboboat_ws
+    command: sleep infinity
+
   sitl:
-    image: lunarzdev/mhseals-sitl:linux
-    pull_policy: missing
-    build:
-      context: .
-      dockerfile: Dockerfile.sitl
-      args:
-        USERNAME: ardupilot
-        USER_UID: ${UID:-1000}
-        USER_GID: ${GID:-1000}
-        MIRROR: http://mirror.us.leaseweb.net/ubuntu
+    profiles: ["sitl"]
+    image: ${ASTRO_SITL_IMAGE:-lunarzdev/astro:sitl}
+    pull_policy: ${ASTRO_PULL_POLICY:-always}
+    platform: linux/amd64
     container_name: ardupilot_sitl
-    network_mode: "host"
+    privileged: true
+    network_mode: host
+    ipc: host
+    pid: host
     environment:
-      VEHICLE: "Rover"
-      DISPLAY: ${DISPLAY}
-      SITL_EXTRA_ARGS: "--console --add-param-file=/param/boat.param --model JSON:127.0.0.1 --out tcp-l:5762"
+      VEHICLE: Rover
+      DISPLAY: ${DISPLAY:-}
+      SITL_EXTRA_ARGS: --console --add-param-file=/param/boat.param --model JSON:127.0.0.1 --out tcp-l:5762
     volumes:
       - ./boat.param:/param/boat.param:rw
-      - /tmp/.X11-unix:/tmp/.X11-unix:cached
-      - /dev/dri:/dev/dri:cached
     restart: unless-stopped

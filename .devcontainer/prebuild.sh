@@ -1,56 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OS_TYPE="unknown"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+os_type=linux
 
-# -------------------------
-# Detect OS / platform
-# -------------------------
-if [ -n "${WSL_DISTRO_NAME:-}" ]; then
-    OS_TYPE="wsl"
-elif [ "$(uname -s)" = "Darwin" ]; then
-    OS_TYPE="mac"
-elif [ "$(uname -s)" = "Linux" ]; then
-    ARCH="$(uname -m)"
-    if [ "$ARCH" = "aarch64" ]; then
-        # Check for Jetson by looking for Tegra device tree
-        if [ -f /proc/device-tree/model ] && grep -qi "jetson" /proc/device-tree/model; then
-            OS_TYPE="jetson"
-        elif [ -f /etc/rpi-issue ]; then
-            OS_TYPE="rpi"
-        else
-            OS_TYPE="linux"
-        fi
-    else
-        OS_TYPE="linux"
+if [[ "$(uname -s)" == Darwin ]]; then
+    os_type=mac
+elif [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    os_type=windows
+elif [[ "$(uname -s)" == Linux ]]; then
+    arch="$(uname -m)"
+    if command -v rpm-ostree >/dev/null 2>&1 || command -v bootc >/dev/null 2>&1 || [[ -e /run/ostree-booted ]]; then
+        os_type=immutable
+    elif [[ "$arch" == aarch64 ]] && [[ -r /proc/device-tree/model ]] && grep -aqi jetson /proc/device-tree/model; then
+        os_type=jetson
+    elif [[ "$arch" == aarch64 ]] && { [[ -f /etc/rpi-issue ]] || { [[ -r /proc/device-tree/model ]] && grep -aqi raspberry /proc/device-tree/model; }; }; then
+        os_type=rpi
+    elif command -v nvidia-smi >/dev/null 2>&1; then
+        os_type=nvidia
     fi
 else
-    echo "[ERROR] Unsupported OS detected, exiting..."
+    echo "Unsupported host kernel: $(uname -s)" >&2
     exit 1
 fi
 
-# -------------------------
-# Detect NVIDIA GPU for Linux desktop
-# -------------------------
-if [ "$OS_TYPE" = "linux" ]; then
-    if command -v nvidia-smi &>/dev/null; then
-        echo "[INFO] NVIDIA GPU detected, using NVIDIA override"
-        OS_TYPE="nvidia"
-    else
-        echo "[INFO] No NVIDIA GPU detected, using standard Linux override"
-    fi
-fi
-
-# -------------------------
-# Apply override
-# -------------------------
-OVERRIDE_FILE="${SCRIPT_DIR}/docker-compose.override.${OS_TYPE}.yml"
-
-if [ ! -f "$OVERRIDE_FILE" ]; then
-    echo "[ERROR] Override file not found: $OVERRIDE_FILE"
-    exit 1
-fi
-
-cp "$OVERRIDE_FILE" "${SCRIPT_DIR}/docker-compose.override.yml"
-echo "[INFO] Applied override: $OVERRIDE_FILE"
+override_file="${script_dir}/docker-compose.override.${os_type}.yml"
+[[ -f "$override_file" ]] || { echo "Missing Compose adapter: $override_file" >&2; exit 1; }
+cp "$override_file" "${script_dir}/docker-compose.override.yml"
+echo "Selected ${os_type} adapter: $override_file"

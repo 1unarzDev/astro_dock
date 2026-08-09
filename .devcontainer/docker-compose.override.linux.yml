@@ -1,1 +1,11 @@
-# Empty because assuming Linux as default
+services:
+  dev:
+    environment:
+      DISPLAY: ${DISPLAY:-}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev
+  sitl:
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev

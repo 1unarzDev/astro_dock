@@ -1,0 +1,40 @@
+name: Validate container configuration
+
+on:
+  pull_request:
+    paths:
+      - ".devcontainer/**"
+      - "setup.linux.sh"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell scripts
+        run: bash -n setup.linux.sh .devcontainer/*.sh
+      - name: Validate Compose adapters
+        run: |
+          for adapter in .devcontainer/docker-compose.override.*.yml; do
+            docker compose \
+              -f .devcontainer/docker-compose.yml \
+              -f "$adapter" config --quiet
+          done
+      - name: Reject stale ROS and Gazebo Classic references
+        run: |
+          ! grep -RInE 'ros-humble|/opt/ros/humble|gazebo_ros_pkgs|gazebo_ros2_control' \
+            .devcontainer .vscode dev_init.sh generate_packages.py
+      - uses: docker/setup-buildx-action@v3
+      - name: Build core without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          file: .devcontainer/Dockerfile.dev
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=pr-core
+          cache-to: type=gha,mode=max,scope=pr-core

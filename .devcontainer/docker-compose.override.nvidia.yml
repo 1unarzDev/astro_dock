@@ -1,18 +1,16 @@
 services:
   dev:
-    image: lunarzdev/mhseals-dev:nvidia
-    build:
-      args:
-        TARGET_PLATFORM: nvidia
+    image: ${ASTRO_IMAGE:-lunarzdev/astro:cuda}
+    runtime: nvidia
     environment:
+      DISPLAY: ${DISPLAY:-}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
     volumes:
-      - zed_resources:/usr/local/zed/resources 
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev
+      - zed_resources:/usr/local/zed/resources
+      - zed_settings:/usr/local/zed/settings
 volumes:
   zed_resources:
+  zed_settings:

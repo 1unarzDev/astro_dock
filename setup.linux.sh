@@ -1,311 +1,285 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-sync_time() {
-    echo "Syncing time to resolve Docker sync conflicts..."
+DRY_RUN=false
+ASSUME_YES=false
+NON_INTERACTIVE=false
+COMPONENTS="docker,gpu,devices,devtools,compose"
+OS_ID=unknown
+OS_LIKE=""
+OS_VERSION=""
+OS_CODENAME=""
+ARCH="$(uname -m)"
+IMMUTABLE=false
+RUNTIME=docker
+HAS_NVIDIA=false
+COMPLETED=()
+SKIPPED=()
 
-    sudo timedatectl set-local-rtc 1 --adjust-system-clock || true
-    TZ=$(curl -s https://ipapi.co/timezone || true)
-    if [[ -n "$TZ" ]]; then
-        sudo timedatectl set-timezone "$TZ"
-    fi
-    sudo timedatectl set-ntp true || true
+usage() {
+    cat <<'EOF'
+Usage: ./setup.linux.sh [options]
+
+Options:
+  --dry-run                 Print commands without running them
+  --components LIST         docker,gpu,devices,devtools,compose
+  --non-interactive         Disable prompts (requires --yes)
+  --yes                     Approve the overall plan and every stage
+  -h, --help                Show this help
+EOF
 }
 
-detect_os() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        OS_ID="$ID"
-        OS_LIKE="${ID_LIKE:-}"
-        OS_VERSION_CODENAME="${VERSION_CODENAME:-}"
-        echo "Detected OS: $OS_ID ($OS_LIKE), version codename: $OS_VERSION_CODENAME"
-    else
-        echo "Cannot detect OS. Exiting."
-        exit 1
-    fi
-    ARCH=$(uname -m)
-    echo "Detected architecture: $ARCH"
+while (($#)); do
+    case "$1" in
+        --dry-run) DRY_RUN=true ;;
+        --yes) ASSUME_YES=true ;;
+        --non-interactive) NON_INTERACTIVE=true ;;
+        --components)
+            shift
+            [[ $# -gt 0 ]] || { echo "--components requires a value" >&2; exit 2; }
+            COMPONENTS="$1"
+            ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+if $NON_INTERACTIVE && ! $ASSUME_YES && ! $DRY_RUN; then
+    echo "--non-interactive requires --yes (or --dry-run)" >&2
+    exit 2
+fi
+
+has_component() {
+    [[ ",$COMPONENTS," == *",$1,"* ]]
 }
 
-detect_gpus() {
-    if ! command -v lspci &> /dev/null; then
-        echo "lspci not found, skipping GPU detection"
-        return
+quote_command() {
+    printf '  $'
+    printf ' %q' "$@"
+    printf '\n'
+}
+
+run() {
+    quote_command "$@"
+    $DRY_RUN || "$@"
+}
+
+run_shell() {
+    quote_command bash -c "$1"
+    $DRY_RUN || bash -c "$1"
+}
+
+approve() {
+    local prompt="$1"
+    $DRY_RUN && return 0
+    $ASSUME_YES && return 0
+    $NON_INTERACTIVE && return 1
+    local answer
+    read -r -p "$prompt [y/N] " answer
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+heading() {
+    printf '\n== %s ==\n' "$1"
+}
+
+detect_platform() {
+    [[ -r /etc/os-release ]] || { echo "Cannot read /etc/os-release" >&2; exit 1; }
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    OS_ID="${ID:-unknown}"
+    OS_LIKE="${ID_LIKE:-}"
+    OS_VERSION="${VERSION_ID:-}"
+    OS_CODENAME="${VERSION_CODENAME:-}"
+
+    if command -v rpm-ostree >/dev/null 2>&1 || command -v bootc >/dev/null 2>&1 \
+        || [[ "$OS_ID" =~ ^(coreos|fedora-coreos|fedora-iot)$ ]] \
+        || [[ -e /run/ostree-booted ]]; then
+        IMMUTABLE=true
+        RUNTIME=podman
+    elif [[ "$OS_ID" == "ubuntu-core" ]] || { command -v snap >/dev/null 2>&1 && snap list core >/dev/null 2>&1; }; then
+        IMMUTABLE=true
+        RUNTIME=docker
     fi
-    GPU_INFO=$(lspci -nn | grep -i 'vga\|3d\|display' || true)
-    echo "Detected GPUs:"
-    echo "$GPU_INFO"
-    echo
 
-    HAS_INTEL=false
-    HAS_INTEL_ARC=false
-    HAS_NVIDIA=false
-    HAS_AMD=false
-
-    if echo "$GPU_INFO" | grep -iq 'Intel'; then
-        HAS_INTEL=true
-        if echo "$GPU_INFO" | grep -iq 'arc'; then
-            HAS_INTEL_ARC=true
-        fi
-    fi
-
-    if echo "$GPU_INFO" | grep -iq 'NVIDIA'; then
+    if command -v nvidia-smi >/dev/null 2>&1 || { [[ -r /proc/device-tree/compatible ]] && grep -aqi tegra /proc/device-tree/compatible; }; then
         HAS_NVIDIA=true
     fi
-
-    if echo "$GPU_INFO" | grep -iq 'AMD\|ATI'; then
-        HAS_AMD=true
-    fi
 }
 
-setup_gpu() {
-    echo "Installing GPU dependencies..."
-
-    if [[ "$OS_ID" == "arch" || "$OS_LIKE" == *"arch"* ]]; then
-        sudo pacman -Syu --needed --noconfirm vulkan-icd-loader vulkan-tools mesa
-
-        if $HAS_INTEL; then
-            sudo pacman -Syu --needed --noconfirm vulkan-intel
-        fi
-
-        if $HAS_NVIDIA; then
-            sudo pacman -Syu --needed --noconfirm nvidia-utils nvidia-container-toolkit
-        fi
-    elif [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" || "$OS_LIKE" == *"debian"* ]]; then
-        sudo apt-get update
-        sudo apt-get install -y vulkan-icd-loader vulkan-tools mesa-vulkan-drivers || true
-
-        if $HAS_INTEL; then
-            sudo apt-get install -y vulkan-intel || true
-        fi
-
-        if $HAS_NVIDIA; then
-            # Install NVIDIA driver
-            if command -v ubuntu-drivers &> /dev/null; then
-                NVIDIA_DRIVER=$(ubuntu-drivers devices | grep recommended | awk '{print $3}')
-                if [ -n "$NVIDIA_DRIVER" ]; then
-                    sudo apt-get install -y "$NVIDIA_DRIVER"
-                else
-                    sudo apt-get install -y nvidia-driver || true
-                fi
-            else
-                sudo apt-get install -y nvidia-driver || true
-            fi
-
-            # NVIDIA container toolkit
-            curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-            curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-                sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-                sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-            sudo apt-get update
-            sudo apt-get install -y nvidia-container-toolkit
-        fi
-    elif [[ "$OS_ID" == "fedora" || "$OS_LIKE" == *"rhel"* || "$OS_LIKE" == *"fedora"* ]]; then
-        sudo dnf install -y \
-            mesa-vulkan-drivers \
-            vulkan-tools \
-            mesa-dri-drivers \
-            mesa-libGL
-    
-        if $HAS_INTEL; then
-            sudo dnf install -y mesa-vulkan-drivers
-        fi
-
-        if $HAS_NVIDIA; then
-            if [[ "$OS_ID" == "fedora" ]]; then
-                sudo dnf install -y \
-                    https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-                    https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
-        
-                sudo dnf install -y akmod-nvidia xorg-x11-drv-nvidia-cuda
-            else
-                sudo dnf install -y epel-release
-                sudo dnf config-manager --set-enabled crb || true
-        
-                sudo dnf install -y \
-                    https://developer.download.nvidia.com/compute/cuda/repos/rhel$(rpm -E %rhel)/x86_64/cuda-rhel$(rpm -E %rhel).repo
-        
-                sudo dnf install -y nvidia-driver
-            fi
-        
-            sudo dnf install -y nvidia-container-toolkit
-        fi
-    fi
-    # Fix zed permissions
-    sudo sh -c 'echo "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2b03\", MODE=\"0666\"" > /etc/udev/rules.d/99-zed.rules'
+show_probe() {
+    heading "Detected host"
+    printf 'OS:          %s %s\n' "$OS_ID" "$OS_VERSION"
+    printf 'OS family:   %s\n' "${OS_LIKE:-$OS_ID}"
+    printf 'Architecture:%s\n' " $ARCH"
+    printf 'Immutable:   %s\n' "$IMMUTABLE"
+    printf 'Runtime:     %s\n' "$RUNTIME"
+    printf 'NVIDIA:      %s\n' "$HAS_NVIDIA"
+    printf 'Components:  %s\n' "$COMPONENTS"
+    command -v rpm-ostree >/dev/null 2>&1 && rpm-ostree status || true
+    command -v bootc >/dev/null 2>&1 && bootc status || true
+    [[ -r /proc/device-tree/model ]] && { printf 'Board:       '; tr -d '\0' < /proc/device-tree/model; printf '\n'; }
+    return 0
 }
 
-setup_os() {
-    echo "Setting up OS-specific packages..."
+install_docker_debian() {
+    run sudo install -m 0755 -d /etc/apt/keyrings
+    run_shell "curl -fsSL https://download.docker.com/linux/${OS_ID}/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg"
+    run sudo chmod a+r /etc/apt/keyrings/docker.gpg
+    local codename="${OS_CODENAME:-$(. /etc/os-release && echo "${VERSION_CODENAME:-}")}"
+    local repo="deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${OS_ID} ${codename} stable"
+    run_shell "printf '%s\\n' '$repo' | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null"
+    run sudo apt-get update
+    run sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
 
-    if [[ "$OS_ID" == "arch" || "$OS_LIKE" == *"arch"* ]]; then
-        echo "Arch-based distro detected."
+install_docker_rpm() {
+    local repo_os=centos
+    [[ "$OS_ID" == fedora ]] && repo_os=fedora
+    run sudo dnf -y install dnf-plugins-core
+    if dnf config-manager --help 2>&1 | grep -q add-repo; then
+        run sudo dnf config-manager --add-repo "https://download.docker.com/linux/${repo_os}/docker-ce.repo"
+    else
+        run sudo dnf config-manager addrepo --from-repofile="https://download.docker.com/linux/${repo_os}/docker-ce.repo"
+    fi
+    run sudo dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
 
-        # Install/update yay
-        CONFLICTS=$(sudo pacman -Qq 2>/dev/null | grep '^yay' || true)
-        if [[ -n "$CONFLICTS" ]]; then
-            echo "Removing conflicting packages: $CONFLICTS"
-            sudo pacman -Rns --noconfirm $CONFLICTS > /dev/null
-        fi
-        echo "Installing/updating AUR helper (yay)..."
-        sudo pacman -S --needed --noconfirm base-devel git
-        rm -rf yay
-        git clone https://aur.archlinux.org/yay.git
-        cd yay
-        makepkg -si --noconfirm
-        cd ..
-        rm -rf yay
-
-        # Remove conflicting packages
-        for pkg in docker.io docker-doc podman-docker containerd runc; do
-            yay -Rns --noconfirm $pkg || true  > /dev/null
-        done
-
-        yay -S --noconfirm docker docker-buildx xorg-xwayland visual-studio-code-bin python-hjson jq
-    elif [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" || "$OS_LIKE" == *"debian"* ]]; then
-        echo "Debian/Ubuntu-based distro detected."
-
-        # Remove conflicting packages
-        for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do
-            sudo apt-get remove -y $pkg || true > /dev/null
-        done
-
-        # Docker repo setup
-        sudo mkdir -p /etc/apt/keyrings
-        curl -fsSL "https://download.docker.com/linux/$OS_ID/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS_ID $OS_VERSION_CODENAME stable" | \
-            sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-        sudo apt-get update
-
-        # Install main packages
-        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin xwayland \
-            ca-certificates curl gnupg lsb-release python3-pip software-properties-common apt-transport-https wget jq iptables iptables-persistent nftables
-
-        # Install hjson
-        if [[ "$ARCH" = "aarch64" ]]; then
-            GET=https://github.com/hjson/hjson-go/releases/download/v4.5.0/hjson_v4.5.0_linux_arm64.tar.gz
+stage_docker() {
+    heading "Container runtime"
+    if $IMMUTABLE; then
+        if command -v podman >/dev/null 2>&1; then
+            echo "Immutable rpm-ostree/bootc host: using the existing rootful Podman installation."
+            RUNTIME=podman
+        elif command -v docker >/dev/null 2>&1; then
+            echo "Immutable host: using the existing Docker installation."
+            RUNTIME=docker
         else
-            GET=https://github.com/hjson/hjson-go/releases/download/v4.5.0/hjson_v4.5.0_linux_amd64.tar.gz
+            echo "No container runtime is installed. Install it through the OS image/snap configuration; this script will not mutate an immutable root." >&2
+            SKIPPED+=(docker)
+            return
         fi
-        curl -sSL $GET | sudo tar -xz -C /usr/local/bin
-
-        # Install VSCode
-        wget -q https://packages.microsoft.com/keys/microsoft.asc -O- | sudo apt-key add -
-        sudo add-apt-repository "deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main"
-        sudo apt update
-        sudo apt install -y code
-    elif [[ "$OS_ID" == "fedora" || "$OS_LIKE" == *"rhel"* || "$OS_LIKE" == *"fedora"* ]]; then
-        echo "RPM-based distro detected."
-
-        sudo dnf install -y dnf-plugins-core curl wget jq git
-        sudo dnf remove -y podman podman-docker containerd runc || true > /dev/null
-
-        sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo || \
-        sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-        
-        sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin xorg-x11-server-Xwayland
-
-        sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-        
-		cat <<-EOF | sudo tee /etc/yum.repos.d/vscode.repo
-		[code]
-		name=Visual Studio Code
-		baseurl=https://packages.microsoft.com/yumrepos/vscode
-		enabled=1
-		gpgcheck=1
-		gpgkey=https://packages.microsoft.com/keys/microsoft.asc
-		EOF
-        sudo dnf install -y code
-
-        if [[ "$ARCH" = "aarch64" ]]; then
-            GET=https://github.com/hjson/hjson-go/releases/download/v4.5.0/hjson_v4.5.0_linux_arm64.tar.gz
-        else
-            GET=https://github.com/hjson/hjson-go/releases/download/v4.5.0/hjson_v4.5.0_linux_amd64.tar.gz
-        fi
-        curl -sSL $GET | sudo tar -xz -C /usr/local/bin
-    else
-        echo "Unsupported OS: $OS_ID"
-        exit 1
+        COMPLETED+=(docker)
+        return
     fi
 
-    # Fix Cube Orange Permissions
-    echo 'SUBSYSTEM=="tty", ATTRS{idVendor}=="2dae", MODE="0666"' | sudo tee /etc/udev/rules.d/99-cubepilot.rules > /dev/null
-    sudo udevadm control --reload-rules
-    sudo udevadm trigger
-}
-
-setup_docker() {
-    echo "Configuring Docker..."
-    sudo groupadd -f docker
-    sudo usermod -aG docker $USER
-    sudo systemctl enable --now docker
-}
-
-setup_vscode_extensions() {
-    if [[ -f .vscode/extensions.json ]]; then
-        echo "Installing VSCode extensions..."
-        extensions=$(jq -r '.recommendations[]' .vscode/extensions.json)
-        for extension in $extensions; do
-            if ! code --list-extensions | grep -q "$extension"; then
-                echo "Installing $extension..."
-                code --install-extension "$extension" || echo "Failed: $extension"
-            fi
-        done
+    echo "This stage installs Docker Engine from Docker's official repository and enables it."
+    approve "Run the container-runtime stage?" || { SKIPPED+=(docker); return; }
+    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+        run sudo pacman -Syu --needed --noconfirm docker docker-buildx docker-compose
+    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
+        install_docker_debian
+    elif [[ "$OS_ID" == fedora ]] || [[ "$OS_LIKE" == *rhel* ]] || [[ "$OS_ID" =~ ^(rhel|rocky|almalinux)$ ]]; then
+        install_docker_rpm
     else
-        echo "No .vscode/extensions.json found. Skipping extensions."
+        echo "Unsupported mutable distribution: $OS_ID ($OS_LIKE)" >&2
+        SKIPPED+=(docker)
+        return
     fi
+    run sudo systemctl enable --now docker
+    run sudo groupadd -f docker
+    run sudo usermod -aG docker "$USER"
+    COMPLETED+=(docker)
 }
 
-setup_vscode_settings() {
-    echo "Configuring VSCode port forwarding..."
-    VSC_DIR="$HOME/.config/Code/User/"
-    VSC_CONFIG="$VSC_DIR/settings.json"
-    mkdir -p $VSC_DIR
-    touch $VSC_CONFIG
-    hjson -j $VSC_CONFIG > $VSC_CONFIG.tmp && mv $VSC_CONFIG.tmp $VSC_CONFIG
-    jq '.["remote.autoForwardPorts"] = false' $VSC_CONFIG > $VSC_CONFIG.tmp && mv $VSC_CONFIG.tmp $VSC_CONFIG
-}
-
-setup_headless_devcontainer() {
-    if ! type nvm &> /dev/null; then
-        echo "Installing NVM..."
-        export NVM_DIR="$HOME/.nvm"
-        mkdir -p "$NVM_DIR"
-        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
-        export NVM_DIR="$HOME/.nvm"
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+stage_gpu() {
+    heading "NVIDIA container runtime"
+    if ! $HAS_NVIDIA; then
+        echo "No NVIDIA GPU was detected; skipping toolkit installation."
+        SKIPPED+=(gpu)
+        return
+    fi
+    if $IMMUTABLE; then
+        echo "NVIDIA support on an immutable host must be part of its OS image/runtime configuration; no driver or toolkit changes will be made."
+        SKIPPED+=(gpu)
+        return
+    fi
+    echo "This installs NVIDIA Container Toolkit only. It does not install or replace the host GPU driver."
+    approve "Install NVIDIA Container Toolkit?" || { SKIPPED+=(gpu); return; }
+    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+        run sudo pacman -Syu --needed --noconfirm nvidia-container-toolkit
+    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
+        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
+        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null"
+        run sudo apt-get update
+        run sudo apt-get install -y nvidia-container-toolkit
     else
-        echo "NVM installation found."
+        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null"
+        run sudo dnf -y install nvidia-container-toolkit
     fi
-    nvm install --lts
-    nvm use --lts
-    
-    echo "Installing devcontainers CLI..."
-    npm install -g @devcontainers/cli
+    run sudo nvidia-ctk runtime configure --runtime="$RUNTIME"
+    [[ "$RUNTIME" == docker ]] && run sudo systemctl restart docker
+    COMPLETED+=(gpu)
 }
 
-run_prebuild() {
-    echo "Running prebuild script..."
-    bash .devcontainer/prebuild.sh || true
+stage_devices() {
+    heading "Robot device access"
+    echo "This installs scoped CubePilot/ZED/camera udev rules and adds $USER to dialout, video, and render when those groups exist."
+    echo "It never recursively changes /dev. Containers remain privileged and bind the complete /dev tree."
+    $IMMUTABLE && echo "The rules are written to /etc only if the host permits it; otherwise bake them into the immutable OS image."
+    approve "Install device rules and group memberships?" || { SKIPPED+=(devices); return; }
+    local rules_file
+    rules_file="$(mktemp)"
+    printf '%s\n' \
+        'SUBSYSTEM=="tty", ATTRS{idVendor}=="2dae", GROUP="dialout", MODE="0666", TAG+="uaccess"' \
+        'SUBSYSTEM=="usb", ATTR{idVendor}=="2b03", GROUP="video", MODE="0666", TAG+="uaccess"' \
+        'SUBSYSTEM=="video4linux", GROUP="video", MODE="0666", TAG+="uaccess"' \
+        > "$rules_file"
+    run sudo install -m 0644 "$rules_file" /etc/udev/rules.d/99-astro-robotics.rules
+    rm -f "$rules_file"
+    for group in dialout video render; do
+        getent group "$group" >/dev/null 2>&1 && run sudo usermod -aG "$group" "$USER"
+    done
+    command -v udevadm >/dev/null 2>&1 && run sudo udevadm control --reload-rules
+    command -v udevadm >/dev/null 2>&1 && run sudo udevadm trigger
+    COMPLETED+=(devices)
+}
+
+stage_devtools() {
+    heading "Developer command-line tools"
+    echo "This installs Git, curl, jq, Python, and basic USB/device diagnostics. It does not install VS Code, Node, or clone repositories."
+    $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(devtools); return; }
+    approve "Install host developer tools?" || { SKIPPED+=(devtools); return; }
+    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+        run sudo pacman -Syu --needed --noconfirm ca-certificates curl git jq lsof python usbutils
+    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
+        run sudo apt-get update
+        run sudo apt-get install -y ca-certificates curl git jq lsof python3 usbutils
+    else
+        run sudo dnf -y install ca-certificates curl git jq lsof python3 usbutils
+    fi
+    COMPLETED+=(devtools)
+}
+
+stage_compose() {
+    heading "Compose selection"
+    echo "This selects the repository's host adapter; it does not build or pull an image."
+    approve "Select the Compose adapter now?" || { SKIPPED+=(compose); return; }
+    run bash .devcontainer/prebuild.sh
+    COMPLETED+=(compose)
 }
 
 main() {
-    sync_time
-    detect_os
-    detect_gpus
+    detect_platform
+    show_probe
+    echo
+    echo "No commands have been run. Each selected stage will explain and preview its commands."
+    approve "Continue with this setup plan?" || { echo "Cancelled."; exit 0; }
 
-    setup_os
-    setup_gpu
-    setup_docker
-    setup_vscode_extensions
-    setup_vscode_settings
-    setup_headless_devcontainer
-    run_prebuild
-    bash mdns.sh || true
-    bash clone_optional.sh || true
+    has_component docker && stage_docker
+    has_component gpu && stage_gpu
+    has_component devices && stage_devices
+    has_component devtools && stage_devtools
+    has_component compose && stage_compose
 
-    echo "Setup completed successfully!"
+    heading "Summary"
+    $DRY_RUN && printf 'Planned:   %s\n' "${COMPLETED[*]:-none}" || printf 'Completed: %s\n' "${COMPLETED[*]:-none}"
+    printf 'Skipped:   %s\n' "${SKIPPED[*]:-none}"
+    if [[ " ${COMPLETED[*]} " == *" docker " || " ${COMPLETED[*]} " == *" devices " ]]; then
+        echo "Log out and back in before relying on new group memberships."
+    fi
+    echo "Run .devcontainer/device-diagnostics.sh to inspect Cube/ZED access."
 }
 
 main
