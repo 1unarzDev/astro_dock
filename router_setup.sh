@@ -32,6 +32,7 @@ TRUSTED_HOST=""
 RADIOS=()
 DDWRT_VERSION=""
 BACKUP_FILE=""
+BACKUP_ENCODING=""
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
@@ -192,13 +193,17 @@ ensure_key() {
         chmod 600 -- "$IDENTITY.pub"
     else
         info "Generating a unique per-router SSH key at $IDENTITY"
-        if ! ssh-keygen -q -t ed25519 -N '' -C "$ROUTER_NAME@$HOST" -f "$IDENTITY"; then
+        if ! ssh-keygen -q -t ed25519 -N '' -C '' -f "$IDENTITY"; then
             warn "Ed25519 generation failed; falling back to RSA 3072."
-            ssh-keygen -q -t rsa -b 3072 -N '' -C "$ROUTER_NAME@$HOST" -f "$IDENTITY"
+            ssh-keygen -q -t rsa -b 3072 -N '' -C '' -f "$IDENTITY"
         fi
     fi
     chmod 600 -- "$IDENTITY" "$IDENTITY.pub"
-    PUBLIC_KEY=$(<"$IDENTITY.pub")
+    # Authorized Keys needs only the algorithm and encoded key. Comments such as
+    # user@host are optional and make the copy/paste instructions look misleading.
+    PUBLIC_KEY=$(awk 'NF >= 2 { print $1 " " $2; exit }' "$IDENTITY.pub")
+    [[ $PUBLIC_KEY == *' '* ]] || die "Could not read a valid public key from $IDENTITY.pub"
+    printf '%s\n' "$PUBLIC_KEY" >"$IDENTITY.pub"
 }
 
 trust_host_key() {
@@ -284,12 +289,19 @@ authenticate() {
 
 probe_router() {
     local probe radio
-    probe=$(router_ssh 'printf "version="; version=$(nvram get os_version); [ -n "$version" ] || version=$(nvram get dist_type); [ -n "$version" ] || version=$(uname -n); printf "%s\n" "$version"; printf "build="; nvram get os_date; command -v nvram >/dev/null || exit 20; command -v base64 >/dev/null && echo base64=yes || echo base64=no; command -v setuserpasswd >/dev/null && echo setuserpasswd=yes || echo setuserpasswd=no; nvram show 2>/dev/null | sed -n "s/^\(wl[0-9][0-9]*\|ath[0-9][0-9]*\|wlan[0-9][0-9]*\)_\(ssid\|ifname\)=.*/radio=\1/p" | sort -u') \
+    probe=$(router_ssh 'printf "version="; version=$(nvram get os_version); [ -n "$version" ] || version=$(nvram get dist_type); [ -n "$version" ] || version=$(uname -n); printf "%s\n" "$version"; printf "build="; nvram get os_date; command -v nvram >/dev/null || exit 20; command -v base64 >/dev/null && echo base64=yes || echo base64=no; command -v od >/dev/null && echo od=yes || echo od=no; command -v setuserpasswd >/dev/null && echo setuserpasswd=yes || echo setuserpasswd=no; nvram show 2>/dev/null | sed -n "s/^\(wl[0-9][0-9]*\|ath[0-9][0-9]*\|wlan[0-9][0-9]*\)_\(ssid\|ifname\)=.*/radio=\1/p" | sort -u') \
         || die "Router inspection failed"
     DDWRT_VERSION=$(awk -F= '/^version=/{print $2; exit}' <<<"$probe")
     [[ -n $DDWRT_VERSION ]] || die "The target does not identify itself as DD-WRT"
     grep -q '^setuserpasswd=yes$' <<<"$probe" || die "This build lacks setuserpasswd; set the requested admin credentials in the Web UI, then rerun"
-    grep -q '^base64=yes$' <<<"$probe" || die "This build lacks base64, which is required for a safe, restorable NVRAM backup"
+    if grep -q '^base64=yes$' <<<"$probe"; then
+        BACKUP_ENCODING=base64
+    elif grep -q '^od=yes$' <<<"$probe"; then
+        BACKUP_ENCODING=hex
+        info "Router has no base64 utility; NVRAM backups will use portable hexadecimal encoding."
+    else
+        die "This build has neither base64 nor od, so a safe NVRAM backup cannot be created"
+    fi
     mapfile -t RADIOS < <(awk -F= '/^radio=/{print $2}' <<<"$probe" | sort -u)
     ((${#RADIOS[@]})) || die "No supported DD-WRT physical radio (wl*, ath*, or wlan*) was detected"
     for radio in "${RADIOS[@]}"; do
@@ -301,10 +313,19 @@ probe_router() {
 make_backup() {
     local stamp
     stamp=$(date +%Y%m%d-%H%M%S)
-    BACKUP_FILE="$KEY_DIR/nvram-$stamp.b64"
+    if [[ $BACKUP_ENCODING == base64 ]]; then
+        BACKUP_FILE="$KEY_DIR/nvram-$stamp.b64"
+    else
+        BACKUP_FILE="$KEY_DIR/nvram-$stamp.hex"
+    fi
     umask 077
-    router_ssh 'for key in $(nvram show 2>/dev/null | sed -n "s/^\([A-Za-z0-9_.:-][A-Za-z0-9_.:-]*\)=.*/\1/p"); do encoded=$(nvram get "$key" | base64 | tr -d "\n"); printf "%s\t%s\n" "$key" "$encoded"; done' \
-        >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
+    if [[ $BACKUP_ENCODING == base64 ]]; then
+        router_ssh 'for key in $(nvram show 2>/dev/null | sed -n "s/^\([A-Za-z0-9_.:-][A-Za-z0-9_.:-]*\)=.*/\1/p"); do encoded=$(nvram get "$key" | base64 | tr -d "\n"); printf "%s\t%s\n" "$key" "$encoded"; done' \
+            >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
+    else
+        router_ssh 'for key in $(nvram show 2>/dev/null | sed -n "s/^\([A-Za-z0-9_.:-][A-Za-z0-9_.:-]*\)=.*/\1/p"); do encoded=$(nvram get "$key" | od -An -v -tx1 | tr -d " \n"); printf "%s\t%s\n" "$key" "$encoded"; done' \
+            >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
+    fi
     chmod 600 -- "$BACKUP_FILE"
     [[ -s $BACKUP_FILE ]] || die "NVRAM backup was empty"
     info "Saved permission-restricted NVRAM backup: $BACKUP_FILE"
@@ -323,7 +344,7 @@ nvset_line() {
 build_apply_script() {
     local script='' radio existing_keys merged_keys dns_options
     existing_keys=$(router_ssh 'nvram get sshd_authorized_keys' 2>/dev/null || true)
-    if grep -Fqx -- "$PUBLIC_KEY" <<<"$existing_keys"; then
+    if grep -Fq -- "$PUBLIC_KEY" <<<"$existing_keys"; then
         merged_keys=$existing_keys
     elif [[ -n $existing_keys ]]; then
         merged_keys="$existing_keys"$'\n'"$PUBLIC_KEY"
@@ -473,7 +494,7 @@ restore_backup() {
     ensure_key
     trust_host_key
     authenticate
-    mapfile -t files < <(find "$KEY_DIR" -maxdepth 1 -type f -name 'nvram-*.b64' -print | sort -r)
+    mapfile -t files < <(find "$KEY_DIR" -maxdepth 1 -type f \( -name 'nvram-*.b64' -o -name 'nvram-*.hex' \) -print | sort -r)
     ((${#files[@]})) || die "No NVRAM backups found in $KEY_DIR"
     printf '\nAvailable backups:\n'
     select selected in "${files[@]}" "Cancel"; do
@@ -483,10 +504,15 @@ restore_backup() {
     printf 'Selected: %s\n' "$selected"
     read -r -p "Type RESTORE to replace NVRAM and reboot: " answer
     [[ $answer == RESTORE ]] || { info "Restore cancelled."; return; }
-    router_ssh \
-        'tab=$(printf "\t"); while IFS="$tab" read -r key encoded; do case "$key" in *[!A-Za-z0-9_.:-]*|"") exit 30;; esac; value=$(printf "%s" "$encoded" | base64 -d) || exit 31; nvram set "$key=$value"; done; nvram commit; sync' \
-        <"$selected" \
-        || die "Restore failed"
+    if [[ $selected == *.b64 ]]; then
+        router_ssh \
+            'tab=$(printf "\t"); while IFS="$tab" read -r key encoded; do case "$key" in *[!A-Za-z0-9_.:-]*|"") exit 30;; esac; value=$(printf "%s" "$encoded" | base64 -d) || exit 31; nvram set "$key=$value"; done; nvram commit; sync' \
+            <"$selected" || die "Restore failed"
+    else
+        router_ssh \
+            'tab=$(printf "\t"); while IFS="$tab" read -r key encoded; do case "$key" in *[!A-Za-z0-9_.:-]*|"") exit 30;; esac; value=$(printf "%s\n" "$encoded" | awk '\''function h(c){return index("0123456789abcdef",tolower(c))-1} {for(i=1;i<length($0);i+=2) printf "%c",h(substr($0,i,1))*16+h(substr($0,i+1,1))}'\'') || exit 31; nvram set "$key=$value"; done; nvram commit; sync' \
+            <"$selected" || die "Restore failed"
+    fi
     router_ssh 'reboot' >/dev/null 2>&1 || true
     info "Backup restored and reboot requested."
 }
