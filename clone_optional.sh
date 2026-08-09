@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 if ! command -v yq &> /dev/null; then
     echo "Installing yq..."
@@ -13,9 +13,24 @@ if ! command -v yq &> /dev/null; then
         *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
     esac
     
-    wget https://github.com/mikefarah/yq/releases/download/${VERSION}/yq_${PLATFORM}_${ARCH} -O yq
-    sudo mv yq /usr/local/bin/yq
-    sudo chmod +x /usr/local/bin/yq
+    YQ_URL="https://github.com/mikefarah/yq/releases/download/${VERSION}/yq_${PLATFORM}_${ARCH}"
+    YQ_TMP="$(mktemp)"
+    trap 'rm -f "$YQ_TMP"' EXIT
+
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --location --show-error --silent "$YQ_URL" --output "$YQ_TMP"
+    elif command -v wget >/dev/null 2>&1; then
+        wget --quiet "$YQ_URL" --output-document="$YQ_TMP"
+    else
+        echo "Installing yq requires either curl or wget." >&2
+        exit 1
+    fi
+
+    chmod +x "$YQ_TMP"
+    "$YQ_TMP" --version >/dev/null
+    sudo install -m 0755 "$YQ_TMP" /usr/local/bin/yq
+    rm -f "$YQ_TMP"
+    trap - EXIT
 fi
 
 BASE_DIR=$(git rev-parse --show-toplevel)
@@ -37,7 +52,7 @@ for i in $(seq 0 $((count - 1))); do
     url=$(yq e ".[$i].url" "$CONFIG_FILE")
     branch=$(yq e ".[$i].branch" "$CONFIG_FILE")
 
-    read -p "Clone $name? (y/N): " answer
+    read -r -p "Clone $name? (y/N): " answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
         target="$BASE_DIR/$path"
         if [ ! -d "$target" ]; then

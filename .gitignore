@@ -10,4 +10,6 @@ src/boat_interfaces/
 src/asv_wave_sim/
 src/auto_nav/
 src/mhsboat_ctrl/
-src/rviz-plugin-zed-od/
+src/rviz-plugin-zed-od/src/mhseals_hardware/
+src/mhseals_nav/
+src/mhseals_hardware
