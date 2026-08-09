@@ -2,6 +2,3 @@
 	path = src/ros_tcp_endpoint
 	url = https://github.com/MHSeals/ROS-TCP-Endpoint.git
 	branch = main-ros2
-[submodule "src/mhseals_nav"]
-	path = src/mhseals_nav
-	url = https://github.com/MHSeals/mhseals_nav.git

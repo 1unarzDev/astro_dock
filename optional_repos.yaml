@@ -12,3 +12,13 @@
   path: src/rviz-plugin-zed-od
   url: https://github.com/mhseals/rviz-plugin-zed-od.git
   branch: main
+  
+- name: mhseals_hardware
+  path: src/mhseals_hardware
+  url: https://github.com/MHSeals/mhseals_hardware.git
+  branch: main
+
+- name: mhseals_nav
+  path: src/mhseals_nav
+  url: https://github.com/MHSeals/mhseals_nav.git
+  branch: main
