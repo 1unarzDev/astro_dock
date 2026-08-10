@@ -1,16 +1,21 @@
 ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
+ARG SHADERC_IMAGE=lunarzdev/astro:shaderc
 ARG JETSON_PLATFORM=linux/arm64
 
-FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS shaderc-builder
+FROM --platform=${JETSON_PLATFORM} ${SHADERC_IMAGE} AS shaderc
+
+FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS ros-builder
 
 ARG ROS_DISTRO=jazzy
 ARG ZED_WRAPPER_REF=v5.4.1
-ARG SHADERC_REF=f8a25c591bf5edbb462ca4aea99dcc666f096d13
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_DISTRO=${ROS_DISTRO} \
     CMAKE_PREFIX_PATH=/opt/shaderc \
-    LD_LIBRARY_PATH=/opt/shaderc/lib:${LD_LIBRARY_PATH}
+    LD_LIBRARY_PATH=/opt/shaderc/lib:${LD_LIBRARY_PATH} \
+    PATH=/opt/shaderc/bin:${PATH}
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+COPY --from=shaderc /opt/shaderc /opt/shaderc
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -20,28 +25,6 @@ RUN apt-get update \
         colcon-common-extensions rosdep rosinstall-generator 'setuptools<81' vcstool
 
 RUN rosdep init 2>/dev/null || true
-
-# Gazebo Harmonic's Ogre vendor requires Shaderc. Jazzy defines that rosdep key
-# as unavailable on Jammy arm64, so provide the same dependency from source.
-RUN echo "[jetson] Building Shaderc ${SHADERC_REF} for Gazebo" \
-    && git clone https://github.com/google/shaderc.git /tmp/shaderc \
-    && cd /tmp/shaderc \
-    && git checkout "${SHADERC_REF}" \
-    && ./utils/git-sync-deps \
-    && cmake -S . -B build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/opt/shaderc \
-        -DCMAKE_INSTALL_LIBDIR=lib \
-        -DSHADERC_SKIP_COPYRIGHT_CHECK=ON \
-        -DSHADERC_SKIP_EXAMPLES=ON \
-        -DSHADERC_SKIP_TESTS=ON \
-    && cmake --build build --parallel 2 \
-    && cmake --install build
-
-
-FROM shaderc-builder AS ros-builder
-
-ARG ZED_WRAPPER_REF=v5.4.1
 
 RUN echo "[jetson] Generating the ROS ${ROS_DISTRO} source closure" \
     && rosdep update \
@@ -60,7 +43,7 @@ RUN echo "[jetson] Downloading the ROS source closure" \
 RUN echo "[jetson] Installing ROS system dependencies" \
     && rosdep install --from-paths /tmp/jazzy_ws/src --ignore-src \
         --rosdistro "${ROS_DISTRO}" -y \
-        --skip-keys "fastcdr libshaderc-dev"
+        --skip-keys "fastcdr glslc libshaderc-dev rsl"
 
 RUN echo "[jetson] Building ROS ${ROS_DISTRO}" \
     && cd /tmp/jazzy_ws \
@@ -101,7 +84,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ROS_WS=/home/roboboat/roboboat_ws \
     CMAKE_PREFIX_PATH=/opt/shaderc \
     LD_LIBRARY_PATH=/opt/shaderc/lib:${LD_LIBRARY_PATH} \
-    PATH=/workspace/venv/bin:${PATH}
+    PATH=/workspace/venv/bin:/opt/shaderc/bin:${PATH}
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY --from=ros-builder /opt/ros/${ROS_DISTRO} /opt/ros/${ROS_DISTRO}
@@ -124,7 +107,7 @@ RUN rosdep update \
     && tar -xzf /tmp/rosdep-manifests.tar.gz -C /tmp/rosdep-src \
     && rosdep install --from-paths /tmp/rosdep-src --ignore-src \
         --rosdistro "${ROS_DISTRO}" --dependency-types exec \
-        -y --skip-keys "fastcdr libshaderc-dev" \
+        -y --skip-keys "fastcdr glslc libshaderc-dev rsl" \
     && /opt/ros/${ROS_DISTRO}/lib/mavros/install_geographiclib_datasets.sh \
     && python3 -m venv --system-site-packages /workspace/venv \
     && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
