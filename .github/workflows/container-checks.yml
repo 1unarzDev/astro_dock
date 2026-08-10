@@ -17,6 +17,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate shell scripts
         run: bash -n setup.linux.sh .devcontainer/*.sh
+      - name: Enforce native layered Jetson builds
+        run: .devcontainer/check-image-architecture.sh
       - name: Validate Compose adapters
         run: |
           for adapter in .devcontainer/docker-compose.override.*.yml; do

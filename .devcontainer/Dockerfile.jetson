@@ -1,134 +1,36 @@
-ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
-ARG SHADERC_IMAGE=lunarzdev/astro:shaderc
-ARG JETSON_PLATFORM=linux/arm64
-ARG ROSDEP_SKIP_KEYS="fastcdr glslc libshaderc-dev python3-vcstool rsl"
+ARG BASE_IMAGE=lunarzdev/astro:deps
+FROM ${BASE_IMAGE}
 
-FROM --platform=${JETSON_PLATFORM} ${SHADERC_IMAGE} AS shaderc
-
-FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS ros-builder
-
-ARG ROS_DISTRO=jazzy
-ARG ZED_WRAPPER_REF=v5.4.1
-ARG ROSDEP_SKIP_KEYS
-ENV DEBIAN_FRONTEND=noninteractive \
-    ROS_DISTRO=${ROS_DISTRO} \
-    CMAKE_PREFIX_PATH=/opt/shaderc \
-    LD_LIBRARY_PATH=/opt/shaderc/lib:${LD_LIBRARY_PATH} \
-    PATH=/opt/shaderc/bin:${PATH}
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-COPY --from=shaderc /opt/shaderc /opt/shaderc
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates cmake curl git gnupg2 locales \
-        python3-pip python3-venv sudo udev \
-    && python3 -m pip install --no-cache-dir \
-        colcon-common-extensions rosdep rosinstall-generator 'setuptools<81' vcstool
-
-RUN rosdep init 2>/dev/null || true
-
-RUN echo "[jetson] Generating the ROS ${ROS_DISTRO} source closure" \
-    && rosdep update \
-    && mkdir -p /tmp/jazzy_ws/src \
-    && rosinstall_generator \
-        desktop navigation2 nav2_bringup ros_gz gz_ros2_control mavros rsl \
-        robot_localization rtabmap_ros slam_toolbox twist_mux \
-        velodyne_driver velodyne_pointcloud vision_msgs_rviz_plugins zed_msgs \
-        --rosdistro "${ROS_DISTRO}" --deps --tar \
-        > /tmp/jazzy_ws/jazzy.rosinstall
-
-RUN echo "[jetson] Downloading the ROS source closure" \
-    && vcs import --recursive --retry 3 /tmp/jazzy_ws/src \
-        < /tmp/jazzy_ws/jazzy.rosinstall
-
-RUN echo "[jetson] Installing ROS system dependencies" \
-    && rosdep install --from-paths /tmp/jazzy_ws/src --ignore-src \
-        --rosdistro "${ROS_DISTRO}" -y \
-        --skip-keys "${ROSDEP_SKIP_KEYS}"
-
-RUN echo "[jetson] Building ROS ${ROS_DISTRO}" \
-    && cd /tmp/jazzy_ws \
-    && colcon build --merge-install --install-base /opt/ros/${ROS_DISTRO} \
-        --event-handlers console_direct+ \
-        --cmake-args -DCMAKE_BUILD_TYPE=Release
-
-RUN echo "[jetson] Downloading ZED ROS wrapper ${ZED_WRAPPER_REF}" \
-    && git clone --branch "${ZED_WRAPPER_REF}" --depth 1 --recursive \
-        https://github.com/stereolabs/zed-ros2-wrapper.git \
-        /tmp/zed_ws/src/zed-ros2-wrapper
-
-RUN echo "[jetson] Installing and building the ZED ROS wrapper" \
-    && source /opt/ros/${ROS_DISTRO}/setup.bash \
-    && rosdep install --from-paths /tmp/zed_ws/src --ignore-src \
-        --rosdistro "${ROS_DISTRO}" -y \
-        --skip-keys "${ROSDEP_SKIP_KEYS}" \
-    && cd /tmp/zed_ws \
-    && colcon build --merge-install --install-base /opt/zed_ros2 \
-        --event-handlers console_direct+ \
-        --cmake-args -DCMAKE_BUILD_TYPE=Release
-
-# Preserve only package manifests for runtime rosdep resolution. The source
-# and build trees stay in this disposable stage instead of bloating the image.
-RUN cd /tmp \
-    && find jazzy_ws/src zed_ws/src -name package.xml -print0 \
-        | tar --null --files-from=- -czf /tmp/rosdep-manifests.tar.gz \
-    && test -s /tmp/rosdep-manifests.tar.gz
-
-
-FROM --platform=${JETSON_PLATFORM} ${BASE_IMAGE} AS runtime
-
-ARG ROS_DISTRO=jazzy
 ARG USERNAME=roboboat
 ARG USER_UID=1000
 ARG USER_GID=1000
-ARG ROSDEP_SKIP_KEYS
-ENV DEBIAN_FRONTEND=noninteractive \
-    ROS_DISTRO=${ROS_DISTRO} \
+ENV ROS_DISTRO=jazzy \
     ROS_WS=/home/roboboat/roboboat_ws \
-    CMAKE_PREFIX_PATH=/opt/shaderc \
-    LD_LIBRARY_PATH=/opt/shaderc/lib:${LD_LIBRARY_PATH} \
-    PATH=/workspace/venv/bin:/opt/shaderc/bin:${PATH}
+    PATH=/workspace/venv/bin:${PATH} \
+    SHELL=/bin/bash
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-COPY --from=ros-builder /opt/ros/${ROS_DISTRO} /opt/ros/${ROS_DISTRO}
-COPY --from=ros-builder /opt/zed_ros2 /opt/zed_ros2
-COPY --from=ros-builder /opt/shaderc /opt/shaderc
-COPY --from=ros-builder /tmp/rosdep-manifests.tar.gz /tmp/rosdep-manifests.tar.gz
 COPY requirements.txt /tmp/astro/requirements.txt
 COPY pip.conf /etc/pip.conf
 
-RUN echo "[jetson] Installing runtime dependencies" \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates locales python3-pip python3-venv sudo udev \
-    && python3 -m pip install --no-cache-dir \
-        colcon-common-extensions rosdep 'setuptools<81' vcstool
-
-RUN rosdep init 2>/dev/null || true
-
-RUN rosdep update \
-    && mkdir -p /tmp/rosdep-src \
-    && tar -xzf /tmp/rosdep-manifests.tar.gz -C /tmp/rosdep-src \
-    && rosdep install --from-paths /tmp/rosdep-src --ignore-src \
-        --rosdistro "${ROS_DISTRO}" --dependency-types exec \
-        -y --skip-keys "${ROSDEP_SKIP_KEYS}" \
-    && /opt/ros/${ROS_DISTRO}/lib/mavros/install_geographiclib_datasets.sh \
-    && python3 -m venv --system-site-packages /workspace/venv \
+# This final layer deliberately contains no apt, rosdep, or compilation. The
+# native ARM64 dependency image owns those expensive and platform-sensitive
+# operations; this layer only establishes the stable developer interface.
+RUN python3 -m venv --system-site-packages /workspace/venv \
     && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
-    && if getent passwd "${USER_UID}" >/dev/null; then userdel "$(getent passwd "${USER_UID}" | cut -d: -f1)"; fi \
-    && if getent group "${USER_GID}" >/dev/null; then groupdel "$(getent group "${USER_GID}" | cut -d: -f1)"; fi \
-    && groupadd --gid "${USER_GID}" "${USERNAME}" \
-    && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
+    && existing_user="$(getent passwd "${USER_UID}" | cut -d: -f1 || true)" \
+    && existing_group="$(getent group "${USER_GID}" | cut -d: -f1 || true)" \
+    && if [[ -n "${existing_user}" && "${existing_user}" != "${USERNAME}" ]]; then userdel "${existing_user}"; fi \
+    && if [[ -n "${existing_group}" && "${existing_group}" != "${USERNAME}" ]]; then groupdel "${existing_group}"; fi \
+    && getent group "${USERNAME}" >/dev/null || groupadd --gid "${USER_GID}" "${USERNAME}" \
+    && id "${USERNAME}" >/dev/null 2>&1 || useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
     && usermod -aG dialout,video,sudo "${USERNAME}" \
     && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
     && mkdir -p "${ROS_WS}" \
-    && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" /opt/zed_ros2 \
-    && apt-get clean \
-    && rm -rf /tmp/astro /tmp/rosdep-src /tmp/rosdep-manifests.tar.gz /var/lib/apt/lists/*
+    && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" \
+    && rm -rf /tmp/astro
 
 USER ${USERNAME}
 WORKDIR ${ROS_WS}
-ENV SHELL=/bin/bash
 CMD ["sleep", "infinity"]

@@ -8,11 +8,14 @@ on:
       - ".github/workflows/images.yml"
   workflow_dispatch:
     inputs:
-      promote_jetson:
-        description: Validate on Jetson hardware and promote the moving tag
+      arm64_builder:
+        description: Native ARM64 builder to use
         required: false
-        default: false
-        type: boolean
+        default: hosted
+        type: choice
+        options:
+          - hosted
+          - self-hosted
 
 concurrency:
   group: images-${{ github.ref }}
@@ -130,8 +133,8 @@ jobs:
             --tag "${REGISTRY_IMAGE}:${TAG}" \
             "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}"
 
-  shaderc:
-    runs-on: ubuntu-24.04-arm
+  deps:
+    runs-on: ${{ inputs.arm64_builder == 'self-hosted' && fromJSON('["self-hosted","linux","ARM64","arm64-builder"]') || 'ubuntu-24.04-arm' }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -139,40 +142,28 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build Shaderc natively on arm64
+      - name: Build dependencies natively on ARM64
         uses: docker/build-push-action@v6
         with:
           context: .devcontainer
-          file: .devcontainer/Dockerfile.shaderc
+          file: .devcontainer/Dockerfile.deps
           platforms: linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY_IMAGE }}:shaderc-${{ github.sha }}
-            ${{ env.REGISTRY_IMAGE }}:shaderc
+            ${{ env.REGISTRY_IMAGE }}:deps-${{ github.sha }}
+            ${{ env.REGISTRY_IMAGE }}:deps
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=shaderc-v2023.8
-          cache-from: type=gha,scope=shaderc-arm64
-          cache-to: type=gha,mode=max,scope=shaderc-arm64
+            org.opencontainers.image.version=ros-jazzy_zed-5.4.1_l4t-r36.4
+          cache-from: type=registry,ref=${{ env.REGISTRY_IMAGE }}:cache-deps
+          cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:cache-deps,mode=max
 
   jetson-candidate:
-    needs: shaderc
-    runs-on: [self-hosted, linux, x64, astro-builder]
+    needs: deps
+    runs-on: ${{ inputs.arm64_builder == 'self-hosted' && fromJSON('["self-hosted","linux","ARM64","arm64-builder"]') || 'ubuntu-24.04-arm' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Verify Docker Hub over IPv4
-        run: |
-          getent ahostsv4 registry-1.docker.io
-          getent ahostsv4 production.cloudfront.docker.com
-          curl -4 --retry 3 --retry-all-errors --connect-timeout 15 \
-            --silent --show-error --output /dev/null \
-            https://registry-1.docker.io/v2/
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-        with:
-          # The runner has IPv4 internet but no IPv6 route. A bridged BuildKit
-          # daemon may choose Docker Hub's CloudFront AAAA record and hang/fail.
-          driver-opts: network=host
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -186,33 +177,9 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY_IMAGE }}:jetson-${{ github.sha }}
           build-args: |
-            BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
-            SHADERC_IMAGE=${{ env.REGISTRY_IMAGE }}:shaderc-${{ github.sha }}
-            ZED_WRAPPER_REF=v5.4.1
+            BASE_IMAGE=${{ env.REGISTRY_IMAGE }}:deps-${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=ros-jazzy_zed-5.4.1_l4t-r36.4
-          cache-from: |
-            type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson
-          cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache-jetson,mode=max
-
-  validate-and-promote-jetson:
-    if: github.event_name == 'workflow_dispatch' && inputs.promote_jetson
-    needs: jetson-candidate
-    runs-on: [self-hosted, linux, ARM64, jetson, orin, jp6]
-    environment: boat-hardware
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Pull and validate candidate on hardware
-        env:
-          CANDIDATE: ${{ env.REGISTRY_IMAGE }}:jetson-${{ github.sha }}
-        run: .devcontainer/jetson-smoke.sh "$CANDIDATE"
-      - name: Promote validated Jetson image
-        run: |
-          docker buildx imagetools create \
-            --tag "${REGISTRY_IMAGE}:jetson" \
-            "${REGISTRY_IMAGE}:jetson-${GITHUB_SHA}"
+          cache-from: type=gha,scope=jetson-final
+          cache-to: type=gha,mode=max,scope=jetson-final

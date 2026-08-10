@@ -82,7 +82,7 @@ Anything else you would like to install manually, reference the installation scr
 
 ### Container images and local builds
 
-The capability tags are `core`, `cuda`, `jetson`, and `sitl`. The host probe selects an adapter and writes the ignored `.devcontainer/docker-compose.override.yml`; the devcontainer then pulls the corresponding image. All development services are privileged, and native Linux adapters bind `/dev` for robotics hardware access.
+The capability tags are `core`, `cuda`, `jetson`, and `sitl`. `deps` is an internal ARM64 dependency layer used to assemble `jetson`; it is not a host capability. The host probe selects an adapter and writes the ignored `.devcontainer/docker-compose.override.yml`; the devcontainer then pulls the corresponding image. All development services are privileged, and native Linux adapters bind `/dev` for robotics hardware access.
 
 Image maintainers can opt into a local build without changing the normal Compose file:
 
@@ -100,9 +100,23 @@ To diagnose a camera or Cube Orange connection, run `.devcontainer/device-diagno
 
 ### Image automation
 
-GitHub Actions requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets. `core` uses native hosted amd64 and arm64 runners; `cuda` and `sitl` use hosted amd64. The large JetPack 6/Jazzy source build requires a persistent self-hosted builder labeled `self-hosted`, `linux`, `x64`, and `astro-builder` with at least 100 GB free. Its BuildKit cache is stored in Docker Hub.
+GitHub Actions requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets. `core` uses native hosted amd64 and arm64 runners; `cuda` and `sitl` use hosted amd64. JetPack dependencies are built in the generic `deps` image on a native hosted ARM64 runner, so QEMU never executes `apt`, `dpkg`, or ROS compilation. The small `jetson` layer then adds the stable developer user and Python environment.
 
-Jetson builds initially publish only `jetson-<commit>`. To advance `jetson`, manually dispatch the image workflow with `promote_jetson` enabled. A protected `boat-hardware` environment and an ephemeral runner labeled `self-hosted`, `linux`, `ARM64`, `jetson`, `orin`, and `jp6` must approve the candidate by checking ROS, ZED camera frames, and Cube Orange enumeration.
+If a persistent native ARM64 build server becomes available, label its GitHub runner `self-hosted`, `linux`, `ARM64`, and `arm64-builder`, then manually dispatch the image workflow with `arm64_builder` set to `self-hosted`. The normal automatic path continues to use GitHub's hosted ARM64 runner.
+
+Jetson builds publish only the immutable `jetson-<commit>` candidate. The boat does not need to be registered as a GitHub runner. On the boat, validate a candidate directly:
+
+```bash
+.devcontainer/boat-validate.sh lunarzdev/astro:jetson-<commit>
+```
+
+After the camera, Cube Orange, NVIDIA runtime, ROS, and user checks pass, promote that exact candidate using the Docker credentials already configured on the boat:
+
+```bash
+.devcontainer/boat-validate.sh --promote lunarzdev/astro:jetson-<commit>
+```
+
+To publish a different moving tag, put it between `--promote` and the candidate image. The compatibility logic for Jazzy on JetPack is pinned to the selected ZED wrapper commit in `Dockerfile.deps`; the repository does not maintain an expanding rosdep skip list.
 
 ### Windows
 

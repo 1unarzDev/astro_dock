@@ -1,0 +1,54 @@
+ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18f8ddd066ba1796122dc4cbfeccdd77784d4ee436583
+FROM ${BASE_IMAGE}
+
+ARG ROS_DISTRO=jazzy
+# Exact wrapper commit behind v5.4.1. Pinning the commit prevents a retag from
+# silently changing the ROS source/install policy used by this layer.
+ARG ZED_WRAPPER_REF=86171bccda22de6e83ccc69b3c0e67af99dece7c
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    ROS_DISTRO=${ROS_DISTRO} \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Bootstrap only what is required to fetch and execute the pinned dependency
+# policy. ROS, wrapper, graphics, and Python dependency lists live upstream.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates git locales python3-pip python3-venv sudo udev \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep the Jazzy-on-L4T compatibility policy with the ZED wrapper release that
+# owns it. This replaces the repository's growing package and rosdep exception
+# lists with one pinned upstream implementation and a small set of assertions.
+RUN git clone --filter=blob:none --no-checkout \
+        https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed-ros2-wrapper \
+    && git -C /tmp/zed-ros2-wrapper checkout "${ZED_WRAPPER_REF}" \
+    && install -m 0755 /tmp/zed-ros2-wrapper/docker/scripts/install_ros2.sh /tmp/install_ros2.sh \
+    && /tmp/install_ros2.sh "${ROS_DISTRO}" \
+    && mkdir -p /root/ros2_ws/src \
+    && mv /tmp/zed-ros2-wrapper /root/ros2_ws/src/zed-ros2-wrapper \
+    && install -m 0644 \
+        /root/ros2_ws/src/zed-ros2-wrapper/docker/scripts/zed-wrapper-deps.repos \
+        /tmp/zed-wrapper-deps.repos \
+    && install -m 0755 \
+        /root/ros2_ws/src/zed-ros2-wrapper/docker/scripts/build_wrapper.sh \
+        /tmp/build_wrapper.sh \
+    && /tmp/build_wrapper.sh "${ROS_DISTRO}" \
+    && test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
+    && test -f /root/ros2_ws/install/setup.bash \
+    && ln -s /root/ros2_ws/install /opt/zed_ros2 \
+    && chmod 0711 /root \
+    && python3 -m pip install --no-cache-dir colcon-common-extensions 'setuptools<81' vcstool \
+    && apt-get clean \
+    && rm -rf /opt/ros2_build/src /var/lib/apt/lists/* /tmp/install_ros2.sh \
+        /tmp/build_wrapper.sh /tmp/zed-wrapper-deps.repos
+
+RUN printf '%s\n' \
+      'source /opt/ros/jazzy/setup.bash' \
+      'source /opt/zed_ros2/setup.bash' \
+      > /opt/astro-setup.bash
+
+CMD ["bash"]
