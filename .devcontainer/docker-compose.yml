@@ -5,6 +5,9 @@ services:
     # "always" would make Compose incorrectly pull that vsc-* image from a registry.
     pull_policy: ${ASTRO_PULL_POLICY:-missing}
     container_name: roboboat_dev
+    hostname: roboboat
+    extra_hosts:
+      - roboboat:127.0.1.1
     privileged: true
     network_mode: host
     ipc: host
@@ -26,6 +29,9 @@ services:
     pull_policy: ${ASTRO_PULL_POLICY:-missing}
     platform: linux/amd64
     container_name: ardupilot_sitl
+    hostname: ardupilot
+    extra_hosts:
+      - ardupilot:127.0.1.1
     privileged: true
     network_mode: host
     ipc: host

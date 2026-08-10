@@ -37,46 +37,40 @@ Alternatively, you may manually install the following necessary dependencies as 
 - Docker
 - NVIDIA Container Toolkit
 - Docker Compose
-- VSCode (or devcontainer CLI)
+- Node.js LTS and the Dev Container CLI (recommended)
+- VS Code with the Dev Containers extension (optional)
 - Unity + Vulkan (if you're running the sim, and depending on the available graphics driver)
 
 For manual installation, reference the OS-specific guides below.
 
 ### Linux
 
-Not much to do here, but for manual Docker installation instructions, visit the [Docker Engine installation guide](https://docs.docker.com/engine/install/). Be sure to follow all instructions in the [Linux post-install guide](https://docs.docker.com/engine/install/linux-postinstall/). Also, be sure to get a text editor to work with the code and set up an X11 host if necessary (e.g., a Wayland-based WM).
+For manual Docker installation instructions, visit the [Docker Engine installation guide](https://docs.docker.com/engine/install/) and complete the [Linux post-install steps](https://docs.docker.com/engine/install/linux-postinstall/).
 
-> [!TIP]
-> For those using editors other than VSCode, devcontainers offers a CLI tool. Start by installing NVM:
->
-> ```bash
-> curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
-> ```
->
-> Alternatively:
->
-> ```
-> wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
-> ```
->
-> Then, make the `nvm` command available by sourcing your shell configuration file. I would highly advise ZSH users to lazy load NVM by replacing the generated commands with the [zsh-nvm](https://github.com/lukechilds/zsh-nvm) plugin. Alternatively, replace it with a [lazy loading function](https://github.com/nvm-sh/nvm/issues/730).
->
-> ```bash
-> source ~/.bashrc # .zshrc or config.fish depending on your shell
-> ```
->
-> Then, install and use the latest LTS version of npm and Node.
->
-> ```bash
-> nvm install --lts
-> nvm use --lts
-> ```
->
-> Finally, install the [devcontainers cli tool (more usage information here)](https://github.com/devcontainers/cli):
->
-> ```bash
-> npm install -g @devcontainers/cli
-> ```
+The recommended interface is the editor-independent [Dev Container CLI](https://github.com/devcontainers/cli). Install Node.js LTS through your preferred Node version manager or distribution package, then install the CLI:
+
+```bash
+node --version
+npm install --global @devcontainers/cli
+devcontainer --version
+```
+
+With Docker running, select the host adapter and start the environment from the repository root:
+
+```bash
+.devcontainer/prebuild.sh
+devcontainer up --workspace-folder .
+devcontainer exec --workspace-folder . bash
+```
+
+This workflow works with any host editor. VS Code is optional; opening the repository with its Dev Containers extension invokes the same configuration. To stop and remove the Compose services:
+
+```bash
+docker compose \
+  -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.override.yml \
+  down
+```
 
 Anything else you would like to install manually, reference the installation scripts for help on figuring out how to install them.
 

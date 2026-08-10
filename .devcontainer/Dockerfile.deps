@@ -13,6 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY ros2-jazzy.lock.repos /tmp/ros2.repos
+COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 
 # Bootstrap only what is required to fetch and execute the pinned dependency
 # policy. ROS, wrapper, graphics, and Python dependency lists live upstream.
@@ -48,6 +49,7 @@ RUN git clone --filter=blob:none --no-checkout \
     && ln -s /root/ros2_ws/install /opt/zed_ros2 \
     && chmod 0711 /root \
     && python3 -m pip install --no-cache-dir colcon-common-extensions 'setuptools<81' vcstool \
+    && /usr/local/sbin/normalize-python-permissions \
     && apt-get clean \
     && rm -rf /opt/ros2_build/src /var/lib/apt/lists/* /tmp/install_ros2.sh \
         /tmp/build_wrapper.sh /tmp/zed-wrapper-deps.repos /tmp/ros2.repos

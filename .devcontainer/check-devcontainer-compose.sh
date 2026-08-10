@@ -22,4 +22,13 @@ if [[ "$policy" == always ]]; then
     exit 1
 fi
 
-echo "devcontainer compose check: pass ($policy)"
+hostname_record="$(
+    docker compose -f "$compose" -f "$overlay" config --format json \
+        | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]["dev"]; print("{}:{}".format(s.get("hostname"), s.get("extra_hosts", [""])[0]))'
+)"
+if [[ "$hostname_record" != "roboboat:roboboat=127.0.1.1" ]]; then
+    echo "devcontainer compose check: service hostname is not resolvable: $hostname_record" >&2
+    exit 1
+fi
+
+echo "devcontainer compose check: pass ($policy, $hostname_record)"

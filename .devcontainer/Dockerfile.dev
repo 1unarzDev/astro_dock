@@ -12,6 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 COPY apt-packages.txt requirements.txt /tmp/astro/
 COPY pip.conf /etc/pip.conf
+COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -29,6 +30,7 @@ RUN apt-get update \
     && python3 -m venv --system-site-packages /workspace/venv \
     && /workspace/venv/bin/pip install --upgrade pip \
     && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
+    && /usr/local/sbin/normalize-python-permissions \
     && /opt/ros/${ROS_DISTRO}/lib/mavros/install_geographiclib_datasets.sh \
     && if getent passwd "${USER_UID}" >/dev/null; then userdel "$(getent passwd "${USER_UID}" | cut -d: -f1)"; fi \
     && if getent group "${USER_GID}" >/dev/null; then groupdel "$(getent group "${USER_GID}" | cut -d: -f1)"; fi \
@@ -50,6 +52,7 @@ RUN if [ -d /usr/local/zed ]; then \
       rosdep install --from-paths /tmp/zed_ws/src --ignore-src --rosdistro "${ROS_DISTRO}" -y; \
       cd /tmp/zed_ws; \
       colcon build --merge-install --install-base /opt/zed_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release; \
+      /usr/local/sbin/normalize-python-permissions; \
       rm -rf /tmp/zed_ws /var/lib/apt/lists/*; \
     fi
 
