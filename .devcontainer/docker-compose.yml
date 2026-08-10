@@ -1,7 +1,9 @@
 services:
   dev:
     image: ${ASTRO_IMAGE:-lunarzdev/astro:core}
-    pull_policy: ${ASTRO_PULL_POLICY:-always}
+    # Dev Containers replaces this with a locally built UID-adjusted image.
+    # "always" would make Compose incorrectly pull that vsc-* image from a registry.
+    pull_policy: ${ASTRO_PULL_POLICY:-missing}
     container_name: roboboat_dev
     privileged: true
     network_mode: host
@@ -21,7 +23,7 @@ services:
   sitl:
     profiles: ["sitl"]
     image: ${ASTRO_SITL_IMAGE:-lunarzdev/astro:sitl}
-    pull_policy: ${ASTRO_PULL_POLICY:-always}
+    pull_policy: ${ASTRO_PULL_POLICY:-missing}
     platform: linux/amd64
     container_name: ardupilot_sitl
     privileged: true

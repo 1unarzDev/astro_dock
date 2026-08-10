@@ -12,6 +12,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=en_US.UTF-8
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+COPY ros2-jazzy.lock.repos /tmp/ros2.repos
+
 # Bootstrap only what is required to fetch and execute the pinned dependency
 # policy. ROS, wrapper, graphics, and Python dependency lists live upstream.
 RUN apt-get update \
@@ -27,6 +29,10 @@ RUN git clone --filter=blob:none --no-checkout \
         https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed-ros2-wrapper \
     && git -C /tmp/zed-ros2-wrapper checkout "${ZED_WRAPPER_REF}" \
     && install -m 0755 /tmp/zed-ros2-wrapper/docker/scripts/install_ros2.sh /tmp/install_ros2.sh \
+    && sed -i \
+        's#https://raw.githubusercontent.com/ros2/ros2/${ROS_DISTRO}/ros2.repos#/tmp/ros2.repos#' \
+        /tmp/install_ros2.sh \
+    && grep -Fq 'vcs import --input "/tmp/ros2.repos" src' /tmp/install_ros2.sh \
     && /tmp/install_ros2.sh "${ROS_DISTRO}" \
     && mkdir -p /root/ros2_ws/src \
     && mv /tmp/zed-ros2-wrapper /root/ros2_ws/src/zed-ros2-wrapper \
@@ -44,7 +50,7 @@ RUN git clone --filter=blob:none --no-checkout \
     && python3 -m pip install --no-cache-dir colcon-common-extensions 'setuptools<81' vcstool \
     && apt-get clean \
     && rm -rf /opt/ros2_build/src /var/lib/apt/lists/* /tmp/install_ros2.sh \
-        /tmp/build_wrapper.sh /tmp/zed-wrapper-deps.repos
+        /tmp/build_wrapper.sh /tmp/zed-wrapper-deps.repos /tmp/ros2.repos
 
 RUN printf '%s\n' \
       'source /opt/ros/jazzy/setup.bash' \

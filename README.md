@@ -84,6 +84,8 @@ Anything else you would like to install manually, reference the installation scr
 
 The capability tags are `core`, `cuda`, `jetson`, and `sitl`. `deps` is an internal ARM64 dependency layer used to assemble `jetson`; it is not a host capability. The host probe selects an adapter and writes the ignored `.devcontainer/docker-compose.override.yml`; the devcontainer then pulls the corresponding image. All development services are privileged, and native Linux adapters bind `/dev` for robotics hardware access.
 
+Compose uses the `missing` pull policy by default. This pulls a published image on a clean host while allowing VS Code to start its locally generated `vsc-*-uid` image. To refresh a published image explicitly, run `docker compose pull` before reopening the devcontainer; setting `ASTRO_PULL_POLICY=always` during Dev Containers startup is not supported because Compose would try to pull VS Code's local UID image from Docker Hub.
+
 Image maintainers can opt into a local build without changing the normal Compose file:
 
 ```bash
@@ -117,6 +119,17 @@ After the camera, Cube Orange, NVIDIA runtime, ROS, and user checks pass, promot
 ```
 
 To publish a different moving tag, put it between `--promote` and the candidate image. The compatibility logic for Jazzy on JetPack is pinned to the selected ZED wrapper commit in `Dockerfile.deps`; the repository does not maintain an expanding rosdep skip list.
+
+The source-built ROS foundation is also locked in `ros2-jazzy.lock.repos`. This is necessary because the ROS `jazzy` manifest contains branch names rather than mutually tested commits; resolving those branches during every image build can combine incompatible repository revisions. To prepare a dependency update, regenerate the lock and run its check:
+
+```bash
+.devcontainer/lock-repos.py \
+  https://raw.githubusercontent.com/ros2/ros2/jazzy/ros2.repos \
+  .devcontainer/ros2-jazzy.lock.repos
+.devcontainer/check-dependency-lock.py
+```
+
+The check intentionally requires review of the `rcutils` compatibility pin. Update that assertion only after the corresponding `rmw` and `rcutils` revisions compile together.
 
 ### Windows
 

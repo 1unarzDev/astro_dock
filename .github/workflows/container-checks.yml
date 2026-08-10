@@ -19,6 +19,10 @@ jobs:
         run: bash -n setup.linux.sh .devcontainer/*.sh
       - name: Enforce native layered Jetson builds
         run: .devcontainer/check-image-architecture.sh
+      - name: Preserve local Dev Containers UID images
+        run: .devcontainer/check-devcontainer-compose.sh
+      - name: Validate locked source dependencies
+        run: .devcontainer/check-dependency-lock.py
       - name: Validate Compose adapters
         run: |
           for adapter in .devcontainer/docker-compose.override.*.yml; do
