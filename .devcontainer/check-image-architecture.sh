@@ -38,4 +38,14 @@ grep -q 'DEPS_KEY:.*needs\.deps\.outputs\.key' "$workflow" \
 grep -q 'Dependency job returned an invalid content key' "$workflow" \
     || fail "the Jetson build must reject an empty dependency image before invoking Buildx"
 
+grep -q 'stat -c %g /usr/local/zed' "$final_image" \
+    || fail "the Jetson user must resolve ZED access from the SDK path GID"
+
+if grep -q 'grep -qw zed' "$workflow"; then
+    fail "image smoke tests must verify ZED access, not a vendor-specific group name"
+fi
+
+grep -q 'astro-smoke jetson' "$workflow" \
+    || fail "the Jetson candidate must use the diagnostic smoke test"
+
 echo "image architecture check: pass"

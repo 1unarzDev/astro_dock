@@ -13,6 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 COPY apt-packages.txt requirements.txt /tmp/astro/
 COPY pip.conf /etc/pip.conf
 COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
+COPY image-smoke.sh /usr/local/bin/astro-smoke
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -37,7 +38,12 @@ RUN apt-get update \
     && groupadd --gid "${USER_GID}" "${USERNAME}" \
     && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
     && usermod -aG dialout,video,sudo "${USERNAME}" \
-    && if getent group zed >/dev/null; then usermod -aG zed "${USERNAME}"; fi \
+    && if [[ -d /usr/local/zed ]]; then \
+         zed_gid="$(stat -c %g /usr/local/zed)"; \
+         zed_group="$(getent group "${zed_gid}" | cut -d: -f1 || true)"; \
+         if [[ -z "${zed_group}" ]]; then groupadd --gid "${zed_gid}" zed; zed_group=zed; fi; \
+         usermod -aG "${zed_group}" "${USERNAME}"; \
+       fi \
     && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
     && touch "/home/${USERNAME}/.sudo_as_admin_successful" \
