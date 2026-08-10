@@ -24,11 +24,13 @@ RUN python3 -m venv --system-site-packages /workspace/venv \
     && existing_group="$(getent group "${USER_GID}" | cut -d: -f1 || true)" \
     && if [[ -n "${existing_user}" && "${existing_user}" != "${USERNAME}" ]]; then userdel "${existing_user}"; fi \
     && if [[ -n "${existing_group}" && "${existing_group}" != "${USERNAME}" ]]; then groupdel "${existing_group}"; fi \
-    && getent group "${USERNAME}" >/dev/null || groupadd --gid "${USER_GID}" "${USERNAME}" \
-    && id "${USERNAME}" >/dev/null 2>&1 || useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
+    && if ! getent group "${USERNAME}" >/dev/null; then groupadd --gid "${USER_GID}" "${USERNAME}"; fi \
+    && if ! id "${USERNAME}" >/dev/null 2>&1; then useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}"; fi \
     && usermod -aG dialout,video,sudo "${USERNAME}" \
+    && if getent group zed >/dev/null; then usermod -aG zed "${USERNAME}"; fi \
     && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
+    && touch "/home/${USERNAME}/.sudo_as_admin_successful" \
     && mkdir -p "${ROS_WS}" \
     && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" \
     && rm -rf /tmp/astro

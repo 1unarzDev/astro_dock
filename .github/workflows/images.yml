@@ -120,7 +120,7 @@ jobs:
         run: |
           if [ "$TAG" = cuda ]; then
             docker run --rm "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}" \
-              bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && source /opt/ros/jazzy/setup.bash && source /opt/zed_ros2/setup.bash && /usr/bin/python3 -c "import pkg_resources; tuple(pkg_resources.working_set)" && sudo -n true'
+              bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && id -nG | grep -qw zed && test -x /usr/local/zed/tools/ZED_Diagnostic && test -e "$HOME/.sudo_as_admin_successful" && source /opt/ros/jazzy/setup.bash && source /opt/zed_ros2/setup.bash && /usr/bin/python3 -c "import pkg_resources; tuple(pkg_resources.working_set)" && sudo -n true'
           else
             docker run --rm "${REGISTRY_IMAGE}:${TAG}-${GITHUB_SHA}" \
               bash -lc 'test -x ./build/sitl/bin/ardurover && sudo -n true'
@@ -191,4 +191,4 @@ jobs:
       - name: Smoke-test Jetson developer identity
         run: |
           docker run --rm "${REGISTRY_IMAGE}:jetson-${GITHUB_SHA}" \
-            bash -lc 'test "$(id -un)" = roboboat && /usr/bin/python3 -c "import pkg_resources; tuple(pkg_resources.working_set)" && sudo -n true'
+            bash -lc 'test "$(id -un)" = roboboat && id -nG | grep -qw zed && test -x /usr/local/zed/tools/ZED_Diagnostic && test -e "$HOME/.sudo_as_admin_successful" && /usr/bin/python3 -c "import pkg_resources; tuple(pkg_resources.working_set)" && sudo -n true'

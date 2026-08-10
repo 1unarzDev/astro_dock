@@ -1,6 +1,12 @@
 if [[ -f /opt/ros/jazzy/setup.bash ]]; then
   source /opt/ros/jazzy/setup.bash
 fi
+
+# Jazzy replaces ROS_LOCALHOST_ONLY with an explicit discovery range. Unset
+# the legacy variable as well so shells in containers created before this
+# migration do not emit a warning.
+unset ROS_LOCALHOST_ONLY
+export ROS_AUTOMATIC_DISCOVERY_RANGE="${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}"
 if [[ -f /workspace/venv/bin/activate ]]; then
   source /workspace/venv/bin/activate
 fi

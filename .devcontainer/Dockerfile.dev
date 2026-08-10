@@ -37,8 +37,10 @@ RUN apt-get update \
     && groupadd --gid "${USER_GID}" "${USERNAME}" \
     && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
     && usermod -aG dialout,video,sudo "${USERNAME}" \
+    && if getent group zed >/dev/null; then usermod -aG zed "${USERNAME}"; fi \
     && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
+    && touch "/home/${USERNAME}/.sudo_as_admin_successful" \
     && mkdir -p "${ROS_WS}" \
     && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" \
     && apt-get clean \

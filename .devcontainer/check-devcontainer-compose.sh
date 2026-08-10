@@ -31,4 +31,13 @@ if [[ "$hostname_record" != "roboboat:roboboat=127.0.1.1" ]]; then
     exit 1
 fi
 
-echo "devcontainer compose check: pass ($policy, $hostname_record)"
+discovery="$(
+    docker compose -f "$compose" -f "$overlay" config --format json \
+        | python3 -c 'import json,sys; e=json.load(sys.stdin)["services"]["dev"]["environment"]; print("{}:{}".format(e.get("ROS_AUTOMATIC_DISCOVERY_RANGE"), e.get("ROS_LOCALHOST_ONLY", "absent")))'
+)"
+if [[ "$discovery" != "SUBNET:absent" ]]; then
+    echo "devcontainer compose check: deprecated ROS discovery environment: $discovery" >&2
+    exit 1
+fi
+
+echo "devcontainer compose check: pass ($policy, $hostname_record, discovery=$discovery)"
