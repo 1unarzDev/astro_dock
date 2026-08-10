@@ -37,7 +37,6 @@ RUN python3 -m venv --system-site-packages /workspace/venv \
     && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" \
     && rm -rf /tmp/astro
 
-RUN sudo -H -u "${USERNAME}" astro-smoke jetson
 USER ${USERNAME}
 WORKDIR ${ROS_WS}
 CMD ["sleep", "infinity"]

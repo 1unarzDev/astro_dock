@@ -53,7 +53,14 @@ if grep -q 'grep -qw zed' "$workflow"; then
     fail "image smoke tests must verify ZED access, not a vendor-specific group name"
 fi
 
-grep -q 'RUN sudo -H -u.*astro-smoke jetson' "$final_image" \
-    || fail "the Jetson candidate must pass its diagnostic smoke test before publication"
+if grep -qE '^RUN .*astro-smoke jetson' "$final_image"; then
+    fail "Jetson hardware smoke tests must not run while assembling the portable candidate"
+fi
+
+grep -q 'Starting privileged hardware validation container' "$root/.devcontainer/boat-validate.sh" \
+    || fail "Jetson candidates must have an explicit native hardware-validation path"
+
+grep -q 'ZED_Diagnostic' "$root/.devcontainer/boat-validate.sh" \
+    || fail "native Jetson validation must check the ZED diagnostic"
 
 echo "image architecture check: pass"
