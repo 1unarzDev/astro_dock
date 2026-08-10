@@ -229,7 +229,3 @@ jobs:
             org.opencontainers.image.version=ros-jazzy_zed-5.4.1_l4t-r36.4
           cache-from: type=gha,scope=jetson-final
           cache-to: type=gha,mode=max,scope=jetson-final
-      - name: Smoke-test Jetson developer identity
-        run: |
-          docker run --rm "${REGISTRY_IMAGE}:jetson-${GITHUB_SHA}" \
-            astro-smoke jetson

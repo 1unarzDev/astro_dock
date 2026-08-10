@@ -29,10 +29,11 @@ RUN python3 -m venv --system-site-packages /workspace/venv \
     && if ! id "${USERNAME}" >/dev/null 2>&1; then useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}"; fi \
     && usermod -aG dialout,video,sudo "${USERNAME}" \
     && if [[ -d /usr/local/zed ]]; then \
-         zed_gid="$(stat -c %g /usr/local/zed)"; \
-         zed_group="$(getent group "${zed_gid}" | cut -d: -f1 || true)"; \
-         if [[ -z "${zed_group}" ]]; then groupadd --gid "${zed_gid}" zed; zed_group=zed; fi; \
-         usermod -aG "${zed_group}" "${USERNAME}"; \
+         while read -r zed_gid; do \
+           zed_group="$(getent group "${zed_gid}" | cut -d: -f1 || true)"; \
+           if [[ -z "${zed_group}" ]]; then zed_group="zed_${zed_gid}"; groupadd --gid "${zed_gid}" "${zed_group}"; fi; \
+           usermod -aG "${zed_group}" "${USERNAME}"; \
+         done < <(find /usr/local/zed -xdev -printf '%G\n' | sort -un); \
        fi \
     && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
@@ -42,5 +43,6 @@ RUN python3 -m venv --system-site-packages /workspace/venv \
     && rm -rf /tmp/astro
 
 USER ${USERNAME}
+RUN astro-smoke jetson
 WORKDIR ${ROS_WS}
 CMD ["sleep", "infinity"]
