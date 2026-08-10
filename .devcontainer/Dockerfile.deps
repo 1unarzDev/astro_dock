@@ -2,8 +2,7 @@ ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18
 FROM ${BASE_IMAGE}
 
 ARG ROS_DISTRO=jazzy
-# Exact wrapper commit behind v5.4.1. Pinning the commit prevents a retag from
-# silently changing the ROS source/install policy used by this layer.
+ARG ROS_POLICY_REF=86171bccda22de6e83ccc69b3c0e67af99dece7c
 ARG ZED_WRAPPER_REF=86171bccda22de6e83ccc69b3c0e67af99dece7c
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
@@ -11,9 +10,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-COPY ros2-jazzy.lock.repos /tmp/ros2.repos
-COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 
 # Bootstrap only what is required to fetch and execute the pinned dependency
 # policy. ROS, wrapper, graphics, and Python dependency lists live upstream.
@@ -23,20 +19,29 @@ RUN apt-get update \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-# Keep the Jazzy-on-L4T compatibility policy with the ZED wrapper release that
-# owns it. This replaces the repository's growing package and rosdep exception
-# lists with one pinned upstream implementation and a small set of assertions.
+COPY ros2-jazzy.lock.repos /tmp/ros2.repos
+
+# Build the expensive ROS foundation independently of the ZED wrapper. A ZED
+# update can now reuse this complete layer as long as the compatibility policy
+# and locked ROS source graph remain unchanged.
 RUN git clone --filter=blob:none --no-checkout \
-        https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed-ros2-wrapper \
-    && git -C /tmp/zed-ros2-wrapper checkout "${ZED_WRAPPER_REF}" \
-    && install -m 0755 /tmp/zed-ros2-wrapper/docker/scripts/install_ros2.sh /tmp/install_ros2.sh \
+        https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/ros-policy \
+    && git -C /tmp/ros-policy checkout "${ROS_POLICY_REF}" \
+    && install -m 0755 /tmp/ros-policy/docker/scripts/install_ros2.sh /tmp/install_ros2.sh \
     && sed -i \
         's#https://raw.githubusercontent.com/ros2/ros2/${ROS_DISTRO}/ros2.repos#/tmp/ros2.repos#' \
         /tmp/install_ros2.sh \
     && grep -Fq 'vcs import --input "/tmp/ros2.repos" src' /tmp/install_ros2.sh \
     && /tmp/install_ros2.sh "${ROS_DISTRO}" \
-    && mkdir -p /root/ros2_ws/src \
-    && mv /tmp/zed-ros2-wrapper /root/ros2_ws/src/zed-ros2-wrapper \
+    && test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
+    && rm -rf /tmp/ros-policy /tmp/install_ros2.sh /tmp/ros2.repos \
+        /opt/ros2_build/src /var/lib/apt/lists/*
+
+# The wrapper and its curated source dependencies are a separate cache seam.
+RUN mkdir -p /root/ros2_ws/src \
+    && git clone --filter=blob:none --no-checkout \
+        https://github.com/stereolabs/zed-ros2-wrapper.git /root/ros2_ws/src/zed-ros2-wrapper \
+    && git -C /root/ros2_ws/src/zed-ros2-wrapper checkout "${ZED_WRAPPER_REF}" \
     && install -m 0644 \
         /root/ros2_ws/src/zed-ros2-wrapper/docker/scripts/zed-wrapper-deps.repos \
         /tmp/zed-wrapper-deps.repos \
@@ -44,15 +49,19 @@ RUN git clone --filter=blob:none --no-checkout \
         /root/ros2_ws/src/zed-ros2-wrapper/docker/scripts/build_wrapper.sh \
         /tmp/build_wrapper.sh \
     && /tmp/build_wrapper.sh "${ROS_DISTRO}" \
-    && test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
+    && test -f /root/ros2_ws/install/setup.bash \
+    && rm -rf /tmp/build_wrapper.sh /tmp/zed-wrapper-deps.repos /var/lib/apt/lists/*
+
+COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
+
+RUN test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
     && test -f /root/ros2_ws/install/setup.bash \
     && ln -s /root/ros2_ws/install /opt/zed_ros2 \
     && chmod 0711 /root \
     && python3 -m pip install --no-cache-dir colcon-common-extensions 'setuptools<81' vcstool \
     && /usr/local/sbin/normalize-python-permissions \
     && apt-get clean \
-    && rm -rf /opt/ros2_build/src /var/lib/apt/lists/* /tmp/install_ros2.sh \
-        /tmp/build_wrapper.sh /tmp/zed-wrapper-deps.repos /tmp/ros2.repos
+    && rm -rf /var/lib/apt/lists/*
 
 RUN printf '%s\n' \
       'source /opt/ros/jazzy/setup.bash' \

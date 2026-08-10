@@ -98,6 +98,8 @@ To diagnose a camera or Cube Orange connection, run `.devcontainer/device-diagno
 
 GitHub Actions requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets. `core` uses native hosted amd64 and arm64 runners; `cuda` and `sitl` use hosted amd64. JetPack dependencies are built in the generic `deps` image on a native hosted ARM64 runner, so QEMU never executes `apt`, `dpkg`, or ROS compilation. The small `jetson` layer then adds the stable developer user and Python environment.
 
+The `deps` image is content-addressed from `Dockerfile.deps`, the locked ROS manifest, and the Python permission policy. If that exact image already exists on Docker Hub, CI skips the dependency build completely and reuses it for the new Jetson candidate. Within a cold build, ROS and the ZED wrapper are separate cache layers, so a wrapper-only update or late image-policy change does not rebuild ROS. Expect the first build for a genuinely new ROS lock or base image to remain expensive; routine repository changes should not pay that cost.
+
 If a persistent native ARM64 build server becomes available, label its GitHub runner `self-hosted`, `linux`, `ARM64`, and `arm64-builder`, then manually dispatch the image workflow with `arm64_builder` set to `self-hosted`. The normal automatic path continues to use GitHub's hosted ARM64 runner.
 
 Jetson builds publish only the immutable `jetson-<commit>` candidate. The boat does not need to be registered as a GitHub runner. On the boat, validate a candidate directly:
