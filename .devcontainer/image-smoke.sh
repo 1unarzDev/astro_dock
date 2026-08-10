@@ -21,7 +21,7 @@ check "developer primary group" test "$(id -gn)" = roboboat
 check "sudo acknowledgement marker" test -e "$HOME/.sudo_as_admin_successful"
 check "passwordless sudo" sudo -n true
 check "system Python package metadata" \
-    /usr/bin/python3 -c 'import pkg_resources; tuple(pkg_resources.working_set)'
+    /usr/bin/python3 -c 'import importlib.metadata; tuple(importlib.metadata.distributions())'
 
 if [[ "$mode" == cuda || "$mode" == jetson ]]; then
     echo "[smoke] supplementary groups: $(id -nG)"

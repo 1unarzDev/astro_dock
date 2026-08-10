@@ -4,6 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="$root/.github/workflows/images.yml"
 final_image="$root/.devcontainer/Dockerfile.jetson"
+general_image="$root/.devcontainer/Dockerfile.dev"
 
 fail() {
     echo "image architecture check: $*" >&2
@@ -38,14 +39,21 @@ grep -q 'DEPS_KEY:.*needs\.deps\.outputs\.key' "$workflow" \
 grep -q 'Dependency job returned an invalid content key' "$workflow" \
     || fail "the Jetson build must reject an empty dependency image before invoking Buildx"
 
-grep -q "find /usr/local/zed -xdev -printf '%G" "$final_image" \
-    || fail "the Jetson user must resolve every GID used by the ZED SDK tree"
+grep -q 'configure-zed-access' "$final_image" \
+    || fail "the Jetson user must receive SDK access through the shared helper"
+
+if grep -Eq '\[\[|< <\(' "$general_image"; then
+    fail "Dockerfile.dev uses /bin/sh; Bash-only logic belongs in an explicit helper"
+fi
+
+grep -q 'configure-zed-access' "$general_image" \
+    || fail "general images must use the shared optional ZED access helper"
 
 if grep -q 'grep -qw zed' "$workflow"; then
     fail "image smoke tests must verify ZED access, not a vendor-specific group name"
 fi
 
-grep -q 'RUN astro-smoke jetson' "$final_image" \
+grep -q 'RUN sudo -H -u.*astro-smoke jetson' "$final_image" \
     || fail "the Jetson candidate must pass its diagnostic smoke test before publication"
 
 echo "image architecture check: pass"
