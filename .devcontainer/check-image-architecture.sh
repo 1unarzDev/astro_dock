@@ -28,4 +28,14 @@ fi
 grep -q 'Dockerfile.deps' "$workflow" \
     || fail "the native dependency layer is missing from image automation"
 
+if grep -q 'needs\.deps\.outputs\.image' "$workflow"; then
+    fail "registry image names must not cross jobs; GitHub may redact outputs containing registry secrets"
+fi
+
+grep -q 'DEPS_KEY:.*needs\.deps\.outputs\.key' "$workflow" \
+    || fail "the Jetson build must reconstruct its dependency image from the content key"
+
+grep -q 'Dependency job returned an invalid content key' "$workflow" \
+    || fail "the Jetson build must reject an empty dependency image before invoking Buildx"
+
 echo "image architecture check: pass"

@@ -136,7 +136,7 @@ jobs:
   deps:
     runs-on: ${{ inputs.arm64_builder == 'self-hosted' && fromJSON('["self-hosted","linux","ARM64","arm64-builder"]') || 'ubuntu-24.04-arm' }}
     outputs:
-      image: ${{ steps.deps-key.outputs.image }}
+      key: ${{ steps.deps_key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -145,7 +145,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Compute dependency image key
-        id: deps-key
+        id: deps_key
         shell: bash
         run: |
           key="$(sha256sum \
@@ -156,9 +156,9 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "image=${REGISTRY_IMAGE}:deps-$key" >> "$GITHUB_OUTPUT"
       - name: Check for an existing dependency image
-        id: deps-existing
+        id: deps_existing
         env:
-          DEPS_IMAGE: ${{ steps.deps-key.outputs.image }}
+          DEPS_IMAGE: ${{ steps.deps_key.outputs.image }}
         run: |
           if docker buildx imagetools inspect "$DEPS_IMAGE" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -166,7 +166,7 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Build dependencies natively on ARM64
-        if: steps.deps-existing.outputs.exists != 'true'
+        if: steps.deps_existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .devcontainer
@@ -174,19 +174,19 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: |
-            ${{ steps.deps-key.outputs.image }}
+            ${{ steps.deps_key.outputs.image }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=deps-${{ steps.deps-key.outputs.key }}
+            org.opencontainers.image.version=deps-${{ steps.deps_key.outputs.key }}
           cache-from: type=registry,ref=${{ env.REGISTRY_IMAGE }}:cache-deps
           cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:cache-deps,mode=max
       - name: Update dependency convenience tag
         env:
-          DEPS_IMAGE: ${{ steps.deps-key.outputs.image }}
+          DEPS_IMAGE: ${{ steps.deps_key.outputs.image }}
         run: docker buildx imagetools create --tag "${REGISTRY_IMAGE}:deps" "$DEPS_IMAGE"
       - name: Smoke-test non-root Python metadata access
         env:
-          DEPS_IMAGE: ${{ steps.deps-key.outputs.image }}
+          DEPS_IMAGE: ${{ steps.deps_key.outputs.image }}
         run: |
           docker run --rm --user 65534 \
             "$DEPS_IMAGE" \
@@ -202,6 +202,18 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Resolve dependency base image
+        id: deps_base
+        env:
+          DEPS_KEY: ${{ needs.deps.outputs.key }}
+        run: |
+          if [[ ! "$DEPS_KEY" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Dependency job returned an invalid content key: '$DEPS_KEY'" >&2
+            exit 1
+          fi
+          image="${REGISTRY_IMAGE}:deps-${DEPS_KEY}"
+          docker buildx imagetools inspect "$image" >/dev/null
+          echo "image=$image" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .devcontainer
@@ -211,7 +223,7 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY_IMAGE }}:jetson-${{ github.sha }}
           build-args: |
-            BASE_IMAGE=${{ needs.deps.outputs.image }}
+            BASE_IMAGE=${{ steps.deps_base.outputs.image }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=ros-jazzy_zed-5.4.1_l4t-r36.4
