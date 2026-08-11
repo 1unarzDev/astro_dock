@@ -67,15 +67,32 @@ def request(url: str, *, method: str = "GET", token: str = "", body: Any = None)
         raise RuntimeError(f"{method} {url} returned {error.code}: {detail}") from error
 
 
-def inventory(repository: str) -> list[Tag]:
+def inventory(repository: str, *, require_complete: bool = False) -> list[Tag]:
     namespace, name = split_repository(repository)
-    url = (
-        "https://hub.docker.com/v2/namespaces/"
-        f"{namespace}/repositories/{name}/tags?page_size=100"
-    )
+    base_url = f"https://hub.docker.com/v2/namespaces/{namespace}/repositories/{name}/tags"
+    page_number = 1
+    page_size = 100
+    reported_count: int | None = None
     tags: list[Tag] = []
-    while url:
-        page = request(url)
+    while True:
+        url = f"{base_url}?page={page_number}&page_size={page_size}"
+        try:
+            page = request(url)
+        except RuntimeError as error:
+            # Hub's count is eventually consistent after bulk deletion. It can
+            # advertise another page even after every remaining tag was
+            # returned, then answer its own next-page URL with 404.
+            if page_number > 1 and "returned 404:" in str(error) and not require_complete:
+                print(
+                    "[retention] warning: Docker Hub advertised a stale trailing page; "
+                    "using the tags already returned",
+                    file=sys.stderr,
+                )
+                break
+            raise
+        if reported_count is None:
+            reported_count = int(page.get("count") or 0)
+        results = page["results"]
         tags.extend(
             Tag(
                 name=item["name"],
@@ -83,9 +100,20 @@ def inventory(repository: str) -> list[Tag]:
                 updated=utc(item["last_updated"]),
                 size=int(item.get("full_size") or 0),
             )
-            for item in page["results"]
+            for item in results
         )
-        url = page.get("next") or ""
+        if len(results) < page_size or not page.get("next"):
+            break
+        page_number += 1
+
+    if reported_count is not None and reported_count != len(tags):
+        message = (
+            f"Docker Hub reported {reported_count} tags but returned {len(tags)}; "
+            "the count is probably still converging after tag deletion"
+        )
+        if require_complete:
+            raise RuntimeError(message)
+        print(f"[retention] warning: {message}", file=sys.stderr)
     return tags
 
 
@@ -272,7 +300,10 @@ def migration_deletions(tags: list[Tag]) -> list[str]:
 
 
 def migrate(repository: str, apply: bool) -> None:
-    tags = inventory(repository)
+    # Destructive tag deletion is allowed only from a complete, internally
+    # consistent inventory. Post-cleanup reads intentionally use the tolerant
+    # mode because Docker Hub's count can remain stale for several minutes.
+    tags = inventory(repository, require_complete=apply)
     existing = {tag.name: tag for tag in tags}
 
     candidates = sorted(

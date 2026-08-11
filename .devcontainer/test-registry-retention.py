@@ -43,6 +43,34 @@ class RetentionPolicyTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.split_repository("astro")
 
+    @mock.patch.object(module, "request")
+    def test_stale_count_stops_on_short_page(self, request):
+        request.return_value = {
+            "count": 111,
+            "next": "stale-page-two",
+            "results": [
+                {
+                    "name": "core",
+                    "digest": "sha256:core",
+                    "last_updated": "2026-08-10T00:00:00Z",
+                    "full_size": 1,
+                }
+            ],
+        }
+        tags = module.inventory("example/astro")
+        self.assertEqual([tag.name for tag in tags], ["core"])
+        request.assert_called_once()
+
+    @mock.patch.object(module, "request")
+    def test_migration_rejects_incomplete_inventory(self, request):
+        request.return_value = {
+            "count": 111,
+            "next": "stale-page-two",
+            "results": [],
+        }
+        with self.assertRaisesRegex(RuntimeError, "reported 111 tags but returned 0"):
+            module.inventory("example/astro", require_complete=True)
+
     @mock.patch.object(module, "delete_unreferenced")
     @mock.patch.object(module, "retag")
     @mock.patch.object(module, "resolve_digest", return_value="sha256:new")
