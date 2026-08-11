@@ -98,23 +98,33 @@ To diagnose a camera or Cube Orange connection, run `.devcontainer/device-diagno
 
 GitHub Actions requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets. `core` uses native hosted amd64 and arm64 runners; `cuda` and `sitl` use hosted amd64. JetPack dependencies are built in the generic `deps` image on a native hosted ARM64 runner, so QEMU never executes `apt`, `dpkg`, or ROS compilation. The small `jetson` layer then adds the stable developer user and Python environment.
 
-The `deps` image is content-addressed from `Dockerfile.deps`, the locked ROS manifest, and the Python permission policy. If that exact image already exists on Docker Hub, CI skips the dependency build completely and reuses it for the new Jetson candidate. Within a cold build, ROS and the ZED wrapper are separate cache layers, so a wrapper-only update or late image-policy change does not rebuild ROS. Expect the first build for a genuinely new ROS lock or base image to remain expensive; routine repository changes should not pay that cost.
+The `deps` image records a content key derived from `Dockerfile.deps`, the locked ROS manifest, and the Python permission policy. CI reads that key from the fixed `deps` tag and skips the dependency build when it already matches. Within a cold build, ROS and the ZED wrapper are separate cache layers, so a wrapper-only update or late image-policy change does not rebuild ROS. Expect the first build for a genuinely new ROS lock or base image to remain expensive; routine repository changes should not pay that cost.
 
 If a persistent native ARM64 build server becomes available, label its GitHub runner `self-hosted`, `linux`, `ARM64`, and `arm64-builder`, then manually dispatch the image workflow with `arm64_builder` set to `self-hosted`. The normal automatic path continues to use GitHub's hosted ARM64 runner.
 
-Jetson builds publish only the immutable `jetson-<commit>` candidate. The boat does not need to be registered as a GitHub runner. On the boat, validate a candidate directly:
+Runtime images use bounded release histories: the clean capability tag is current, `-prev` is the previous validated image, and `-old` is the third generation. Fixed `-next` and architecture tags are staging references and are never selected by the devcontainer. This keeps normal rollback available without publishing permanent tags for every commit. After the one-time migration, any empty rollback slots fill naturally during the next two successful builds rather than treating an old, unverified commit image as validated.
+
+Jetson builds place candidates in five internal retention slots, but the immutable digest in the Actions summary is the authoritative identifier. A slot can be reused after five newer candidates, while a digest being tested with `--promote` is protected by `jetson-check`. The boat does not need to be registered as a GitHub runner. Validate a candidate directly:
 
 ```bash
-.devcontainer/boat-validate.sh lunarzdev/astro:jetson-<commit>
+.devcontainer/boat-validate.sh lunarzdev/astro@sha256:<digest-from-actions>
 ```
 
 After the camera, Cube Orange, NVIDIA runtime, ROS, and user checks pass, promote that exact candidate using the Docker credentials already configured on the boat:
 
 ```bash
-.devcontainer/boat-validate.sh --promote lunarzdev/astro:jetson-<commit>
+.devcontainer/boat-validate.sh --promote lunarzdev/astro@sha256:<digest-from-actions>
 ```
 
-To publish a different moving tag, put it between `--promote` and the candidate image. The compatibility logic for Jazzy on JetPack is pinned to the selected ZED wrapper commit in `Dockerfile.deps`; the repository does not maintain an expanding rosdep skip list.
+Promotion rotates `jetson-old`, `jetson-prev`, and `jetson`; failed hardware validation changes none of them. To publish a different moving tag without rotating that history, put it between `--promote` and the candidate digest. The compatibility logic for Jazzy on JetPack is pinned to the selected ZED wrapper commit in `Dockerfile.deps`; the repository does not maintain an expanding rosdep skip list.
+
+The weekly Docker Hub retention workflow compacts candidates older than 30 days while retaining no more than five distinct candidates and keeps the complete repository at no more than 28 fixed tags. It also uploads a pre-operation tag/digest inventory for recovery and auditing. `DOCKERHUB_TOKEN` therefore needs Read, Write, and Delete permission. To remove the existing commit-tag history, manually dispatch **Docker Hub retention** once in `audit` mode, review its inventory artifact, and then dispatch it in `migrate` mode. Routine workflows use supported manifest operations; the one-time migration isolates Docker Hub's currently undocumented delete-by-tag endpoint behind a disposable probe and an exact legacy-tag allowlist.
+
+Maintainers can inspect the policy without credentials or mutations:
+
+```bash
+.devcontainer/registry-retention.py --repository lunarzdev/astro audit
+```
 
 The source-built ROS foundation is also locked in `ros2-jazzy.lock.repos`. This is necessary because the ROS `jazzy` manifest contains branch names rather than mutually tested commits; resolving those branches during every image build can combine incompatible repository revisions. To prepare a dependency update, regenerate the lock and run its check:
 

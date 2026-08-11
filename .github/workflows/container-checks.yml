@@ -19,6 +19,8 @@ jobs:
         run: bash -n setup.linux.sh .devcontainer/*.sh
       - name: Enforce native layered Jetson builds
         run: .devcontainer/check-image-architecture.sh
+      - name: Validate registry retention policy
+        run: .devcontainer/test-registry-retention.py
       - name: Preserve local Dev Containers UID images
         run: .devcontainer/check-devcontainer-compose.sh
       - name: Validate locked source dependencies

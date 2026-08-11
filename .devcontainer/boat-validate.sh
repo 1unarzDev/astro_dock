@@ -3,11 +3,12 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: boat-validate.sh [--promote [TAG]] IMAGE
+Usage: boat-validate.sh [--promote [TAG]] REPOSITORY@sha256:DIGEST
 
-Pull and validate an immutable Jetson candidate on the boat. With --promote,
-publish the validated candidate as TAG (default: the same repository's
-"jetson" tag). Docker Hub credentials must already be available to Docker.
+Pull and validate an immutable Jetson candidate digest on the boat. With
+--promote, rotate the repository's jetson/jetson-prev/jetson-old release ring.
+An explicit TAG bypasses the release ring. Docker credentials must already be
+available to Docker for promotion.
 EOF
 }
 
@@ -25,9 +26,29 @@ fi
 image="${1:-}"
 [[ -n "$image" ]] || { usage >&2; exit 2; }
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+[[ "$image" =~ ^[^@]+@sha256:[0-9a-f]{64}$ ]] || {
+    echo "Use the immutable repository@sha256:digest from the Actions summary." >&2
+    exit 2
+}
 
 container="astro_boat_validate_$$"
-cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+repository="${image%@*}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+lease_active=false
+promoted=false
+
+cleanup() {
+    docker rm -f "$container" >/dev/null 2>&1 || true
+    if $lease_active && ! $promoted; then
+        if docker buildx imagetools inspect "${repository}:jetson" >/dev/null 2>&1; then
+            echo "[boat] Releasing candidate lease back to the stable Jetson image"
+            docker buildx imagetools create --tag "${repository}:jetson-check" \
+                "${repository}:jetson" >/dev/null || true
+        else
+            echo "[boat] No stable Jetson tag exists; retaining jetson-check as the candidate lease"
+        fi
+    fi
+}
 trap cleanup EXIT
 
 step() { printf '\n[boat] %s\n' "$*"; }
@@ -35,6 +56,12 @@ inside() { docker exec "$container" bash -lc "$1"; }
 
 step "Pulling immutable candidate $image"
 docker pull "$image"
+
+if $promote; then
+    step "Protecting the candidate digest during hardware validation"
+    docker buildx imagetools create --tag "${repository}:jetson-check" "$image" >/dev/null
+    lease_active=true
+fi
 
 architecture="$(docker image inspect --format '{{.Architecture}}' "$image")"
 [[ "$architecture" == arm64 ]] || {
@@ -85,10 +112,15 @@ step "Candidate passed boat hardware validation"
 
 if $promote; then
     if [[ -z "$promote_tag" ]]; then
-        repository="${image%@*}"
-        repository="${repository%:*}"
         promote_tag="${repository}:jetson"
     fi
-    step "Promoting $image to $promote_tag"
-    docker buildx imagetools create --tag "$promote_tag" "$image"
+    if [[ "$promote_tag" == "${repository}:jetson" ]]; then
+        step "Rotating validated Jetson release history"
+        "$script_dir/registry-retention.py" --repository "$repository" \
+            rotate jetson "$image"
+    else
+        step "Promoting $image to $promote_tag without rotating the Jetson ring"
+        docker buildx imagetools create --tag "$promote_tag" "$image"
+    fi
+    promoted=true
 fi

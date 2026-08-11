@@ -34,10 +34,20 @@ if grep -q 'needs\.deps\.outputs\.image' "$workflow"; then
 fi
 
 grep -q 'DEPS_KEY:.*needs\.deps\.outputs\.key' "$workflow" \
-    || fail "the Jetson build must reconstruct its dependency image from the content key"
+    || fail "the Jetson build must verify the dependency image content key"
 
-grep -q 'Dependency job returned an invalid content key' "$workflow" \
-    || fail "the Jetson build must reject an empty dependency image before invoking Buildx"
+grep -q 'deps-${DEPS_KEY}' "$workflow" \
+    || fail "the dependency tag must be checked against its content-key label"
+
+if grep -Eq '\$\{\{ env\.REGISTRY_IMAGE \}\}:[a-z0-9-]+-\$\{\{ github\.sha \}\}' "$workflow"; then
+    fail "runtime images must use bounded staging and rollback tags, not commit tags"
+fi
+
+grep -q 'registry-retention.py.*rotate' "$workflow" \
+    || fail "validated images must rotate through the bounded retention helper"
+
+grep -q 'candidate.*REGISTRY_IMAGE' "$workflow" \
+    || fail "Jetson candidates must be retained by digest in fixed slots"
 
 grep -q 'configure-zed-access' "$final_image" \
     || fail "the Jetson user must receive SDK access through the shared helper"

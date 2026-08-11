@@ -1,0 +1,72 @@
+name: Docker Hub retention
+
+on:
+  schedule:
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Retention operation
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - prune
+          - migrate
+
+concurrency:
+  group: docker-hub-mutations
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY_IMAGE: lunarzdev/astro
+
+jobs:
+  retention:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Capture pre-operation inventory
+        run: .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" snapshot docker-hub-before.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-hub-inventory-${{ github.run_id }}
+          path: docker-hub-before.json
+          retention-days: 90
+      - name: Apply retention policy
+        env:
+          MODE: ${{ github.event_name == 'schedule' && 'prune' || inputs.mode }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          case "$MODE" in
+            audit)
+              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" audit
+              ;;
+            prune)
+              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+                prune --count 5 --days 30
+              ;;
+            migrate)
+              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+                migrate --apply
+              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+                prune --count 5 --days 30
+              ;;
+            *)
+              echo "Unknown retention mode: $MODE" >&2
+              exit 2
+              ;;
+          esac
+      - name: Report final inventory
+        if: always()
+        run: .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" audit >> "$GITHUB_STEP_SUMMARY"
