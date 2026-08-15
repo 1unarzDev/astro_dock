@@ -1,5 +1,6 @@
 matplotlib
 opencv-contrib-python
+pyserial==3.5
 pyyaml
 scikit-learn
 setuptools
