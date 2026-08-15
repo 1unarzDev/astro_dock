@@ -1,0 +1,5 @@
+# The dev container uses the same roboboat UID as the host. Assigning these
+# boat-specific serial devices to that UID avoids host/container dialout GID
+# mismatches (Fedora uses 18 while Ubuntu commonly uses 20).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", OWNER="roboboat", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2dae", OWNER="roboboat", MODE="0660"
