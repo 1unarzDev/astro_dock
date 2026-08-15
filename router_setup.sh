@@ -17,6 +17,7 @@ DHCP_START=100
 DHCP_COUNT=100
 DNS_PRIMARY=1.1.1.1
 DNS_SECONDARY=8.8.8.8
+SETUP_NAME=mhseals
 ROUTER_NAME=mhseals
 SSID=mhseals
 ADMIN_USER=mhseals
@@ -132,6 +133,10 @@ prompt_secret() {
 
 edit_settings() {
     printf '\nDD-WRT flat-LAN settings (Enter keeps the displayed default)\n\n'
+    prompt_value "Setup name" SETUP_NAME
+    ROUTER_NAME=$SETUP_NAME
+    SSID=$SETUP_NAME
+    ADMIN_USER=$SETUP_NAME
     prompt_value "Current router address" HOST
     prompt_value "Final router address" ROUTER_IP
     prompt_value "LAN netmask" NETMASK
@@ -366,10 +371,9 @@ build_apply_script() {
     script+="command -v nvram >/dev/null"$'\n'
     script+=$(nvset_line wan_proto disabled)$'\n'
     script+=$(nvset_line wk_mode router)$'\n'
-    # DD-WRT uses lan_proto=dhcp for the Basic Setup "DHCP Server: Enable"
-    # state even though the router's own LAN address remains statically defined
-    # by lan_ipaddr and lan_netmask.
-    script+=$(nvset_line lan_proto dhcp)$'\n'
+    # lan_proto controls how the router obtains its own LAN management address.
+    # It must remain static; dhcpd_enable controls the client-facing DHCP server.
+    script+=$(nvset_line lan_proto static)$'\n'
     script+=$(nvset_line lan_ipaddr "$ROUTER_IP")$'\n'
     script+=$(nvset_line lan_netmask "$NETMASK")$'\n'
     script+=$(nvset_line lan_gateway "$LAPTOP_IP")$'\n'
@@ -400,7 +404,6 @@ build_apply_script() {
     script+=$(nvset_line sshd_authorized_keys "$merged_keys")$'\n'
     script+=$(nvset_line ntp_enable 1)$'\n'
     script+=$(nvset_line time_zone America/Chicago)$'\n'
-    script+=$(nvset_line http_username "$ADMIN_USER")$'\n'
 
     for radio in "${RADIOS[@]}"; do
         script+=$(nvset_line "${radio}_mode" ap)$'\n'
@@ -434,7 +437,7 @@ Client LAN route    : ${ROUTER_IP%.*}.0 / $NETMASK (router UI remains directly r
 Client DNS          : $DNS_PRIMARY, $DNS_SECONDARY
 DHCP pool           : ${ROUTER_IP%.*}.$DHCP_START - ${ROUTER_IP%.*}.$((DHCP_START + DHCP_COUNT - 1))
 WAN / router NAT    : disabled
-DHCP server         : enabled (DD-WRT LAN protocol: dhcp)
+DHCP server         : enabled (static router LAN address)
 Router name / SSID  : $ROUTER_NAME / $SSID
 Detected radios     : ${RADIOS[*]}
 NVRAM backup        : $([[ $BACKUP_ENCODING == none ]] && printf 'unavailable on this build' || printf '%s encoding' "$BACKUP_ENCODING")
@@ -471,7 +474,7 @@ verify_router() {
     grep -qx "lan=$ROUTER_IP" <<<"$result" || die "Router LAN address verification failed"
     grep -qx "gateway=$LAPTOP_IP" <<<"$result" || die "Router gateway verification failed"
     grep -qx 'wan=disabled' <<<"$result" || die "WAN-disable verification failed"
-    grep -qx 'lan_proto=dhcp' <<<"$result" || die "DD-WRT reports its LAN DHCP-server state as disabled"
+    grep -qx 'lan_proto=static' <<<"$result" || die "Router LAN address is not configured as static"
     grep -qx 'dhcp=1' <<<"$result" || die "DHCP-server enable verification failed"
     grep -qx 'dnsmasq=1' <<<"$result" || die "DNSMasq enable verification failed"
     grep -qx 'dnsmasq_process=yes' <<<"$result" || die "DHCP was enabled in NVRAM, but DNSMasq did not start after reboot"
