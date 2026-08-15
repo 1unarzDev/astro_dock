@@ -3,6 +3,7 @@ build/
 log/
 refs/
 bags/
+router_setup_state/
 .devcontainer/docker-compose.override.yml
 src/zed-ros2-wrapper/
 src/direct_lidar_inertial_odometry/
