@@ -4,6 +4,7 @@ services:
     volumes:
       - ${PWD}:/home/roboboat/roboboat_ws:z
       - /dev:/dev
+      - /sys:/sys:rw
   sitl:
     volumes:
       - /dev:/dev

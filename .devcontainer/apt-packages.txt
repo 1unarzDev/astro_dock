@@ -1,4 +1,6 @@
 geographiclib-tools
+python3-gpiod
+python3-rich
 python3-scipy
 ros-jazzy-cv-bridge
 ros-jazzy-gz-ros2-control
