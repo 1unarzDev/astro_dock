@@ -3,6 +3,7 @@ python3-scipy
 python3-rich
 python3-libgpiod
 ros-jazzy-cv-bridge
+ros-jazzy-foxglove-bridge
 ros-jazzy-gz-ros2-control
 ros-jazzy-image-transport
 ros-jazzy-image-transport-plugins

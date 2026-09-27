@@ -55,12 +55,11 @@ CAMERA / DISTRIBUTED ROS
   Jazzy uses ROS_DOMAIN_ID=42; legacy Foxy uses 142. Keep them separate:
   direct Foxy/Jazzy DDS discovery crashed legacy nodes in boat testing.
   Use an explicit cross-version bridge, not merely matching domain IDs.
-  JPEG preview without shared DDS (see docs/camera-preview.md):
-    Jetson: astro-camera-preview serve --bind <boat-LAN-IP>
-    Browser: http://<boat-LAN-IP>:8088
-    Jazzy laptop: astro-camera-preview receive http://<boat-LAN-IP>:8088
-  The ZED camera launch must also be running. Preview is lossy, 5 Hz by default,
-  no CameraInfo/TF/depth; use it for debugging, not navigation inputs.
+  Foxglove on legacy JP5: ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+    Connect using Rosbridge: ws://squirtle-jetson.local:9090
+  Foxglove on Jazzy: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+    Connect using Foxglove WebSocket: ws://<host>:8765
+  Keep these unauthenticated bridges on the trusted boat LAN.
   Diagnostics: .devcontainer/device-diagnostics.sh; sudo -E ZED_Diagnostic -aio
 
 PACKAGES

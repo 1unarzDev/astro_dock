@@ -18,7 +18,6 @@ COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
 COPY image-smoke.sh /usr/local/bin/astro-smoke
 COPY jetson-user.sh /usr/local/sbin/jetson-user
 COPY dev.helper.txt /home/roboboat/.helper.txt
-COPY --chmod=755 astro-camera-preview.py /usr/local/bin/astro-camera-preview
 
 # This final layer deliberately contains no apt, rosdep, or compilation. The
 # native ARM64 dependency image owns those expensive and platform-sensitive

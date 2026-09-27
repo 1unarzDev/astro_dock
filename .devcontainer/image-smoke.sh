@@ -45,6 +45,19 @@ else
     check "MAVROS and Extras" bash -lc \
         'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix mavros && ros2 pkg prefix mavros_extras'
     check "MAVROS geoid dataset" test -r /usr/share/GeographicLib/geoids/egm96-5.pgm
+    check "MAVROS plugin runtime compatibility" bash -lc '
+        source /opt/ros/jazzy/setup.bash
+        log=$(mktemp)
+        trap "rm -f \"$log\"" EXIT
+        ROS_DOMAIN_ID=231 timeout --kill-after=3s --signal=INT 8s \
+          "$(ros2 pkg prefix mavros)/lib/mavros/mavros_node" --ros-args \
+          -p fcu_url:=udp://127.0.0.1:14590@127.0.0.1:14591 >"$log" 2>&1
+        status=$?
+        if [[ "$status" != 124 ]] || grep -Eq "symbol lookup error|terminate called|FATAL" "$log"; then
+            cat "$log"; exit 1
+        fi
+        grep -q "Plugin .* initialized" "$log"
+    '
     check "Velodyne driver" bash -lc \
         'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix velodyne_driver'
 fi

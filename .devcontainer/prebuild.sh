@@ -52,5 +52,18 @@ host_name="${host_name%%.*}"
 sed -i.bak "/^  dev:$/a\\
     hostname: ${host_name}
 " "${script_dir}/docker-compose.override.yml"
+if command -v getent >/dev/null; then
+    device_gids=()
+    for group in dialout video render gpio; do
+        device_gid="$(getent group "$group" | cut -d: -f3 || true)"
+        [[ "$device_gid" =~ ^[0-9]+$ ]] && device_gids+=("$device_gid")
+    done
+    if ((${#device_gids[@]})); then
+        gid_list="$(IFS=,; echo "${device_gids[*]}")"
+        sed -i.bak "/^  dev:$/a\\
+    group_add: [${gid_list}]
+" "${script_dir}/docker-compose.override.yml"
+    fi
+fi
 rm -f "${script_dir}/docker-compose.override.yml.bak"
 echo "Selected ${os_type} adapter: $override_file"

@@ -1,2 +1,3 @@
 # ROS package names, one per line. Installed by the shared astro-ros-install.
 compressed_image_transport
+rosbridge_server

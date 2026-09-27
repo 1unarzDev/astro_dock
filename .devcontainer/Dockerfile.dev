@@ -57,13 +57,13 @@ RUN set -e; if [ -d /usr/local/zed ]; then \
       apt-get update; \
       rosdep install --from-paths /tmp/zed_ws/src --ignore-src --rosdistro "${ROS_DISTRO}" -y; \
       cd /tmp/zed_ws; \
-      colcon build --merge-install --install-base /opt/zed_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release; \
+      colcon build --merge-install --install-base /opt/zed_ros2 --cmake-args \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined; \
       /usr/local/sbin/normalize-python-permissions; \
       rm -rf /tmp/zed_ws /var/lib/apt/lists/*; \
     fi
 
 COPY --chown=${USER_UID}:${USER_GID} dev.helper.txt /home/${USERNAME}/.helper.txt
-COPY --chmod=755 astro-camera-preview.py /usr/local/bin/astro-camera-preview
 RUN printf '\nhelp() { cat "$HOME/.helper.txt"; }\n' >> /home/${USERNAME}/.bashrc
 
 USER ${USERNAME}

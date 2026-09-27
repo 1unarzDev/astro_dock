@@ -37,7 +37,6 @@ RUN chmod +x /usr/local/bin/astro-ros-install /usr/local/sbin/jetson-user \
     && sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' /tmp/jetson-packages.txt \
        | xargs -r /usr/local/bin/astro-ros-install
 COPY dev.helper.txt /home/roboboat/.helper.txt
-COPY --chmod=755 astro-camera-preview.py /usr/local/bin/astro-camera-preview
 RUN /usr/local/sbin/jetson-user
 USER roboboat
 WORKDIR /home/roboboat/roboboat_ws
