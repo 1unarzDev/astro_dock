@@ -57,6 +57,9 @@ CAMERA / DISTRIBUTED ROS
   Diagnostics: .devcontainer/device-diagnostics.sh; sudo -E ZED_Diagnostic -aio
 
 PACKAGES
+  Host prerequisite: run ./setup.linux.sh --components clock on the HOST.
+  Containers inherit host time; check timedatectl status on each computer.
+  Optional boat NTP: ASTRO_NTP_SERVER=<server> ./setup.linux.sh --components clock
   Either Jetson: sudo -E astro-ros-install topic_tools
   Tries distro debs first, then builds missing ROS dependencies into
   /opt/astro-extra. Open a new shell afterward. Source compatibility is not
