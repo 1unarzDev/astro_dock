@@ -61,6 +61,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=core-${{ matrix.arch }}
       - name: Smoke-test core architecture
         run: |
+          docker run --rm "${REGISTRY_IMAGE}:core-${{ matrix.arch }}" astro-smoke core
           docker run --rm \
             "${REGISTRY_IMAGE}:core-${{ matrix.arch }}" \
             bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && source /opt/ros/jazzy/setup.bash && ros2 pkg prefix ros_gz_bridge && /usr/bin/python3 -c "import importlib.metadata; tuple(importlib.metadata.distributions())" && sudo -n true'
@@ -156,6 +157,8 @@ jobs:
             .devcontainer/Dockerfile.deps \
             .devcontainer/ros2-jazzy.lock.repos \
             .devcontainer/normalize-python-permissions.sh \
+            .devcontainer/astro-ros-install.sh \
+            .devcontainer/jetson-jp6-packages.txt \
             | sha256sum | cut -d' ' -f1)"
           echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Check the dependency content key
@@ -192,6 +195,8 @@ jobs:
           if [ "$DEPS_EXISTS" = true ]; then tag=deps; fi
           docker run --rm --user 65534 "${REGISTRY_IMAGE}:${tag}" \
             /usr/bin/python3 -c 'import importlib.metadata; tuple(importlib.metadata.distributions())'
+          docker run --rm --user root "${REGISTRY_IMAGE}:${tag}" \
+            astro-ros-install --source examples_rclcpp_minimal_publisher
       - name: Rotate changed dependencies
         if: steps.deps_existing.outputs.exists != 'true'
         env:
@@ -227,7 +232,7 @@ jobs:
           platforms: linux/arm64
           network: host
           push: true
-          tags: ${{ env.REGISTRY_IMAGE }}:jetson-next
+          tags: ${{ env.REGISTRY_IMAGE }}:jetson-jp6-jazzy-next
           build-args: BASE_IMAGE=${{ env.REGISTRY_IMAGE }}:deps
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
@@ -241,7 +246,7 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           output="$(.devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
-            candidate "${REGISTRY_IMAGE}@${CANDIDATE_DIGEST}")"
+            candidate --family jetson-jp6-jazzy "${REGISTRY_IMAGE}@${CANDIDATE_DIGEST}")"
           echo "$output"
           slot="$(grep '^slot=' <<<"$output" | tail -1 | cut -d= -f2-)"
           digest="$(grep '^digest=' <<<"$output" | tail -1 | cut -d= -f2-)"

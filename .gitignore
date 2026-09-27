@@ -1,4 +1,6 @@
 install/
+__pycache__/
+*.pyc
 build/
 log/
 refs/

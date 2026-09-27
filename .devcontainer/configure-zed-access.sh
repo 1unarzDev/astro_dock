@@ -6,26 +6,21 @@ sdk_root=/usr/local/zed
 
 [[ -d "$sdk_root" ]] || exit 0
 
-mapfile -t sdk_gids < <(
-    find -L "$sdk_root" -xdev -printf '%G\n' 2>/dev/null | sort -un
-)
-
-for sdk_gid in "${sdk_gids[@]}"; do
-    [[ "$sdk_gid" =~ ^[0-9]+$ ]] || continue
-    sdk_group="$(getent group "$sdk_gid" | cut -d: -f1 || true)"
-    if [[ -z "$sdk_group" ]]; then
-        sdk_group="zed_${sdk_gid}"
-        groupadd --gid "$sdk_gid" "$sdk_group"
-    fi
-    usermod -aG "$sdk_group" "$username"
+# Some SDK images ship root-only (0700/0600) files. Group membership
+# cannot grant access to those. SDK binaries/data are public, not secrets.
+chmod -R a+rX "$sdk_root"
+# Calibration and downloaded model caches must be writable by the operator.
+for directory in settings resources; do
+    install -d "$sdk_root/$directory"
+    chown -R "$username:$(id -gn "$username")" "$sdk_root/$directory"
 done
-
-echo "[zed-access] SDK GIDs: ${sdk_gids[*]:-none}"
-echo "[zed-access] $username groups: $(id -nG "$username")"
 
 # sudo initializes the account's supplementary groups, unlike some BuildKit
 # USER executions. Assert the real runtime access while the build is still root.
 if [[ -e "$sdk_root/tools/ZED_Diagnostic" ]]; then
     sudo -H -u "$username" test -r "$sdk_root/tools/ZED_Diagnostic"
     sudo -H -u "$username" test -x "$sdk_root/tools/ZED_Diagnostic"
+fi
+if [[ -e "$sdk_root/lib/libsl_zed.so" ]]; then
+    sudo -H -u "$username" test -r "$sdk_root/lib/libsl_zed.so"
 fi

@@ -23,11 +23,24 @@ fi
 
 echo ""
 echo "4. Check CUDA devices using Python (if PyCUDA or torch available)"
-if python3 -c "import torch; print(torch.cuda.is_available())" &>/dev/null; then
-    python3 -c "import torch; print('PyTorch sees CUDA devices:', torch.cuda.device_count())"
-else
-    echo "PyTorch not available or cannot detect CUDA"
-fi
+python3 - <<'PY'
+import ctypes
+
+try:
+    cuda = ctypes.CDLL("libcuda.so.1")
+except OSError as error:
+    print(f"Cannot load the CUDA driver: {error}")
+else:
+    count = ctypes.c_int()
+    init_status = cuda.cuInit(0)
+    count_status = cuda.cuDeviceGetCount(ctypes.byref(count)) if init_status == 0 else -1
+    print(
+        "CUDA driver initialization:",
+        f"cuInit={init_status}",
+        f"cuDeviceGetCount={count_status}",
+        f"devices={count.value}",
+    )
+PY
 
 echo ""
 echo "5. List GPU devices via /dev (Jetson / embedded)"

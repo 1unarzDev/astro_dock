@@ -1,0 +1,13 @@
+# JetPack 6.2.1 (L4T R36.4.7) leaves the GPU scheduler control nodes
+# root-only. libcuda needs them during cuInit, so grant the same video-group
+# access used by the other Tegra GPU nodes. The late-sorting filename is
+# intentional: NVIDIA's rules are installed as 99-tegra-devices.rules.
+SUBSYSTEM=="nvidia-gpu-v2", KERNEL=="sched", GROUP="video", MODE="0660"
+SUBSYSTEM=="nvidia-gpu-v2", KERNEL=="nvsched_ctrl_fifo", GROUP="video", MODE="0660"
+SUBSYSTEM=="nvidia-pci-gpu-v2", KERNEL=="sched", GROUP="video", MODE="0660"
+SUBSYSTEM=="nvidia-pci-gpu-v2", KERNEL=="nvsched_ctrl_fifo", GROUP="video", MODE="0660"
+KERNEL=="nvhost-sched-gpu", GROUP="video", MODE="0660"
+
+# Bind-mounted DRM nodes retain the host's numeric GID. Using video here
+# avoids depending on host/container render groups having identical GIDs.
+SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="video", MODE="0660"

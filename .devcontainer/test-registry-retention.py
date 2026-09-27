@@ -16,6 +16,16 @@ spec.loader.exec_module(module)
 
 
 class RetentionPolicyTest(unittest.TestCase):
+    @mock.patch.object(module, 'delete_unreferenced')
+    @mock.patch.object(module, 'retag')
+    @mock.patch.object(module, 'resolve_digest', return_value='sha256:new')
+    @mock.patch.object(module, 'inventory', return_value=[])
+    def test_jetpack_candidate_names_do_not_collide(self, inventory, resolve, retag, delete):
+        for family in ('jetson-jp5-foxy', 'jetson-jp6-jazzy'):
+            slot, _ = module.candidate_slot('example/astro', 'candidate', 5, family)
+            self.assertEqual(slot, family + '-c1')
+            self.assertIn(slot, module.FIXED_TAGS)
+
     def tag(self, name: str):
         return module.Tag(name, f"sha256:{len(name):064x}", dt.datetime.now(dt.timezone.utc), 1)
 

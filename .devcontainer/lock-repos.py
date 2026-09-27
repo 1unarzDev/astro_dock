@@ -15,6 +15,22 @@ import yaml
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
+# Jazzy's core ros2.repos intentionally does not contain every released ROS
+# package. Keep packages required by this image here so regenerating the lock
+# cannot silently remove them.
+EXTRA_REPOSITORIES = {
+    "ros-perception/vision_msgs": {
+        "type": "git",
+        "url": "https://github.com/ros-perception/vision_msgs.git",
+        "version": "jazzy",
+    },
+    "ros-tooling/topic_tools": {
+        "type": "git",
+        "url": "https://github.com/ros-tooling/topic_tools.git",
+        "version": "jazzy",
+    },
+}
+
 
 def read_manifest(source: str) -> dict:
     if source.startswith(("https://", "http://")):
@@ -65,6 +81,8 @@ def main() -> int:
 
     manifest = read_manifest(args.source)
     repositories = manifest["repositories"]
+    for name, repository in EXTRA_REPOSITORIES.items():
+        repositories.setdefault(name, repository)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
         locked = dict(pool.map(resolve, repositories.items()))
 

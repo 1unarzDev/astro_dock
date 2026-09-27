@@ -9,12 +9,15 @@ ENV ROS_DISTRO=jazzy \
     PATH=/workspace/venv/bin:${PATH} \
     SHELL=/bin/bash
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+LABEL org.astro.jetpack="6" org.astro.ros="jazzy" org.astro.role="camera"
 
 COPY requirements.txt /tmp/astro/requirements.txt
 COPY pip.conf /etc/pip.conf
 COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
 COPY image-smoke.sh /usr/local/bin/astro-smoke
+COPY jetson-user.sh /usr/local/sbin/jetson-user
+COPY dev.helper.txt /home/roboboat/.helper.txt
 
 # This final layer deliberately contains no apt, rosdep, or compilation. The
 # native ARM64 dependency image owns those expensive and platform-sensitive
@@ -22,19 +25,8 @@ COPY image-smoke.sh /usr/local/bin/astro-smoke
 RUN python3 -m venv --system-site-packages /workspace/venv \
     && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
     && /usr/local/sbin/normalize-python-permissions \
-    && existing_user="$(getent passwd "${USER_UID}" | cut -d: -f1 || true)" \
-    && existing_group="$(getent group "${USER_GID}" | cut -d: -f1 || true)" \
-    && if [[ -n "${existing_user}" && "${existing_user}" != "${USERNAME}" ]]; then userdel "${existing_user}"; fi \
-    && if [[ -n "${existing_group}" && "${existing_group}" != "${USERNAME}" ]]; then groupdel "${existing_group}"; fi \
-    && if ! getent group "${USERNAME}" >/dev/null; then groupadd --gid "${USER_GID}" "${USERNAME}"; fi \
-    && if ! id "${USERNAME}" >/dev/null 2>&1; then useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}"; fi \
-    && usermod -aG dialout,video,sudo "${USERNAME}" \
-    && /usr/local/sbin/configure-zed-access "${USERNAME}" \
-    && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
-    && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
-    && touch "/home/${USERNAME}/.sudo_as_admin_successful" \
-    && mkdir -p "${ROS_WS}" \
-    && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" \
+    && chmod +x /usr/local/sbin/jetson-user \
+    && /usr/local/sbin/jetson-user "${USERNAME}" "${USER_UID}" "${USER_GID}" \
     && rm -rf /tmp/astro
 
 USER ${USERNAME}

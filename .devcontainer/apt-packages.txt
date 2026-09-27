@@ -1,7 +1,7 @@
 geographiclib-tools
-python3-gpiod
-python3-rich
 python3-scipy
+python3-rich
+python3-gpiod
 ros-jazzy-cv-bridge
 ros-jazzy-gz-ros2-control
 ros-jazzy-image-transport
@@ -9,6 +9,7 @@ ros-jazzy-image-transport-plugins
 ros-jazzy-joint-state-publisher
 ros-jazzy-joint-state-publisher-gui
 ros-jazzy-mavros
+ros-jazzy-mavros-extras
 ros-jazzy-nav2-bringup
 ros-jazzy-nav2-core
 ros-jazzy-nmea-msgs
@@ -19,6 +20,9 @@ ros-jazzy-ros2-control
 ros-jazzy-ros2-controllers
 ros-jazzy-ros2cli
 ros-jazzy-ros2launch
+ros-jazzy-ros2run
+ros-jazzy-ros2bag
+ros-jazzy-rosbag2-storage-default-plugins
 ros-jazzy-ros2topic
 ros-jazzy-rosidl-default-generators
 ros-jazzy-rosidl-default-runtime

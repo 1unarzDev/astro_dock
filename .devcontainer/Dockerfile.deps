@@ -4,6 +4,7 @@ FROM ${BASE_IMAGE}
 ARG ROS_DISTRO=jazzy
 ARG ROS_POLICY_REF=86171bccda22de6e83ccc69b3c0e67af99dece7c
 ARG ZED_WRAPPER_REF=86171bccda22de6e83ccc69b3c0e67af99dece7c
+ARG VELODYNE_REF=0f2a3bb1dde4fa91cbafad8a3f9f89b66c2a1350
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
     ROS_DISTRO=${ROS_DISTRO} \
@@ -52,6 +53,21 @@ RUN mkdir -p /root/ros2_ws/src \
     && test -f /root/ros2_ws/install/setup.bash \
     && rm -rf /tmp/build_wrapper.sh /tmp/zed-wrapper-deps.repos /var/lib/apt/lists/*
 
+# Jazzy debs do not exist for JetPack's Jammy userspace. Build the Velodyne
+# packages after the ZED dependency overlay, which supplies their ROS
+# dependencies, while Jammy supplies the native PCL and pcap libraries.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpcap-dev libpcl-dev \
+    && git clone --filter=blob:none --no-checkout \
+        https://github.com/ros-drivers/velodyne.git /tmp/velodyne_ws/src/velodyne \
+    && git -C /tmp/velodyne_ws/src/velodyne checkout "${VELODYNE_REF}" \
+    && source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && source /root/ros2_ws/install/setup.bash \
+    && cd /tmp/velodyne_ws \
+    && colcon build --merge-install --install-base /opt/velodyne \
+        --packages-up-to velodyne_driver velodyne_pointcloud \
+    && rm -rf /tmp/velodyne_ws /var/lib/apt/lists/*
+
 COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 
 RUN test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
@@ -66,6 +82,13 @@ RUN test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
 RUN printf '%s\n' \
       'source /opt/ros/jazzy/setup.bash' \
       'source /opt/zed_ros2/setup.bash' \
+      'source /opt/velodyne/setup.bash' \
       > /opt/astro-setup.bash
 
 CMD ["bash"]
+
+COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
+COPY jetson-jp6-packages.txt /tmp/jetson-packages.txt
+RUN chmod +x /usr/local/bin/astro-ros-install \
+    && sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' /tmp/jetson-packages.txt \
+       | xargs -r /usr/local/bin/astro-ros-install

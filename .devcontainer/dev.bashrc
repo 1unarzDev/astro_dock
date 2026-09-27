@@ -1,5 +1,17 @@
-if [[ -f /opt/ros/jazzy/setup.bash ]]; then
-  source /opt/ros/jazzy/setup.bash
+if [[ -f /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash ]]; then
+  source /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash
+fi
+if [[ -f /opt/topic_tools/setup.bash ]]; then
+  source /opt/topic_tools/setup.bash
+fi
+if [[ -f /opt/velodyne/setup.bash ]]; then
+  source /opt/velodyne/setup.bash
+fi
+if [[ -f /opt/vision_msgs/setup.bash ]]; then
+  source /opt/vision_msgs/setup.bash
+fi
+if [[ -f /opt/astro-extra/setup.bash ]]; then
+  source /opt/astro-extra/setup.bash
 fi
 
 # Jazzy replaces ROS_LOCALHOST_ONLY with an explicit discovery range. Unset

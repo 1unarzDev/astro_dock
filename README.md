@@ -76,11 +76,11 @@ Anything else you would like to install manually, reference the installation scr
 
 ### Container images and local builds
 
-The capability tags are `core`, `cuda`, `jetson`, and `sitl`. `deps` is an internal ARM64 dependency layer used to assemble `jetson`; it is not a host capability. The host probe selects an adapter and writes the ignored `.devcontainer/docker-compose.override.yml`; the devcontainer then pulls the corresponding image. All development services are privileged, and native Linux adapters bind `/dev` for robotics hardware access.
+The capability tags are `core`, `cuda`, `jetson-jp5-foxy`, `jetson-jp6-jazzy`, and `sitl`. Do not use the old ambiguous `jetson` tag for new deployments. `deps` is an internal JetPack 6 ARM64 dependency layer, not a runtime image. The host probe selects the matching JetPack generation and preserves the host's name in the generated Compose adapter. All development services are privileged, and native Linux adapters bind `/dev` for robotics hardware access. See [Jetson deployment and packages](docs/jetson-images.md).
 
 Compose uses the `missing` pull policy by default. This pulls a published image on a clean host while allowing VS Code to start its locally generated `vsc-*-uid` image. To refresh a published image explicitly, run `docker compose pull` before reopening the devcontainer; setting `ASTRO_PULL_POLICY=always` during Dev Containers startup is not supported because Compose would try to pull VS Code's local UID image from Docker Hub.
 
-Image maintainers can opt into a local build without changing the normal Compose file:
+Image maintainers can opt into a local **core** build without changing the normal Compose file (this override is not a Jetson GPU build):
 
 ```bash
 docker compose \
@@ -92,11 +92,11 @@ docker compose \
 
 Workspace dependency installation is intentionally excluded from normal container creation. After package manifests change, run `ASTRO_ROSDEP_INSTALL=1 .devcontainer/postcreate.sh` once inside the container.
 
-To diagnose a camera, Raspberry Pi Pico, or Cube Orange connection, run `.devcontainer/device-diagnostics.sh`. Scoped host udev rules keep MicroPython, CubePilot, ZED USB, and video devices accessible across reconnects, while passwordless sudo remains available inside the privileged container for targeted recovery. Do not recursively change ownership or permissions beneath `/dev`.
+To diagnose a camera or Cube Orange connection, run `.devcontainer/device-diagnostics.sh`. Scoped host udev rules keep CubePilot, ZED USB, and video devices accessible across reconnects, while passwordless sudo remains available inside the privileged container for targeted recovery. Thrusters now use native ODROID PWM/GPIO, not Pico/MicroPython. See `src/mhseals_hardware/docs/configuration.md` for shared YAML settings and manual controls. Do not recursively change ownership or permissions beneath `/dev`.
 
 ### Image automation
 
-GitHub Actions requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets. `core` uses native hosted amd64 and arm64 runners; `cuda` and `sitl` use hosted amd64. JetPack dependencies are built in the generic `deps` image on a native hosted ARM64 runner, so QEMU never executes `apt`, `dpkg`, or ROS compilation. The small `jetson` layer then adds the stable developer user and Python environment.
+GitHub Actions requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets. `core` uses native hosted amd64 and arm64 runners; `cuda` and `sitl` use hosted amd64. JetPack 6 dependencies are built in `deps` on native ARM64, then packaged as `jetson-jp6-jazzy`. The independent native ARM64 legacy workflow builds `jetson-jp5-foxy`; both reuse the same user setup, package installer, help, deployment, and runtime validation tools. No QEMU compilation is used.
 
 The `deps` image records a content key derived from `Dockerfile.deps`, the locked ROS manifest, and the Python permission policy. CI reads that key from the fixed `deps` tag and skips the dependency build when it already matches. Within a cold build, ROS and the ZED wrapper are separate cache layers, so a wrapper-only update or late image-policy change does not rebuild ROS. Expect the first build for a genuinely new ROS lock or base image to remain expensive; routine repository changes should not pay that cost.
 
@@ -104,19 +104,21 @@ If a persistent native ARM64 build server becomes available, label its GitHub ru
 
 Runtime images use bounded release histories: the clean capability tag is current, `-prev` is the previous validated image, and `-old` is the third generation. Fixed `-next` and architecture tags are staging references and are never selected by the devcontainer. This keeps normal rollback available without publishing permanent tags for every commit. After the one-time migration, any empty rollback slots fill naturally during the next two successful builds rather than treating an old, unverified commit image as validated.
 
-Jetson builds place candidates in five internal retention slots, but the immutable digest in the Actions summary is the authoritative identifier. A slot can be reused after five newer candidates, while a digest being tested with `--promote` is protected by `jetson-check`. The boat does not need to be registered as a GitHub runner. Validate a candidate directly:
+JetPack 6 builds place candidates in five family-specific retention slots; the immutable digest in the Actions summary is authoritative. A slot can be reused after five newer candidates, while `--promote` protects a digest with `jetson-jp6-jazzy-check`. The boat does not need to be a GitHub runner. On JetPack 6, validate a candidate directly:
 
 ```bash
 .devcontainer/boat-validate.sh lunarzdev/astro@sha256:<digest-from-actions>
 ```
 
-After the camera, Cube Orange, NVIDIA runtime, ROS, and user checks pass, promote that exact candidate using the Docker credentials already configured on the boat:
+After camera, NVIDIA runtime, ROS, and user checks pass, promote that exact candidate using Docker credentials on the boat (the Cube/MAVROS belongs on ODROID, not Jetson):
 
 ```bash
 .devcontainer/boat-validate.sh --promote lunarzdev/astro@sha256:<digest-from-actions>
 ```
 
-Promotion rotates `jetson-old`, `jetson-prev`, and `jetson`; failed hardware validation changes none of them. To publish a different moving tag without rotating that history, put it between `--promote` and the candidate digest. The compatibility logic for Jazzy on JetPack is pinned to the selected ZED wrapper commit in `Dockerfile.deps`; the repository does not maintain an expanding rosdep skip list.
+Promotion rotates `jetson-jp6-jazzy-old`, `jetson-jp6-jazzy-prev`, and `jetson-jp6-jazzy`; failed hardware validation changes none of them. The JetPack 5 family is independent. The compatibility logic for Jazzy on JetPack is pinned to the selected ZED wrapper commit in `Dockerfile.deps`; the repository does not maintain an expanding rosdep skip list.
+
+JetPack 6 uses Ubuntu 22.04, while official Jazzy debs target Ubuntu 24.04. Its image builds Jazzy, `topic_tools`, and sensor overlays from pinned sources; do not add the Noble ROS apt repository to Jammy. MAVROS and MAVROS Extras belong to `core` (including ARM64 ODROID), not either Jetson image. Non-root CUDA may require the Tegra device rules installed by the `devices` setup component. Re-run `./setup.linux.sh --components devices` after upgrading JetPack if permissions have changed.
 
 The weekly Docker Hub retention workflow compacts candidates older than 30 days while retaining no more than five distinct candidates and keeps the complete repository at no more than 28 fixed tags. It also uploads a pre-operation tag/digest inventory for recovery and auditing. `DOCKERHUB_TOKEN` therefore needs Read, Write, and Delete permission. To remove the existing commit-tag history, manually dispatch **Docker Hub retention** once in `audit` mode, review its inventory artifact, and then dispatch it in `migrate` mode. Routine workflows use supported manifest operations; the one-time migration isolates Docker Hub's currently undocumented delete-by-tag endpoint behind a disposable probe and an exact legacy-tag allowlist.
 

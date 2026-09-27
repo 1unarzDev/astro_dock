@@ -4,7 +4,7 @@ set -euo pipefail
 DRY_RUN=false
 ASSUME_YES=false
 NON_INTERACTIVE=false
-COMPONENTS="docker,gpu,devices,devtools,compose"
+COMPONENTS="clock,docker,gpu,devices,devtools,compose"
 OS_ID=unknown
 OS_LIKE=""
 OS_VERSION=""
@@ -22,7 +22,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         docker,gpu,devices,devtools,compose
+  --components LIST         clock,docker,gpu,devices,devtools,compose
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -222,13 +222,19 @@ stage_devices() {
     local rules_file
     rules_file="$(mktemp)"
     printf '%s\n' \
-        'SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", GROUP="dialout", MODE="0666", TAG+="uaccess"' \
         'SUBSYSTEM=="tty", ATTRS{idVendor}=="2dae", GROUP="dialout", MODE="0666", TAG+="uaccess"' \
         'SUBSYSTEM=="usb", ATTR{idVendor}=="2b03", GROUP="video", MODE="0666", TAG+="uaccess"' \
         'SUBSYSTEM=="video4linux", GROUP="video", MODE="0666", TAG+="uaccess"' \
         > "$rules_file"
     run sudo install -m 0644 "$rules_file" /etc/udev/rules.d/99-astro-robotics.rules
     rm -f "$rules_file"
+    if [[ -r .devcontainer/99-z-astro-gpu.rules ]] && [[ -r /proc/device-tree/compatible ]] \
+        && grep -aqi tegra /proc/device-tree/compatible; then
+        run sudo install -m 0644 .devcontainer/99-z-astro-gpu.rules /etc/udev/rules.d/99-z-astro-gpu.rules
+    fi
+    if [[ -r .devcontainer/99-z-astro-zed.rules ]]; then
+        run sudo install -m 0644 .devcontainer/99-z-astro-zed.rules /etc/udev/rules.d/99-z-astro-zed.rules
+    fi
     for group in dialout video render; do
         getent group "$group" >/dev/null 2>&1 && run sudo usermod -aG "$group" "$USER"
     done
@@ -261,6 +267,15 @@ stage_compose() {
     COMPLETED+=(compose)
 }
 
+stage_clock() {
+    heading "Automatic host time synchronization"
+    echo "Configures the existing NTP client before installing packages."
+    echo "Set ASTRO_NTP_SERVER to a reachable boat-LAN time server when offline."
+    approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
+    run sudo bash .devcontainer/setup-time-sync.sh "${ASTRO_NTP_SERVER:-time.cloudflare.com}"
+    COMPLETED+=(clock)
+}
+
 main() {
     detect_platform
     show_probe
@@ -268,6 +283,7 @@ main() {
     echo "No commands have been run. Each selected stage will explain and preview its commands."
     approve "Continue with this setup plan?" || { echo "Cancelled."; exit 0; }
 
+    has_component clock && stage_clock
     has_component docker && stage_docker
     has_component gpu && stage_gpu
     has_component devices && stage_devices

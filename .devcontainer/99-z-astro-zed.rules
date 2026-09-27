@@ -1,0 +1,8 @@
+# The ZED 2i exposes separate USB 3 video and USB 2 HID devices. Jetson's
+# default two-second USB autosuspend can suspend the camera between discovery
+# and stream startup, producing UVC status -71 and CAMERA STREAM FAILED TO
+# START. Keep only Stereolabs devices awake.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2b03", TEST=="power/control", ATTR{power/control}="on"
+# SDK control/HID access needs write permission on the USB device as well as
+# the V4L2 nodes. Keep this scoped to Stereolabs, not all USB devices.
+SUBSYSTEM=="usb", ATTR{idVendor}=="2b03", GROUP="video", MODE="0660"

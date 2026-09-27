@@ -1,23 +1,72 @@
+ASTRO container help
+  Identify this machine: hostname; id; echo "$ROS_DISTRO"
+  core (AMD64/ARM64): Jazzy, MAVROS + geographic datasets; use on ODROID.
+  jetson-jp6-jazzy: JetPack 6 / R36, Jazzy + ZED 5.4; no MAVROS.
+  jetson-jp5-foxy: JetPack 5 / R35, legacy Foxy + ZED 4.0; no MAVROS.
+  Foxy is end-of-life; do not assume Jazzy workspace packages work on it.
 
---- Manual MAVROS Command ---
-ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5762
-ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:57600
+BUILD
+  colcon build --packages-select mhseals_hardware
+  source install/setup.bash
+  colcon build                         # whole configured workspace
 
---- ROS Build Commands ---
-colcon build
-source install/setup.bash
+REAL THRUSTERS — ODROID ONLY; clear/submerge propellers, secure boat first
+  ros2 run mhseals_hardware thruster_pwm_node   # cmd_vel -> native PWM/GPIO
+  ros2 run mhseals_hardware keyboard_control   # keyboard -> cmd_vel
+  ros2 run mhseals_hardware thruster_test      # direct physical-output PWM TUI
+  ros2 run mhseals_hardware boat_test          # guided tests + sensor bags
+  ros2 run mhseals_hardware remote_controller  # RCIn -> cmd_vel
+  Run ONLY ONE command publisher; do not mix navigation/RC/keyboard control.
+  Keyboard: WASD/arrows move, +/- speed, Space neutral, X exit.
+  Release-aware terminals stop on key-up. Ordinary SSH uses repeat timeouts:
+  initial 0.65 s grace, then 0.15 s. Space stops without waiting for timeout.
+  boat_manual is a compatibility alias for keyboard_control.
 
---- Manual ROS TCP Endpoint ---
-ros2 run ros_tcp_endpoint default_server_endpoint --ros-args -p ROS_IP:=<ip> -p ROS_TCP_PORT:=<port>
+PERSISTENT HARDWARE SETTINGS (pins, MOSFET, channel map, mixer, timeouts)
+  Defaults: mhseals_hardware/config/default.yaml inside the Python package.
+  Override: ~/.config/mhseals/hardware.yaml
+  Prefer a mounted workspace config to survive container recreation:
+    export MHSEALS_HARDWARE_CONFIG="$ROS_WS/config/hardware.yaml"
+  Create/copy the YAML before exporting the path; missing explicit files fail.
+  boat_test --identify-thrusters pulses outputs and saves the resulting map.
+  boat_test --mosfet-line 28 --save-config persists a CLI pin override.
+  Both boat_test and thruster_test accept --config /absolute/hardware.yaml.
+  thruster_pwm_node accepts --ros-args -p config_file:=/absolute/hardware.yaml.
+  Stop controllers before changing pins. No Pico is used.
 
---- Launch Commands ---
-ros2 launch mhseals_nav sensors.launch.py
-ros2 launch mhseals_nav odom.launch.py
-ros2 launch mhseals_nav slam_nav.launch.py
+MHSEALS_NAV (JAZZY WORKSPACE)
+  Simulation is the default; state sim explicitly on a real boat:
+    ros2 launch mhseals_nav robot.launch.py sim:=true
+    ros2 launch mhseals_nav robot.launch.py sim:=false fcu_url:=serial:///dev/ttyACM0:57600
+  ODROID: suppress drivers hosted on the Jetson:
+    ros2 launch mhseals_nav robot.launch.py sim:=false sensors_ignore:=camera,lidar fcu_url:=serial:///dev/ttyACM0:57600
+  JetPack 6 sensor host (no MAVROS):
+    ros2 launch mhseals_nav sensors.launch.py sim:=false
+  sensors_ignore accepts camera,lidar; it skips drivers, not localization
+  consumers. Missing topics can still stall navigation. It does not disable
+  thrusters and is not a substitute for sim:=true.
+  Inspect options: ros2 launch mhseals_nav robot.launch.py --show-args
+  Minimal telemetry: ros2 launch mhseals_nav boat_test.launch.py
 
---- Complete Launch File ---
-ros2 launch mhseals_nav robot.launch.py
+CAMERA / DISTRIBUTED ROS
+  Both Jetsons: ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
+  Check data, not just topic presence: ros2 topic hz <image-topic>
+  Legacy ZED 4 and current ZED 5 have different topic/custom-message layouts.
+  Match ROS_DOMAIN_ID (42 by default), network visibility and message types;
+  verify cross-version delivery explicitly.
+  Diagnostics: .devcontainer/device-diagnostics.sh; sudo -E ZED_Diagnostic -aio
 
---- ZED Camera Optimization ---
-sudo -E ZED_Diagnostic -aio
+PACKAGES
+  Either Jetson: sudo -E astro-ros-install topic_tools
+  Tries distro debs first, then builds missing ROS dependencies into
+  /opt/astro-extra. Open a new shell afterward. Source compatibility is not
+  guaranteed across releases; failures are not ignored.
+  Persist in images: edit .devcontainer/jetson-jp5-packages.txt or
+  jetson-jp6-packages.txt and rebuild. Core uses .devcontainer/apt-packages.txt.
+  Ad-hoc installs disappear when the container is recreated.
 
+MAVROS (CORE / ODROID)
+  ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5762
+  ros2 launch mavros apm.launch fcu_url:=serial:///dev/ttyACM0:57600
+  Prefer /dev/serial/by-id paths; this is FCU telemetry, not thruster PWM.
+  ros2 pkg prefix mavros; ros2 topic echo /mavros/state

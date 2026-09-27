@@ -1,6 +1,6 @@
 services:
   dev:
-    image: ${ASTRO_IMAGE:-lunarzdev/astro:jetson}
+    image: ${ASTRO_IMAGE:-lunarzdev/astro:jetson-jp6-jazzy}
     runtime: nvidia
     environment:
       DISPLAY: ${DISPLAY:-}

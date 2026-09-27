@@ -1,5 +1,5 @@
 {
-  "name": "Roboboat Jazzy Development Container",
+  "name": "Astro Robotics Development Container",
   "dockerComposeFile": [
     "docker-compose.yml",
     "docker-compose.override.yml"

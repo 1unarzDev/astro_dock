@@ -26,6 +26,9 @@ FIXED_TAGS = {
     "jetson-c1", "jetson-c2", "jetson-c3", "jetson-c4", "jetson-c5",
     "deps", "deps-prev", "deps-next", "cache-deps",
 }
+for family in ('jetson-jp5-foxy', 'jetson-jp6-jazzy'):
+    FIXED_TAGS.update(family + suffix for suffix in (
+        '', '-prev', '-old', '-next', '-check', '-c1', '-c2', '-c3', '-c4', '-c5'))
 LEGACY_TAG = re.compile(
     r"^(?:(?:core(?:-(?:amd64|arm64))?|cuda|sitl|jetson|shaderc)-[0-9a-f]{40}"
     r"|deps-[0-9a-f]{40,64}|shaderc|buildcache-shaderc)$"
@@ -250,12 +253,12 @@ def rotate(repository: str, family: str, source: str, depth: int) -> None:
         delete_unreferenced(repository, evicted.digest)
 
 
-def candidate_slot(repository: str, source: str, count: int) -> tuple[str, str]:
+def candidate_slot(repository: str, source: str, count: int, family: str = 'jetson') -> tuple[str, str]:
     source_digest = resolve_digest(repository, source)
     tags = inventory(repository)
     existing = {tag.name: tag for tag in tags}
-    stable_digest = existing.get("jetson", Tag("", "", dt.datetime.min.replace(tzinfo=dt.timezone.utc), 0)).digest
-    slots = [f"jetson-c{index}" for index in range(1, count + 1)]
+    stable_digest = existing.get(family, Tag("", "", dt.datetime.min.replace(tzinfo=dt.timezone.utc), 0)).digest
+    slots = [f"{family}-c{index}" for index in range(1, count + 1)]
     missing = [name for name in slots if name not in existing]
     reusable = [existing[name] for name in slots if name in existing and existing[name].digest == stable_digest]
     if missing:
@@ -379,11 +382,12 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--repository", default="lunarzdev/astro")
     commands = result.add_subparsers(dest="command", required=True)
     rotate_parser = commands.add_parser("rotate")
-    rotate_parser.add_argument("family", choices=("core", "cuda", "sitl", "jetson", "deps"))
+    rotate_parser.add_argument("family", choices=("core", "cuda", "sitl", "jetson", "deps", "jetson-jp5-foxy", "jetson-jp6-jazzy"))
     rotate_parser.add_argument("source")
     rotate_parser.add_argument("--depth", type=int, choices=(2, 3), default=3)
     candidate_parser = commands.add_parser("candidate")
     candidate_parser.add_argument("source")
+    candidate_parser.add_argument('--family', choices=('jetson', 'jetson-jp5-foxy', 'jetson-jp6-jazzy'), default='jetson')
     candidate_parser.add_argument("--count", type=int, default=5)
     prune_parser = commands.add_parser("prune")
     prune_parser.add_argument("--count", type=int, default=5)
@@ -401,7 +405,7 @@ def main() -> None:
     if args.command == "rotate":
         rotate(args.repository, args.family, args.source, args.depth)
     elif args.command == "candidate":
-        candidate_slot(args.repository, args.source, args.count)
+        candidate_slot(args.repository, args.source, args.count, args.family)
     elif args.command == "prune":
         prune_candidates(args.repository, args.count, args.days)
         audit(args.repository)

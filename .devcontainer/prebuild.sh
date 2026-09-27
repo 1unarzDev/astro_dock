@@ -26,5 +26,28 @@ fi
 
 override_file="${script_dir}/docker-compose.override.${os_type}.yml"
 [[ -f "$override_file" ]] || { echo "Missing Compose adapter: $override_file" >&2; exit 1; }
+if [[ "$os_type" == jetson ]]; then
+    if grep -q '^# R35 ' /etc/nv_tegra_release; then
+        jetson_family=jetson-jp5-foxy
+    elif grep -q '^# R36 ' /etc/nv_tegra_release; then
+        jetson_family=jetson-jp6-jazzy
+    else
+        echo 'Unsupported JetPack: expected L4T R35 or R36.' >&2; exit 1
+    fi
+fi
 cp "$override_file" "${script_dir}/docker-compose.override.yml"
+if [[ "$os_type" == jetson ]]; then
+    sed -i.bak "s/jetson-jp6-jazzy/${jetson_family}/g" "${script_dir}/docker-compose.override.yml"
+fi
+host_name="${ASTRO_HOSTNAME:-$(uname -n)}"
+host_name="${host_name%%.*}"
+[[ "$host_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || {
+    echo "Invalid host name: $host_name" >&2; exit 1;
+}
+# Inject into the generated adapter only. Keep the base roboboat alias for
+# existing callers; Docker adds the actual hostname to /etc/hosts itself.
+sed -i.bak "/^  dev:$/a\\
+    hostname: ${host_name}
+" "${script_dir}/docker-compose.override.yml"
+rm -f "${script_dir}/docker-compose.override.yml.bak"
 echo "Selected ${os_type} adapter: $override_file"
