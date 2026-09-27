@@ -3,6 +3,7 @@ services:
     image: ${ASTRO_IMAGE:-lunarzdev/astro:jetson-jp6-jazzy}
     runtime: nvidia
     environment:
+      ROS_DOMAIN_ID: ${ASTRO_ROS_DOMAIN_ID:-42}
       DISPLAY: ${DISPLAY:-}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all

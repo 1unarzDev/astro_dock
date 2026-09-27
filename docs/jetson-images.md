@@ -48,9 +48,13 @@ node or ROS topic is not a pass. It starts a temporary ZED publisher and stops
 only that publisher afterward. For permanent camera operation use the launch
 command in container `help`. No thruster command is involved.
 
-Foxy and Jazzy custom ZED interfaces differ. Standard Image messages may
-interoperate over DDS, but validate delivery on the actual peer before relying
-on it; matching domain IDs alone do not prove compatibility.
+Foxy and Jazzy must use separate DDS domains: **142 for legacy Foxy, 42 for
+Jazzy**. On Squirtle/ODROID, joining the same domain caused Foxy discovery
+deserialization errors and `std::bad_alloc` crashes even though local camera
+validation passed. Do not connect them by merely matching domain IDs. A
+deliberate cross-version bridge is required; none is configured by deployment.
+`ASTRO_ROS_DOMAIN_ID` overrides the deployment/Compose default for networks
+where all peers are compatible. ZED 4/5 custom interfaces also differ.
 
 ## Install packages on either image
 

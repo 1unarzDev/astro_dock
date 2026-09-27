@@ -4,7 +4,7 @@ FROM ${BASE_IMAGE}
 ARG ZED_WRAPPER_REF=77a043a6d7fb5802ac49562e61efc1a4d6b5fc3f
 ENV DEBIAN_FRONTEND=noninteractive ROS_DISTRO=foxy \
     ROS_WS=/home/roboboat/roboboat_ws SHELL=/bin/bash \
-    LANG=C.UTF-8 ROS_DOMAIN_ID=42
+    LANG=C.UTF-8 ROS_DOMAIN_ID=142
 LABEL org.astro.jetpack="5" org.astro.ros="foxy" org.astro.role="legacy-camera"
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,6 +37,7 @@ RUN chmod +x /usr/local/bin/astro-ros-install /usr/local/sbin/jetson-user \
     && sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' /tmp/jetson-packages.txt \
        | xargs -r /usr/local/bin/astro-ros-install
 COPY dev.helper.txt /home/roboboat/.helper.txt
+COPY --chmod=755 astro-camera-preview.py /usr/local/bin/astro-camera-preview
 RUN /usr/local/sbin/jetson-user
 USER roboboat
 WORKDIR /home/roboboat/roboboat_ws

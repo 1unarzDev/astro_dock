@@ -38,6 +38,9 @@ fi
 cp "$override_file" "${script_dir}/docker-compose.override.yml"
 if [[ "$os_type" == jetson ]]; then
     sed -i.bak "s/jetson-jp6-jazzy/${jetson_family}/g" "${script_dir}/docker-compose.override.yml"
+    if [[ "$jetson_family" == jetson-jp5-foxy ]]; then
+        sed -i.bak 's/ASTRO_ROS_DOMAIN_ID:-42/ASTRO_ROS_DOMAIN_ID:-142/' "${script_dir}/docker-compose.override.yml"
+    fi
 fi
 host_name="${ASTRO_HOSTNAME:-$(uname -n)}"
 host_name="${host_name%%.*}"

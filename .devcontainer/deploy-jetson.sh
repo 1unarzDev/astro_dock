@@ -23,6 +23,9 @@ if docker container inspect roboboat_dev >/dev/null 2>&1; then
     exit 1
 fi
 groups=()
+default_domain=42
+# Foxy discovery messages are not wire-compatible with current Jazzy DDS.
+[[ "$jetpack" != 5 ]] || default_domain=142
 for group in video render; do
     gid="$(getent group "$group" | cut -d: -f3 || true)"
     [[ -z "$gid" ]] || groups+=(--group-add "$gid")
@@ -30,7 +33,7 @@ done
 docker run -d --name roboboat_dev --hostname "$(uname -n)" \
     --restart unless-stopped --runtime nvidia --privileged \
     --network host --ipc host --shm-size 2g --user roboboat "${groups[@]}" \
-    -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}" \
+    -e ROS_DOMAIN_ID="${ASTRO_ROS_DOMAIN_ID:-${ROS_DOMAIN_ID:-$default_domain}}" \
     -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=all \
     -v /dev:/dev -v /tmp/argus_socket:/tmp/argus_socket \
     -v "${workspace}:/home/roboboat/roboboat_ws" \

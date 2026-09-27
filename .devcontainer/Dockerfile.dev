@@ -63,6 +63,7 @@ RUN set -e; if [ -d /usr/local/zed ]; then \
     fi
 
 COPY --chown=${USER_UID}:${USER_GID} dev.helper.txt /home/${USERNAME}/.helper.txt
+COPY --chmod=755 astro-camera-preview.py /usr/local/bin/astro-camera-preview
 RUN printf '\nhelp() { cat "$HOME/.helper.txt"; }\n' >> /home/${USERNAME}/.bashrc
 
 USER ${USERNAME}

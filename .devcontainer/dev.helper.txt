@@ -52,8 +52,15 @@ CAMERA / DISTRIBUTED ROS
   Both Jetsons: ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
   Check data, not just topic presence: ros2 topic hz <image-topic>
   Legacy ZED 4 and current ZED 5 have different topic/custom-message layouts.
-  Match ROS_DOMAIN_ID (42 by default), network visibility and message types;
-  verify cross-version delivery explicitly.
+  Jazzy uses ROS_DOMAIN_ID=42; legacy Foxy uses 142. Keep them separate:
+  direct Foxy/Jazzy DDS discovery crashed legacy nodes in boat testing.
+  Use an explicit cross-version bridge, not merely matching domain IDs.
+  JPEG preview without shared DDS (see docs/camera-preview.md):
+    Jetson: astro-camera-preview serve --bind <boat-LAN-IP>
+    Browser: http://<boat-LAN-IP>:8088
+    Jazzy laptop: astro-camera-preview receive http://<boat-LAN-IP>:8088
+  The ZED camera launch must also be running. Preview is lossy, 5 Hz by default,
+  no CameraInfo/TF/depth; use it for debugging, not navigation inputs.
   Diagnostics: .devcontainer/device-diagnostics.sh; sudo -E ZED_Diagnostic -aio
 
 PACKAGES
