@@ -123,6 +123,14 @@ If your project launch already starts MAVROS, configure that instance instead. T
 
 On physical hardware, launch your project's nodes on the hosts responsible for their devices. Disable simulation time and synchronize clocks across hosts so sensor timestamps and TF agree. Device configuration and actuator control belong to the project using the workspace.
 
+The hardware package keeps normalized PWM effort separate from Nav2's SI body
+velocity. Use `ros2 run mhseals_hardware thrust_characterize --bag ...` to fit
+drift, response, stopping, and combined-axis limits into the shared hardware
+YAML, then pass its generated Nav2 profile with `navigation.launch.py
+params_file:=...`. `boat_test --velocity-control` inserts the bounded feedback
+controller between `/cmd_vel` and the effort-only PWM driver; review the
+candidate profile before arming.
+
 For a standalone camera session inside a Jetson container:
 
 ```bash
