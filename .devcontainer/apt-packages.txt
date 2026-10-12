@@ -20,6 +20,7 @@ ros-jazzy-robot-state-publisher
 ros-jazzy-ros-gz
 ros-jazzy-ros2-control
 ros-jazzy-ros2-controllers
+ros-jazzy-ros2action
 ros-jazzy-ros2cli
 ros-jazzy-ros2launch
 ros-jazzy-ros2run

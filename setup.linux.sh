@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
 DRY_RUN=false
 ASSUME_YES=false
 NON_INTERACTIVE=false
@@ -22,7 +24,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,compose
+  --components LIST         clock,docker,gpu,devices,devtools,compose,bridge
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -228,12 +230,12 @@ stage_devices() {
         > "$rules_file"
     run sudo install -m 0644 "$rules_file" /etc/udev/rules.d/99-astro-robotics.rules
     rm -f "$rules_file"
-    if [[ -r .devcontainer/99-z-astro-gpu.rules ]] && [[ -r /proc/device-tree/compatible ]] \
+    if [[ -r "$SCRIPT_DIR/.devcontainer/99-z-astro-gpu.rules" ]] && [[ -r /proc/device-tree/compatible ]] \
         && grep -aqi tegra /proc/device-tree/compatible; then
-        run sudo install -m 0644 .devcontainer/99-z-astro-gpu.rules /etc/udev/rules.d/99-z-astro-gpu.rules
+        run sudo install -m 0644 "$SCRIPT_DIR/.devcontainer/99-z-astro-gpu.rules" /etc/udev/rules.d/99-z-astro-gpu.rules
     fi
-    if [[ -r .devcontainer/99-z-astro-zed.rules ]]; then
-        run sudo install -m 0644 .devcontainer/99-z-astro-zed.rules /etc/udev/rules.d/99-z-astro-zed.rules
+    if [[ -r "$SCRIPT_DIR/.devcontainer/99-z-astro-zed.rules" ]]; then
+        run sudo install -m 0644 "$SCRIPT_DIR/.devcontainer/99-z-astro-zed.rules" /etc/udev/rules.d/99-z-astro-zed.rules
     fi
     for group in dialout video render; do
         getent group "$group" >/dev/null 2>&1 && run sudo usermod -aG "$group" "$USER"
@@ -263,7 +265,7 @@ stage_compose() {
     heading "Compose selection"
     echo "This selects the repository's host adapter; it does not build or pull an image."
     approve "Select the Compose adapter now?" || { SKIPPED+=(compose); return; }
-    run bash .devcontainer/prebuild.sh
+    run bash "$SCRIPT_DIR/.devcontainer/prebuild.sh"
     COMPLETED+=(compose)
 }
 
@@ -272,8 +274,17 @@ stage_clock() {
     echo "Configures the existing NTP client before installing packages."
     echo "Set ASTRO_NTP_SERVER to a reachable boat-LAN time server when offline."
     approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
-    run sudo bash .devcontainer/setup-time-sync.sh "${ASTRO_NTP_SERVER:-time.cloudflare.com}"
+    run sudo bash "$SCRIPT_DIR/.devcontainer/setup-time-sync.sh" "${ASTRO_NTP_SERVER:-time.cloudflare.com}"
     COMPLETED+=(clock)
+}
+
+stage_bridge() {
+    heading "Lidar/TF DDS bridge"
+    echo "Installs persistent user services that relay LARGE_DATA lidar into the normal DDS graph."
+    echo "The bridge is intended for the Jazzy viewer host; source devices do not need this stage."
+    approve "Install the lidar/TF bridge services?" || { SKIPPED+=(bridge); return; }
+    run bash "$SCRIPT_DIR/install-mixed-pointcloud-bridge.sh"
+    COMPLETED+=(bridge)
 }
 
 main() {
@@ -289,6 +300,7 @@ main() {
     has_component devices && stage_devices
     has_component devtools && stage_devtools
     has_component compose && stage_compose
+    has_component bridge && stage_bridge
 
     heading "Summary"
     $DRY_RUN && printf 'Planned:   %s\n' "${COMPLETED[*]:-none}" || printf 'Completed: %s\n' "${COMPLETED[*]:-none}"

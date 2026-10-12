@@ -55,7 +55,7 @@ On Linux, preview the host setup before applying it:
 ./setup.linux.sh
 ```
 
-The script configures host time synchronization, Docker, NVIDIA container support, scoped device rules, development tools, and the Compose adapter. It asks before each stage and supports Debian/Ubuntu, Arch, Fedora, RHEL derivatives, immutable Fedora hosts, and Ubuntu Core. Use `--components clock,docker,devices,compose` to select stages, or `--non-interactive --yes` for provisioning. An NVIDIA driver must already be installed when needed.
+The script configures host time synchronization, Docker, NVIDIA container support, scoped device rules, development tools, and the Compose adapter. It can also install the optional lidar/TF DDS bridge on a Jazzy viewer host. It asks before each stage and supports Debian/Ubuntu, Arch, Fedora, RHEL derivatives, immutable Fedora hosts, and Ubuntu Core. Use `--components clock,docker,devices,compose` to select stages, or `--non-interactive --yes` for provisioning. An NVIDIA driver must already be installed when needed.
 
 On Windows or macOS, use `setup.windows.bat` or `./setup.mac.sh` and keep Docker Desktop running. Container GUI applications additionally need [VcXsrv](https://sourceforge.net/projects/vcxsrv/) on Windows or [XQuartz](https://www.xquartz.org/) on macOS, with network connections enabled. Graphics and hardware access depend on the host; use native Linux for robotics hardware.
 
@@ -138,26 +138,17 @@ Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching th
 
 #### Mixed Fast DDS transports for the lidar and TF
 
-Fast DDS `LARGE_DATA` is required for the approximately 642 KB `/points` samples produced by the VLP16 pipeline. It changes the participant's user-data locators to TCP/SHM, so a `LARGE_DATA` RViz participant can receive `/points` but cannot receive the default-transport `/tf` and `/tf_static` participants. Keep the normal terminals on the default transport and run the checked-in two-process relay on the Jazzy viewer host:
+Fast DDS `LARGE_DATA` is required for the approximately 642 KB `/points` samples produced by the VLP16 pipeline. It changes the participant's user-data locators to TCP/SHM, so a `LARGE_DATA` participant can receive `/points` but cannot receive the default-transport `/tf` and `/tf_static` participants. The bridge solves this with one ingest process using `LARGE_DATA` and one normal-DDS publisher; RViz stays on normal DDS and can display the relayed lidar, TF, map, costmaps, and paths together. Keep the sensor and odometry terminals on their existing transports.
+
+The ingest participant subscribes to the ODROID's `LARGE_DATA` DDS writer. It serializes each `sensor_msgs/msg/PointCloud2` message and sends it over a localhost TCP socket. Before publishing, the bridge decimates the cloud to a 32 KiB data payload so the normal Fast DDS reader can receive it without `LARGE_DATA`; one reliable writer serves both RViz's reliable reader and Nav2's best-effort sensor-data reader. A single writer avoids duplicate clouds and keeps RTAB-Map at the source scan rate. RViz remains a normal participant, so it receives both relayed lidar and the existing TF tree. The socket is bound to loopback and is not exposed to the LAN.
+
+For reboot-safe operation, install the user services on the viewer host with the optional setup stage:
 
 ```bash
-docker exec -d -e FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA roboboat_dev \
-  /home/roboboat/roboboat_ws/.devcontainer/run-mixed-pointcloud-bridge.sh \
-  ingest --topic /points --bind 127.0.0.1 --port 47680
-docker exec -d roboboat_dev \
-  /home/roboboat/roboboat_ws/.devcontainer/run-mixed-pointcloud-bridge.sh \
-  publish --topic /points --host 127.0.0.1 --port 47680
+./setup.linux.sh --components bridge
 ```
 
-The ingest participant subscribes to the ODROID's `LARGE_DATA` DDS writer. It serializes each `sensor_msgs/msg/PointCloud2` message and sends it over a localhost TCP socket. Before publishing, the bridge decimates the cloud to a 32 KiB data payload so the normal Fast DDS reader can receive it without `LARGE_DATA`; it publishes both reliable and best-effort QoS variants for RViz and Nav2's sensor-data subscriptions. RViz remains a normal participant, so it receives both relayed lidar and the existing TF tree. The socket is bound to loopback and is not exposed to the LAN.
-
-For reboot-safe operation, install the user services from the workspace on the viewer host:
-
-```bash
-.devcontainer/install-mixed-pointcloud-bridge.sh
-```
-
-This enables `astro-pointcloud-ingest.service` and `astro-pointcloud-publish.service` with `Restart=always`; they wait for the `roboboat_dev` container and reconnect if it is recreated. Edit `~/.config/astro-pointcloud-bridge.env` when a new Jazzy device uses a different container name, domain, topic, or local port. User lingering must be enabled once (`sudo loginctl enable-linger "$USER"`) so the services start at boot. On the source device, launch the lidar publisher with `FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA`; launch odometry, TF publishers, and RViz without that variable. The relay uses subnet discovery and does not contain a device IP, so it continues to work when DHCP addresses or additional source devices change.
+This enables `astro-pointcloud-ingest.service` and `astro-pointcloud-publish.service` with `Restart=always`; they wait for the `roboboat_dev` container and reconnect if it is recreated. Edit `~/.config/astro-pointcloud-bridge.env` when a new Jazzy device uses a different container name, domain, topic, or local port. User lingering must be enabled once (`sudo loginctl enable-linger "$USER"`) so the services start at boot. On the source device, launch the lidar publisher with `FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA`; launch odometry and TF publishers without that variable. The relay uses subnet discovery and does not contain a device IP, so it continues to work when DHCP addresses or additional source devices change. Run `./install-mixed-pointcloud-bridge.sh --dry-run` to preview the host service installation directly.
 
 #### Lidar-only RTAB-Map and Nav2 commissioning
 

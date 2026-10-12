@@ -22,14 +22,17 @@ class Ingest(Node):
     def __init__(self, bind, port, topic, max_bytes):
         super().__init__("mixed_pointcloud_ingest")
         self._client = None
+        self._pending = None
         self._max_bytes = max_bytes
         self._lock = threading.Lock()
+        self._wake = threading.Condition(self._lock)
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind((bind, port))
         self._server.listen(1)
         self._server.settimeout(0.2)
         threading.Thread(target=self._accept_loop, daemon=True).start()
+        threading.Thread(target=self._send_loop, daemon=True).start()
 
         qos = QoSProfile(
             depth=10,
@@ -52,6 +55,7 @@ class Ingest(Node):
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             with self._lock:
                 old, self._client = self._client, client
+                self._wake.notify_all()
             if old:
                 old.close()
             self.get_logger().info(f"publisher connected from {address[0]}:{address[1]}")
@@ -88,23 +92,38 @@ class Ingest(Node):
             )
         payload = serialize_message(message)
         packet = struct.pack("!I", len(payload)) + payload
-        with self._lock:
-            client = self._client
-        if not client:
-            return
-        try:
-            client.sendall(packet)
-        except OSError:
-            with self._lock:
-                if self._client is client:
-                    self._client = None
-            client.close()
+        # Keep only the newest complete packet.  A blocked TCP writer must not
+        # block the ROS subscription callback or let stale clouds accumulate.
+        with self._wake:
+            self._pending = packet
+            self._wake.notify()
+
+    def _send_loop(self):
+        while rclpy.ok():
+            with self._wake:
+                while rclpy.ok() and (self._client is None or self._pending is None):
+                    self._wake.wait(timeout=0.2)
+                if not rclpy.ok():
+                    return
+                client = self._client
+                packet = self._pending
+                self._pending = None
+            try:
+                client.sendall(packet)
+            except OSError:
+                with self._wake:
+                    if self._client is client:
+                        self._client = None
+                client.close()
 
     def close(self):
         self._server.close()
-        with self._lock:
+        with self._wake:
+            self._pending = None
             if self._client:
                 self._client.close()
+                self._client = None
+            self._wake.notify_all()
         self.destroy_node()
 
 
@@ -119,17 +138,12 @@ class Publish(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
+        # A reliable offered QoS is compatible with both RViz's reliable
+        # reader and Nav2's best-effort SensorDataQoS reader.  Keep one writer:
+        # two writers with different reliability policies make best-effort
+        # subscribers receive every cloud twice and halve useful throughput.
         self._publisher = self.create_publisher(PointCloud2, topic, qos)
-        # Nav2 costmap subscriptions use SensorDataQoS (best effort), while
-        # RViz uses a reliable subscription.  Publish both compatible QoS
-        # variants; DDS will deliver each sample only to matching readers.
-        sensor_qos = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE,
-        )
-        self._sensor_publisher = self.create_publisher(PointCloud2, topic, sensor_qos)
-        self.create_timer(0.1, self._poll)
+        self.create_timer(0.02, self._poll)
         self.get_logger().info(
             f"publishing {topic} through the default DDS transport from "
             f"tcp://{host}:{port}"
@@ -159,17 +173,18 @@ class Publish(Node):
                 if not chunk:
                     raise ConnectionError("ingest closed")
                 self._buffer.extend(chunk)
+                latest_payload = None
                 while len(self._buffer) >= 4:
                     length = struct.unpack("!I", self._buffer[:4])[0]
                     if length > 32 * 1024 * 1024:
                         raise ValueError(f"cloud is too large: {length} bytes")
                     if len(self._buffer) < 4 + length:
                         break
-                    payload = bytes(self._buffer[4 : 4 + length])
+                    latest_payload = bytes(self._buffer[4 : 4 + length])
                     del self._buffer[: 4 + length]
-                    message = deserialize_message(payload, PointCloud2)
+                if latest_payload is not None:
+                    message = deserialize_message(latest_payload, PointCloud2)
                     self._publisher.publish(message)
-                    self._sensor_publisher.publish(message)
         except (ConnectionError, OSError, ValueError) as error:
             self.get_logger().warning(f"resetting ingest connection: {error}")
             self._socket.close()
