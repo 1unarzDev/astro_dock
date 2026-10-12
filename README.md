@@ -136,6 +136,50 @@ In Foxglove, choose **Rosbridge**, connect to `ws://<jetson-host>:9090`, and sel
 
 Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching their domain IDs can cause discovery failures and crashes. Use an explicit cross-version bridge for shared data. Jazzy RViz cannot directly view the Foxy camera stream; use Foxglove or a matching Foxy environment. `ASTRO_ROS_DOMAIN_ID` overrides the Jetson default for networks with compatible peers.
 
+#### Mixed Fast DDS transports for the lidar and TF
+
+Fast DDS `LARGE_DATA` is required for the approximately 642 KB `/points` samples produced by the VLP16 pipeline. It changes the participant's user-data locators to TCP/SHM, so a `LARGE_DATA` RViz participant can receive `/points` but cannot receive the default-transport `/tf` and `/tf_static` participants. Keep the normal terminals on the default transport and run the checked-in two-process relay on the Jazzy viewer host:
+
+```bash
+docker exec -d -e FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA roboboat_dev \
+  /home/roboboat/roboboat_ws/.devcontainer/run-mixed-pointcloud-bridge.sh \
+  ingest --topic /points --bind 127.0.0.1 --port 47680
+docker exec -d roboboat_dev \
+  /home/roboboat/roboboat_ws/.devcontainer/run-mixed-pointcloud-bridge.sh \
+  publish --topic /points --host 127.0.0.1 --port 47680
+```
+
+The ingest participant subscribes to the ODROID's `LARGE_DATA` DDS writer. It serializes each `sensor_msgs/msg/PointCloud2` message and sends it over a localhost TCP socket. Before publishing, the bridge decimates the cloud to a 32 KiB data payload so the normal Fast DDS reader can receive it without `LARGE_DATA`; it publishes both reliable and best-effort QoS variants for RViz and Nav2's sensor-data subscriptions. RViz remains a normal participant, so it receives both relayed lidar and the existing TF tree. The socket is bound to loopback and is not exposed to the LAN.
+
+For reboot-safe operation, install the user services from the workspace on the viewer host:
+
+```bash
+.devcontainer/install-mixed-pointcloud-bridge.sh
+```
+
+This enables `astro-pointcloud-ingest.service` and `astro-pointcloud-publish.service` with `Restart=always`; they wait for the `roboboat_dev` container and reconnect if it is recreated. Edit `~/.config/astro-pointcloud-bridge.env` when a new Jazzy device uses a different container name, domain, topic, or local port. User lingering must be enabled once (`sudo loginctl enable-linger "$USER"`) so the services start at boot. On the source device, launch the lidar publisher with `FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA`; launch odometry, TF publishers, and RViz without that variable. The relay uses subnet discovery and does not contain a device IP, so it continues to work when DHCP addresses or additional source devices change.
+
+#### Lidar-only RTAB-Map and Nav2 commissioning
+
+The current physical stack publishes VLP16 data as `/points`, not `sensor_msgs/LaserScan` on `/scan`, and the Jetson camera is optional on a separate ROS domain. The checked-in RTAB-Map profile therefore uses `subscribe_scan_cloud: true` and remaps `scan_cloud` to `/points`; RGB/depth are disabled so a stopped camera cannot block map updates. Start mapping and navigation on the ODROID after the sensor/odom terminals and the persistent point-cloud bridge are running:
+
+```bash
+ros2 launch mhseals_nav slam.launch.py sim:=false
+ros2 launch mhseals_nav navigation.launch.py sim:=false use_lidar:=true
+```
+
+Check the live graph before sending a planner-only goal:
+
+```bash
+ros2 topic hz /points
+ros2 topic echo /map --once
+ros2 topic echo /global_costmap/costmap --once
+ros2 action send_goal /compute_path_to_pose nav2_msgs/action/ComputePathToPose \
+  "{goal: {header: {frame_id: map}, pose: {position: {x: 6.0, y: 2.3}, orientation: {w: 1.0}}}, planner_id: GridBased}"
+```
+
+`ComputePathToPose` exercises the planner and publishes `/plan` without driving a thruster. `/local_plan` is produced only while a controller is following a path. In RViz on `tranquility`, add `/points`, `/map`, `/global_costmap/costmap`, `/local_costmap/costmap`, `/plan`, `/local_plan`, TF, and TF Static; all use ROS domain 42 and the normal DDS transport.
+
 For device access problems, run `.devcontainer/device-diagnostics.sh` on the host and inside the container to compare access. Reapply `./setup.linux.sh --components devices` after a JetPack upgrade if permissions change. Use scoped device rules rather than recursive permission changes under `/dev`.
 
 Containers share the host clock. For an isolated network with a reachable NTP server, configure it on each Linux host before running timestamp-sensitive nodes or package updates:
@@ -146,6 +190,17 @@ timedatectl status
 ```
 
 Replace the address with your network's time server. [`.devcontainer/Dockerfile.time-server`](.devcontainer/Dockerfile.time-server) and [`time-server.conf`](.devcontainer/time-server.conf) provide a chrony relay for an internet-connected Linux host; adjust the allowed subnet before using it. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
+
+If a Linux host has the wrong time, the common systemd recovery path is:
+
+```bash
+sudo timedatectl set-ntp on
+sudo systemctl enable --now systemd-timesyncd
+# Wait until: timedatectl show -p NTPSynchronized --value  -> yes
+sudo hwclock --systohc
+```
+
+Run `hwclock --systohc` only after synchronization succeeds and only on a host with an RTC. On systems that use `chronyd`, configure or restart that service instead of `systemd-timesyncd`; running `./setup.linux.sh --components clock` is the supported alternative because it selects the existing NTP client and persists its configuration.
 
 #### Router and internet sharing
 

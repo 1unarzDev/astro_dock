@@ -1,0 +1,17 @@
+[Unit]
+Description=Astro ROS 2 default-transport PointCloud2 publisher
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/astro-pointcloud-bridge.env
+ExecStartPre=/bin/bash -lc '/usr/bin/docker inspect "$ASTRO_POINTCLOUD_CONTAINER"'
+ExecStart=/bin/bash -lc 'exec /usr/bin/docker exec -e ROS_DISTRO="$ASTRO_ROS_DISTRO" -e ROS_DOMAIN_ID="$ASTRO_ROS_DOMAIN_ID" -e ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET "$ASTRO_POINTCLOUD_CONTAINER" /home/roboboat/roboboat_ws/.devcontainer/run-mixed-pointcloud-bridge.sh publish --topic "$ASTRO_POINTCLOUD_TOPIC" --host 127.0.0.1 --port "$ASTRO_POINTCLOUD_PORT"'
+ExecStop=/bin/bash -lc '/usr/bin/docker exec "$ASTRO_POINTCLOUD_CONTAINER" pkill -TERM -f "[m]ixed_pointcloud_bridge.py publish" || true'
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
