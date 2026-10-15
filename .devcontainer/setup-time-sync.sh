@@ -4,7 +4,6 @@ set -euo pipefail
 if [[ "${1:-}" == --help ]]; then
     echo 'Usage: sudo setup-time-sync.sh [NTP_SERVER ...]'
     echo 'Uses existing chronyd (Fedora/CoreOS) or systemd-timesyncd (Ubuntu/Arch).'
-    echo 'Example boat LAN: sudo setup-time-sync.sh 192.168.0.185'
     exit 0
 fi
 [[ $EUID == 0 ]] || { echo 'Run with sudo on the host.' >&2; exit 1; }

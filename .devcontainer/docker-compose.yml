@@ -23,6 +23,18 @@ services:
     working_dir: /home/roboboat/roboboat_ws
     command: sleep infinity
 
+  # Viewer laptops: relays the boat lidar into RViz/Nav2's DDS graph and comes
+  # back after reboots. Enable once with:
+  #   cd .devcontainer && docker compose --profile viewer up -d lidar-relay
+  lidar-relay:
+    extends:
+      service: dev
+    profiles: ["viewer"]
+    container_name: astro_lidar_relay
+    volumes:
+      - ..:/home/roboboat/roboboat_ws
+    command: bash -lc 'source /opt/ros/jazzy/setup.bash && source install/setup.bash && exec install/lib/mhseals_nav/lidar_relay'
+    restart: unless-stopped
   sitl:
     profiles: ["sitl"]
     image: ${ASTRO_SITL_IMAGE:-lunarzdev/astro:sitl}

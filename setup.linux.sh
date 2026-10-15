@@ -24,7 +24,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,compose,bridge
+  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -278,13 +278,45 @@ stage_clock() {
     COMPLETED+=(clock)
 }
 
-stage_bridge() {
-    heading "Lidar/TF DDS bridge"
-    echo "Installs persistent user services that relay LARGE_DATA lidar into the normal DDS graph."
-    echo "The bridge is intended for the Jazzy viewer host; source devices do not need this stage."
-    approve "Install the lidar/TF bridge services?" || { SKIPPED+=(bridge); return; }
-    run bash "$SCRIPT_DIR/install-mixed-pointcloud-bridge.sh"
-    COMPLETED+=(bridge)
+stage_gateway() {
+    local subnet unit
+    subnet="$(. "$SCRIPT_DIR/config/boat-network.env" && echo "$BOAT_SUBNET")"
+    heading "Boat LAN internet gateway"
+    echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
+    echo "persisted as astro-gateway.service. Run it only on the device that serves as the boat gateway."
+    [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || { echo "Invalid BOAT_SUBNET in config/boat-network.env: $subnet" >&2; exit 2; }
+    approve "Share this host's internet with $subnet?" || { SKIPPED+=(gateway); return; }
+    unit="$(mktemp)"
+    cat > "$unit" <<EOF
+[Unit]
+Description=Share this host's internet with the boat LAN ($subnet)
+After=network-pre.target docker.service iptables.service nftables.service
+PartOf=docker.service iptables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Rules name no interfaces: traffic follows the host's routing, so it uses WARP
+# when connected and the default uplink otherwise. Each rule is added once.
+ExecStart=/bin/sh -c 'iptables -C FORWARD -s $subnet -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s $subnet -j ACCEPT'
+ExecStart=/bin/sh -c 'iptables -C FORWARD -d $subnet -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d $subnet -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
+ExecStart=/bin/sh -c 'iptables -t nat -C POSTROUTING -s $subnet ! -d $subnet -j MASQUERADE 2>/dev/null || iptables -t nat -I POSTROUTING 1 -s $subnet ! -d $subnet -j MASQUERADE'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    run sudo install -m 0644 "$unit" /etc/systemd/system/astro-gateway.service
+    rm -f "$unit"
+    if $DRY_RUN; then
+        quote_command sudo tee /etc/sysctl.d/90-astro-gateway.conf
+    else
+        echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-astro-gateway.conf >/dev/null
+    fi
+    run sudo sysctl -q -p /etc/sysctl.d/90-astro-gateway.conf
+    run sudo systemctl daemon-reload
+    run sudo systemctl enable astro-gateway.service
+    run sudo systemctl restart astro-gateway.service
+    COMPLETED+=(gateway)
 }
 
 main() {
@@ -300,7 +332,7 @@ main() {
     has_component devices && stage_devices
     has_component devtools && stage_devtools
     has_component compose && stage_compose
-    has_component bridge && stage_bridge
+    has_component gateway && stage_gateway
 
     heading "Summary"
     $DRY_RUN && printf 'Planned:   %s\n' "${COMPLETED[*]:-none}" || printf 'Completed: %s\n' "${COMPLETED[*]:-none}"

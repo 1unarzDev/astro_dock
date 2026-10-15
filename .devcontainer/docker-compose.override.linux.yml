@@ -9,3 +9,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /dev:/dev
+
+  # Same image as dev so the viewer relay needs no extra pull.
+  lidar-relay:
+    

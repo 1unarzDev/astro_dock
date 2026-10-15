@@ -4,19 +4,15 @@ set -Eeuo pipefail
 PROGRAM=${0##*/}
 SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
 STATE_DIR="$SCRIPT_DIR/router_setup_state"
-HOST=192.168.0.1
 IDENTITY=""
 DRY_RUN=0
 SSH_USER=root
 SSH_PORT=22
 
-ROUTER_IP=192.168.0.1
-NETMASK=255.255.255.0
-LAPTOP_IP=192.168.0.2
-DHCP_START=100
-DHCP_COUNT=100
-DNS_PRIMARY=1.1.1.1
-DNS_SECONDARY=8.8.8.8
+# shellcheck source=config/boat-network.env
+source "$SCRIPT_DIR/config/boat-network.env"
+HOST=$ROUTER_IP
+LAPTOP_IP=$GATEWAY_IP
 SETUP_NAME=mhseals
 ROUTER_NAME=mhseals
 SSID=mhseals

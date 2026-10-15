@@ -11,6 +11,11 @@ services:
       - /dev:/dev
       - zed_resources:/usr/local/zed/resources
       - zed_settings:/usr/local/zed/settings
+
+  # Same image as dev so the viewer relay needs no extra pull.
+  lidar-relay:
+    image: ${ASTRO_IMAGE:-lunarzdev/astro:cuda}
+
 volumes:
   zed_resources:
   zed_settings:

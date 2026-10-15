@@ -27,14 +27,9 @@ if [[ -f /opt/zed_ros2/setup.bash ]]; then
 fi
 
 export ROS_WS="${ROS_WS:-$HOME/roboboat_ws}"
-# Keep ordinary terminals on the default DDS transport so TF, odometry, and
-# small messages remain visible. The point-cloud bridge opts into LARGE_DATA
-# only for its ingest participant.
-if [[ "${ASTRO_DDS_LARGE_DATA:-0}" == "1" ]]; then
-  export FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
-else
-  unset FASTDDS_BUILTIN_TRANSPORTS
-fi
+# Terminals use the default DDS transport; the lidar participants opt into
+# mhseals_nav/config/fastdds_large_data.xml from their launch files.
+unset FASTDDS_BUILTIN_TRANSPORTS
 export GZ_SIM_RESOURCE_PATH="${ROS_WS}/src/asv_wave_sim/gz-waves-models/models:${ROS_WS}/src/asv_wave_sim/gz-waves-models/world_models:${ROS_WS}/src/asv_wave_sim/gz-waves-models/worlds${GZ_SIM_RESOURCE_PATH:+:${GZ_SIM_RESOURCE_PATH}}"
 export GZ_SIM_SYSTEM_PLUGIN_PATH="${ROS_WS}/install/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:${GZ_SIM_SYSTEM_PLUGIN_PATH}}"
 

@@ -144,19 +144,20 @@ In Foxglove, choose **Rosbridge**, connect to `ws://<jetson-host>:9090`, and sel
 
 Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching their domain IDs can cause discovery failures and crashes. Use an explicit cross-version bridge for shared data. Jazzy RViz cannot directly view the Foxy camera stream; use Foxglove or a matching Foxy environment. `ASTRO_ROS_DOMAIN_ID` overrides the Jetson default for networks with compatible peers.
 
-#### Mixed Fast DDS transports for the lidar and TF
+#### Lidar DDS transport
 
-Fast DDS `LARGE_DATA` is required for the approximately 642 KB `/points` samples produced by the VLP16 pipeline. It changes the participant's user-data locators to TCP/SHM, so a `LARGE_DATA` participant can receive `/points` but cannot receive the default-transport `/tf` and `/tf_static` participants. The bridge solves this with one ingest process using `LARGE_DATA` and one normal-DDS publisher; RViz stays on normal DDS and can display the relayed lidar, TF, map, costmaps, and paths together. Keep the sensor and odometry terminals on their existing transports.
+VLP16 clouds (~642 KB) need a large-data DDS transport, while TF, odometry and RViz stay on the default one. Both halves live in `mhseals_nav`:
 
-The ingest participant subscribes to the ODROID's `LARGE_DATA` DDS writer. It serializes each `sensor_msgs/msg/PointCloud2` message and sends it over a localhost TCP socket. Before publishing, the bridge decimates the cloud to a 32 KiB data payload so the normal Fast DDS reader can receive it without `LARGE_DATA`; one reliable writer serves both RViz's reliable reader and Nav2's best-effort sensor-data reader. A single writer avoids duplicate clouds and keeps RTAB-Map at the source scan rate. RViz remains a normal participant, so it receives both relayed lidar and the existing TF tree. The socket is bound to loopback and is not exposed to the LAN.
+- `config/fastdds_large_data.xml` is the single large-data profile (Fast DDS `LARGE_DATA` with netmask filtering, so hosts with Wi-Fi, WARP or Docker interfaces still reach the boat). `sensors.launch.py` applies it to the Velodyne driver and transform only.
+- `lidar_relay` runs on the viewer as two processes, because Fast DDS picks a transport per process: one receives `/points` on the large-data profile and pipes it to the other, which republishes a decimated cloud (32 KiB payload, one reliable writer for RViz and Nav2) on the default transport.
 
-For reboot-safe operation, install the user services on the viewer host with the optional setup stage:
+On a viewer laptop, start the relay once; Docker restarts it after reboots or container rebuilds:
 
 ```bash
-./setup.linux.sh --components bridge
+cd .devcontainer && docker compose --profile viewer up -d lidar-relay
 ```
 
-This enables `astro-pointcloud-ingest.service` and `astro-pointcloud-publish.service` with `Restart=always`; they wait for the `roboboat_dev` container and reconnect if it is recreated. Edit `~/.config/astro-pointcloud-bridge.env` when a new Jazzy device uses a different container name, domain, topic, or local port. User lingering must be enabled once (`sudo loginctl enable-linger "$USER"`) so the services start at boot. On the ODROID, `sensors.launch.py` scopes `FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA` to the Velodyne driver and transform pair; leave the shell default unset so odometry and TF remain on normal DDS. The relay uses subnet discovery and does not contain a device IP, so it continues to work when DHCP addresses or additional source devices change. Run `./install-mixed-pointcloud-bridge.sh --dry-run` to preview the host service installation directly.
+To inspect full clouds from a terminal, opt that shell into the profile: `export FASTRTPS_DEFAULT_PROFILES_FILE=$ROS_WS/install/share/mhseals_nav/config/fastdds_large_data.xml`.
 
 #### Lidar-only RTAB-Map and Nav2 commissioning
 
@@ -177,18 +178,18 @@ ros2 action send_goal /compute_path_to_pose nav2_msgs/action/ComputePathToPose \
   "{goal: {header: {frame_id: map}, pose: {position: {x: 6.0, y: 2.3}, orientation: {w: 1.0}}}, planner_id: GridBased}"
 ```
 
-`ComputePathToPose` exercises the planner and publishes `/plan` without driving a thruster. `/local_plan` is produced only while a controller is following a path. In RViz on `tranquility`, add `/points`, `/map`, `/global_costmap/costmap`, `/local_costmap/costmap`, `/plan`, `/local_plan`, TF, and TF Static; all use ROS domain 42 and the normal DDS transport.
+`ComputePathToPose` exercises the planner and publishes `/plan` without driving a thruster. `/local_plan` is produced only while a controller is following a path. In RViz on the viewer laptop, add `/points`, `/map`, `/global_costmap/costmap`, `/local_costmap/costmap`, `/plan`, `/local_plan`, TF, and TF Static; all use ROS domain 42 and the normal DDS transport.
 
 For device access problems, run `.devcontainer/device-diagnostics.sh` on the host and inside the container to compare access. Reapply `./setup.linux.sh --components devices` after a JetPack upgrade if permissions change. Use scoped device rules rather than recursive permission changes under `/dev`.
 
 Containers share the host clock. For an isolated network with a reachable NTP server, configure it on each Linux host before running timestamp-sensitive nodes or package updates:
 
 ```bash
-ASTRO_NTP_SERVER=192.168.0.185 ./setup.linux.sh --components clock
+./setup.linux.sh --components clock
 timedatectl status
 ```
 
-Replace the address with your network's time server. [`.devcontainer/Dockerfile.time-server`](.devcontainer/Dockerfile.time-server) and [`time-server.conf`](.devcontainer/time-server.conf) provide a chrony relay for an internet-connected Linux host; adjust the allowed subnet before using it. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
+Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. [`.devcontainer/Dockerfile.time-server`](.devcontainer/Dockerfile.time-server) and [`time-server.conf`](.devcontainer/time-server.conf) provide a chrony relay for an internet-connected Linux host; adjust the allowed subnet before using it. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
 
 If a Linux host has the wrong time, the common systemd recovery path is:
 
@@ -203,7 +204,7 @@ Run `hwclock --systohc` only after synchronization succeeds and only on a host w
 
 #### Router and internet sharing
 
-[`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH for a LAN whose internet gateway is a connected laptop. By default, the router is `192.168.0.1`, the laptop is `192.168.0.2`, and DHCP clients use the laptop as their gateway. The script configures DHCP, DNS, and WPA2 Wi-Fi, disables router WAN/NAT, and connects devices through normal LAN ports. Addresses, SSID, and credentials are prompted during setup.
+The boat LAN is defined once in [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range and DNS. [`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH from those values, so DHCP clients use the gateway device as their default route. The script configures DHCP, DNS, and WPA2 Wi-Fi, disables router WAN/NAT, and connects devices through normal LAN ports. Addresses, SSID, and credentials are prompted during setup.
 
 ```bash
 ./router_setup.sh --dry-run
@@ -212,13 +213,13 @@ Run `hwclock --systohc` only after synchronization succeeds and only on a host w
 
 The preview connects and inspects without changing router settings. Applying requires confirmation, saves an NVRAM backup when supported, reboots, and verifies the configuration. SSH keys, trusted host keys, and backups live in the ignored `router_setup_state/` directory; the menu also provides backup restoration.
 
-On the Linux gateway laptop, [`shared_internet.sh`](shared_internet.sh) detects an internet-connected interface, adjusts its default route, enables IPv4 forwarding, and adds NAT/forwarding rules for `192.168.0.0/24`:
+On the gateway device (any Linux host), give its LAN interface `GATEWAY_IP` and install the persistent forwarding service:
 
 ```bash
-./shared_internet.sh
+./setup.linux.sh --components gateway
 ```
 
-First give the laptop's LAN interface the gateway address advertised by DHCP and connect a separate internet uplink. Review the script before running it: the subnet is fixed, rules are appended on each run, and persistence expects `/etc/iptables/iptables.rules` and an `iptables` systemd service. Adapt these to the host distribution and subnet. Check internet access from a LAN client afterward.
+`astro-gateway.service` enables IPv4 forwarding and NATs `BOAT_SUBNET` through the device's normal routing, so boat devices reach the internet through WARP when it is connected and through the default uplink otherwise. Edit the config file and rerun the stage to change the subnet. It names no interfaces, reapplies its rules after Docker or iptables restarts, and survives reboots. Check internet access and DNS from a LAN client afterward.
 
 #### Remote work
 
