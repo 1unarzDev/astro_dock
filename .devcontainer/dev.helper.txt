@@ -1,7 +1,7 @@
 BOAT COMMANDS
 
 Build
-  colcon build --packages-select mhseals_nav mhseals_hardware  # the shell reloads itself
+  colcon build --packages-select mhseals_nav mhseals_hardware mhseals_testing  # the shell reloads itself
 
 Launch
   ros2 launch mhseals_nav robot.launch.py sim:=true
@@ -13,7 +13,8 @@ Manual control / tests (ODROID)
   ros2 run mhseals_hardware thruster_pwm_node
   ros2 run mhseals_hardware keyboard_control  # WASD/arrows; Space neutral; X exit
   ros2 run mhseals_hardware thruster_test
-  ros2 run mhseals_hardware boat_test         # guided tests + sensor bags
+  ros2 run mhseals_hardware thruster_identify # map outputs to thrusters
+  ros2 run mhseals_testing boat_test          # test suite: sensors, trials, Nav2, missions + bags
   Secure boat/clear propellers; run one command publisher at a time.
   PWM takes effort, not Nav2 velocity; use a calibrated controller between them.
 
@@ -26,6 +27,7 @@ Monitor
 
 Settings / details
   Hardware overrides: ~/.config/mhseals/hardware.yaml
-  Hardware options: ros2 run mhseals_hardware boat_test --help
+  Test options: ros2 run mhseals_testing boat_test --help
+  Tasks: ros2 launch mhseals_nav task.launch.py task:=gates
   Navigation and objects: src/mhseals_nav/docs/
   Container setup and compatibility: README.md

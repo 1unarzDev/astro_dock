@@ -22,3 +22,8 @@
   path: src/mhseals_nav
   url: https://github.com/MHSeals/mhseals_nav.git
   branch: main
+
+- name: mhseals_testing
+  path: src/mhseals_testing
+  url: https://github.com/MHSeals/mhseals_testing.git
+  branch: main

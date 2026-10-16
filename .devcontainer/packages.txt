@@ -21,6 +21,7 @@ mavros_extras
 nav2_bringup
 nav2_core
 nmea_msgs
+py_trees  # mhseals_nav task trees
 robot_localization
 ros2_control
 ros2_controllers
