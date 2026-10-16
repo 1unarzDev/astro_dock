@@ -1,5 +1,7 @@
 # Jetson images (JetPack 5 Foxy and 6 Jazzy), installed by astro-ros-install.
 compressed_image_transport
 rosbridge_server
-topic_tools
+# ROS 2 topic_tools needs generic pub/sub, which Foxy lacks; the Foxy camera host
+# runs no relays (mhseals_nav's relays run on the Jazzy hosts).
+topic_tools !foxy
 vision_msgs

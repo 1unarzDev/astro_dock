@@ -32,7 +32,9 @@ require("ros2/ros2/${ROS2_RELEASE}/ros2.repos" in deps, "deps: install_ros2.sh m
 require("ARG VELODYNE_REF=0f2a3bb1dde4fa91cbafad8a3f9f89b66c2a1350" in deps, "deps: pinned Velodyne overlay is missing")
 require("/opt/mavros" not in deps and "ARG MAVROS_REF" not in deps, "deps: MAVROS belongs in core, not Jetson")
 for path in ("packages.txt", "jetson-packages.txt"):
-    names = {line.split("#")[0].strip() for line in read(devcontainer / path).splitlines()}
+    # First field is the name; "name !distro" only skips it where it has no release.
+    names = {line.split("#")[0].split()[0] for line in read(devcontainer / path).splitlines()
+             if line.split("#")[0].strip()}
     require({"topic_tools", "vision_msgs"} <= names, f"packages: {path} must include topic_tools and vision_msgs")
 
 # Dev Containers Compose: VS Code's local UID image must never be pulled.
