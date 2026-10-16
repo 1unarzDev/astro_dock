@@ -37,13 +37,13 @@ COPY jetson-packages.txt /tmp/jetson-packages.txt
 RUN chmod +x /usr/local/bin/astro-ros-install \
     && /usr/local/bin/astro-ros-install --file /tmp/jetson-packages.txt
 COPY dev.helper.txt /home/roboboat/.helper.txt
-# Foxy's last rosapi release crashes metadata discovery for image byte arrays.
-COPY rosapi-foxy-sequences.patch /tmp/rosapi-foxy-sequences.patch
+# Lets rosbridge describe image messages on Foxy; see the patch header for why.
+COPY rosapi-foxy-sequence-fields.patch /tmp/rosapi-foxy-sequence-fields.patch
 RUN patch --batch -d /opt/ros/foxy/lib/python3.8/site-packages/rosapi -p1 \
-      < /tmp/rosapi-foxy-sequences.patch \
+      < /tmp/rosapi-foxy-sequence-fields.patch \
     && source /opt/ros/foxy/setup.bash \
     && python3 -c 'from rosapi.objectutils import get_typedef_recursive as describe; assert describe("sensor_msgs/msg/CompressedImage"); assert describe("sensor_msgs/msg/Image")' \
-    && rm /tmp/rosapi-foxy-sequences.patch
+    && rm /tmp/rosapi-foxy-sequence-fields.patch
 RUN /usr/local/sbin/image-user
 USER roboboat
 WORKDIR /home/roboboat/roboboat_ws

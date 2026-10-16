@@ -1,0 +1,28 @@
+Let rosapi describe messages with ROS 2 sequence fields on Foxy (JetPack 5 image).
+
+Symptom: rosbridge clients such as Foxglove cannot show camera topics, because
+rosapi's message-definition lookup fails for sensor_msgs/Image and
+CompressedImage.
+
+Cause: ROS 2 reports variable-length array fields as sequence<T>, for example
+sequence<uint8> for image data. Foxy's rosapi only understands the ROS 1 form
+T[], so it treats sequence<uint8> as a message type and fails to load it.
+
+Fix: read sequence<T> as element type T with variable length (arraylen 0).
+Upstream fixed this in rosbridge_suite 2.0.0 (RobotWebTools/rosbridge_suite#883,
+2023), after Foxy's last release. Delete this patch when the Foxy image is
+retired. Dockerfile.jetson-jp5 applies it and asserts both image types resolve.
+
+--- a/objectutils.py
++++ b/objectutils.py
+@@ -150,6 +150,10 @@
+         # Pull out the type and determine whether it's an array
+         field_type = instance._fields_and_field_types[name[1:]]  # Remove trailing underscore.
+         arraylen = -1
++        # ROS 2 represents variable arrays as sequence<T>, not only T[].
++        if field_type.startswith("sequence<") and field_type.endswith(">"):
++            field_type = field_type[9:-1].split(",", 1)[0].strip()
++            arraylen = 0
+         if field_type[-1:] == "]":
+             if field_type[-2:-1] == "[":
+                 arraylen = 0
