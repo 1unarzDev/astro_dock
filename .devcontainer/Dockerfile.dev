@@ -15,6 +15,8 @@ COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
 COPY pip.conf /etc/pip.conf
 COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
+COPY image-user.sh /usr/local/sbin/image-user
+COPY dev.bashrc /etc/astro/dev.bashrc
 COPY image-smoke.sh /usr/local/bin/astro-smoke
 
 RUN apt-get update \
@@ -35,17 +37,7 @@ RUN apt-get update \
     && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
     && /usr/local/sbin/normalize-python-permissions \
     && /opt/ros/${ROS_DISTRO}/lib/mavros/install_geographiclib_datasets.sh \
-    && if getent passwd "${USER_UID}" >/dev/null; then userdel "$(getent passwd "${USER_UID}" | cut -d: -f1)"; fi \
-    && if getent group "${USER_GID}" >/dev/null; then groupdel "$(getent group "${USER_GID}" | cut -d: -f1)"; fi \
-    && groupadd --gid "${USER_GID}" "${USERNAME}" \
-    && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
-    && usermod -aG dialout,video,sudo "${USERNAME}" \
-    && /usr/local/sbin/configure-zed-access "${USERNAME}" \
-    && printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
-    && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
-    && touch "/home/${USERNAME}/.sudo_as_admin_successful" \
-    && mkdir -p "${ROS_WS}" \
-    && chown -R "${USERNAME}:${USERNAME}" /workspace "${ROS_WS}" \
+    && /usr/local/sbin/image-user "${USERNAME}" "${USER_UID}" "${USER_GID}" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/astro
 
@@ -65,7 +57,6 @@ RUN set -e; if [ -d /usr/local/zed ]; then \
     fi
 
 COPY --chown=${USER_UID}:${USER_GID} dev.helper.txt /home/${USERNAME}/.helper.txt
-RUN printf '\nhelp() { cat "$HOME/.helper.txt"; }\n' >> /home/${USERNAME}/.bashrc
 
 USER ${USERNAME}
 WORKDIR ${ROS_WS}

@@ -59,6 +59,9 @@ general = read(devcontainer / "Dockerfile.dev")
 boat_validate = read(devcontainer / "boat-validate.sh")
 dockerfiles = "".join(read(path) for path in devcontainer.glob("Dockerfile*"))
 jetson_code = "\n".join(line for line in jetson.splitlines() if not line.lstrip().startswith("#"))
+for name in ("Dockerfile.dev", "Dockerfile.jetson", "Dockerfile.jetson-jp5"):
+    require("/usr/local/sbin/image-user" in read(devcontainer / name),
+            f"architecture: {name} must create its user with image-user.sh")
 for ok, message in [
     (re.search(r"runs-on:.*ubuntu-24.04-arm", workflow), "the default ARM64 dependency build must run natively"),
     ("setup-qemu-action" not in workflow, "QEMU must not install or compile Jetson images"),
@@ -71,9 +74,8 @@ for ok, message in [
     (not re.search(r"\$\{\{ env\.REGISTRY_IMAGE \}\}:[a-z0-9-]+-\$\{\{ github\.sha \}\}", workflow), "runtime images must use bounded staging and rollback tags"),
     (re.search(r"registry-retention\.py.*rotate", workflow), "validated images must rotate through the retention helper"),
     (re.search(r"candidate.*REGISTRY_IMAGE", workflow), "Jetson candidates must be retained by digest in fixed slots"),
-    ("configure-zed-access" in jetson, "the Jetson user must receive SDK access through configure-zed-access.sh"),
+    ("configure-zed-access" in read(devcontainer / "image-user.sh"), "image-user.sh must grant SDK access through configure-zed-access.sh"),
     (not re.search(r"\[\[|< <\(", general), "Dockerfile.dev uses /bin/sh; Bash-only logic belongs in a helper"),
-    ("configure-zed-access" in general, "general images must use configure-zed-access.sh"),
     ("grep -qw zed" not in workflow, "smoke tests must verify ZED access, not a vendor group name"),
     (not re.search(r"^RUN .*astro-smoke jetson", jetson, re.MULTILINE), "Jetson hardware smoke tests must not run during image assembly"),
     ("Starting privileged hardware validation container" in boat_validate, "Jetson candidates need the native hardware-validation path"),

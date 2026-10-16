@@ -31,9 +31,10 @@ RUN git clone https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed_ws/src
     && rm -rf /tmp/zed_ws /var/lib/apt/lists/*
 COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
 COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
-COPY jetson-user.sh /usr/local/sbin/jetson-user
+COPY image-user.sh /usr/local/sbin/image-user
+COPY dev.bashrc /etc/astro/dev.bashrc
 COPY jetson-packages.txt /tmp/jetson-packages.txt
-RUN chmod +x /usr/local/bin/astro-ros-install /usr/local/sbin/jetson-user \
+RUN chmod +x /usr/local/bin/astro-ros-install \
     && /usr/local/bin/astro-ros-install --file /tmp/jetson-packages.txt
 COPY dev.helper.txt /home/roboboat/.helper.txt
 # Foxy's last rosapi release crashes metadata discovery for image byte arrays.
@@ -43,7 +44,7 @@ RUN patch --batch -d /opt/ros/foxy/lib/python3.8/site-packages/rosapi -p1 \
     && source /opt/ros/foxy/setup.bash \
     && python3 -c 'from rosapi.objectutils import get_typedef_recursive as describe; assert describe("sensor_msgs/msg/CompressedImage"); assert describe("sensor_msgs/msg/Image")' \
     && rm /tmp/rosapi-foxy-sequences.patch
-RUN /usr/local/sbin/jetson-user
+RUN /usr/local/sbin/image-user
 USER roboboat
 WORKDIR /home/roboboat/roboboat_ws
 CMD ["sleep", "infinity"]

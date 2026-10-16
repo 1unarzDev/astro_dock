@@ -3,14 +3,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-ensure_source_line() {
-    local source_file="$1"
-    local target_file="$2"
-    local line="source \"${source_file}\""
-    grep -Fqx "$line" "$target_file" 2>/dev/null || printf '\n%s\n' "$line" >> "$target_file"
-}
-
-ensure_source_line "$repo_root/.devcontainer/dev.bashrc" "$HOME/.bashrc"
+# Current images' ~/.bashrc loads dev.bashrc already; older images still need it.
+grep -q 'dev\.bashrc' "$HOME/.bashrc" 2>/dev/null \
+    || printf '\nsource "%s"\n' "$repo_root/.devcontainer/dev.bashrc" >> "$HOME/.bashrc"
 ln -sfn "$repo_root/.devcontainer/dev.helper.txt" "$HOME/.helper.txt"
 
 if [[ "${ASTRO_ROSDEP_INSTALL:-0}" == "1" && -d "$repo_root/src" ]]; then
