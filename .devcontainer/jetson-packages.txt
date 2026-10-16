@@ -1,3 +1,5 @@
 # Jetson images (JetPack 5 Foxy and 6 Jazzy), installed by astro-ros-install.
 compressed_image_transport
 rosbridge_server
+topic_tools
+vision_msgs

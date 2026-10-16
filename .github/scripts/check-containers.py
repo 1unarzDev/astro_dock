@@ -24,30 +24,16 @@ def read(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-# Locked source dependencies: the ROS foundation must not follow moving refs.
-manifest = read(devcontainer / "ros2-jazzy.lock.repos")
+# JetPack 6 builds ROS from an upstream release snapshot plus pinned overlays.
 deps = read(devcontainer / "Dockerfile.deps")
-versions = re.findall(r"^[ ]{4}version: ([0-9a-f]+)$", manifest, re.MULTILINE)
-require(len(versions) >= 100 and all(re.fullmatch(r"[0-9a-f]{40}", v) for v in versions),
-        f"lock: expected exact commits, found {len(versions)} entries")
-
-
-def pinned(repository: str) -> str | None:
-    match = re.search(rf"^  {re.escape(repository)}:.*?^[ ]{{4}}version: ([0-9a-f]{{40}})$",
-                      manifest, re.MULTILINE | re.DOTALL)
-    return match.group(1) if match else None
-
-
-require(pinned("ros2/rcutils") == "4cff430e271981b2e634c7c0c905f803beafb01d",
-        "lock: rcutils/rmw compatibility pin changed")
-require(pinned("ros-tooling/topic_tools"), "lock: source-built topic_tools is missing")
-require(pinned("ros-perception/vision_msgs"), "lock: source-built vision_msgs is missing")
-require("ARG VELODYNE_REF=0f2a3bb1dde4fa91cbafad8a3f9f89b66c2a1350" in deps,
-        "lock: pinned Velodyne overlay is missing")
-require("/opt/mavros" not in deps and "ARG MAVROS_REF" not in deps,
-        "lock: MAVROS belongs in core, not Jetson")
-require("COPY ros2-jazzy.lock.repos /tmp/ros2.repos" in deps,
-        "lock: Dockerfile.deps does not consume the lock")
+release = re.search(r"^ARG ROS2_RELEASE=(release-[a-z]+-\d{8})$", deps, re.MULTILINE)
+require(release, "deps: ROS2_RELEASE must pin an upstream release-<distro>-YYYYMMDD snapshot")
+require("ros2/ros2/${ROS2_RELEASE}/ros2.repos" in deps, "deps: install_ros2.sh must use the ROS2_RELEASE snapshot")
+require("ARG VELODYNE_REF=0f2a3bb1dde4fa91cbafad8a3f9f89b66c2a1350" in deps, "deps: pinned Velodyne overlay is missing")
+require("/opt/mavros" not in deps and "ARG MAVROS_REF" not in deps, "deps: MAVROS belongs in core, not Jetson")
+for path in ("packages.txt", "jetson-packages.txt"):
+    names = {line.split("#")[0].strip() for line in read(devcontainer / path).splitlines()}
+    require({"topic_tools", "vision_msgs"} <= names, f"packages: {path} must include topic_tools and vision_msgs")
 
 # Dev Containers Compose: VS Code's local UID image must never be pulled.
 with tempfile.NamedTemporaryFile("w", suffix=".yml") as overlay:
@@ -97,5 +83,5 @@ for ok, message in [
 
 for failure in failures:
     print(f"container checks: {failure}", file=sys.stderr)
-print(f"container checks: {'FAIL' if failures else 'pass'} ({len(versions)} locked commits)")
+print(f"container checks: {'FAIL' if failures else 'pass'} ({release.group(1) if release else 'no release pin'})")
 sys.exit(1 if failures else 0)

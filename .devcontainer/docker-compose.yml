@@ -25,7 +25,7 @@ services:
 
   # Viewer laptops: relays the boat lidar into RViz/Nav2's DDS graph and comes
   # back after reboots. Enable once with:
-  #   cd .devcontainer && docker compose --profile viewer up -d lidar-relay
+  #   cd .devcontainer && docker compose --profile viewer up -d --pull always lidar-relay
   lidar-relay:
     extends:
       service: dev

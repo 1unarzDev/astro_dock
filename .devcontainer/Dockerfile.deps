@@ -2,6 +2,8 @@ ARG BASE_IMAGE=stereolabs/zed:5.4.1-devel-l4t-r36.4@sha256:60bb5a325c1d98cb7be18
 FROM ${BASE_IMAGE}
 
 ARG ROS_DISTRO=jazzy
+# Upstream ROS 2 release snapshot; its ros2.repos pins every core repo to a release.
+ARG ROS2_RELEASE=release-jazzy-20260618
 ARG ROS_POLICY_REF=86171bccda22de6e83ccc69b3c0e67af99dece7c
 ARG ZED_WRAPPER_REF=86171bccda22de6e83ccc69b3c0e67af99dece7c
 ARG VELODYNE_REF=0f2a3bb1dde4fa91cbafad8a3f9f89b66c2a1350
@@ -20,8 +22,6 @@ RUN apt-get update \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ros2-jazzy.lock.repos /tmp/ros2.repos
-
 # Build the expensive ROS foundation independently of the ZED wrapper. A ZED
 # update can now reuse this complete layer as long as the compatibility policy
 # and locked ROS source graph remain unchanged.
@@ -30,12 +30,12 @@ RUN git clone --filter=blob:none --no-checkout \
     && git -C /tmp/ros-policy checkout "${ROS_POLICY_REF}" \
     && install -m 0755 /tmp/ros-policy/docker/scripts/install_ros2.sh /tmp/install_ros2.sh \
     && sed -i \
-        's#https://raw.githubusercontent.com/ros2/ros2/${ROS_DISTRO}/ros2.repos#/tmp/ros2.repos#' \
+        's#ros2/ros2/${ROS_DISTRO}/ros2.repos#ros2/ros2/'"${ROS2_RELEASE}"'/ros2.repos#' \
         /tmp/install_ros2.sh \
-    && grep -Fq 'vcs import --input "/tmp/ros2.repos" src' /tmp/install_ros2.sh \
+    && grep -Fq "ros2/ros2/${ROS2_RELEASE}/ros2.repos" /tmp/install_ros2.sh \
     && /tmp/install_ros2.sh "${ROS_DISTRO}" \
     && test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
-    && rm -rf /tmp/ros-policy /tmp/install_ros2.sh /tmp/ros2.repos \
+    && rm -rf /tmp/ros-policy /tmp/install_ros2.sh \
         /opt/ros2_build/src /var/lib/apt/lists/*
 
 # The wrapper and its curated source dependencies are a separate cache seam.
@@ -80,9 +80,10 @@ RUN test -f "/opt/ros/${ROS_DISTRO}/setup.bash" \
     && rm -rf /var/lib/apt/lists/*
 
 RUN printf '%s\n' \
-      'source /opt/ros/jazzy/setup.bash' \
+      "source /opt/ros/${ROS_DISTRO}/setup.bash" \
       'source /opt/zed_ros2/setup.bash' \
       'source /opt/velodyne/setup.bash' \
+      'if [ -f /opt/astro-extra/setup.bash ]; then source /opt/astro-extra/setup.bash; fi' \
       > /opt/astro-setup.bash
 
 CMD ["bash"]

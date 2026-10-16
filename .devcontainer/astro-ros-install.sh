@@ -26,10 +26,13 @@ done
 exec 9>/var/lock/astro-ros-install.lock
 flock 9
 export ROS_HOME=/var/cache/astro-ros
-source "/opt/ros/${ROS_DISTRO:?ROS_DISTRO must be set}/setup.bash"
-for overlay in /opt/zed_ros2 /opt/velodyne /opt/astro-extra; do
-    if [[ -f "$overlay/setup.bash" ]]; then source "$overlay/setup.bash"; fi
-done
+load_ros() {
+    # Base images without ROS (e.g. the CUDA image) get it from this install.
+    for overlay in "/opt/ros/${ROS_DISTRO:?ROS_DISTRO must be set}" /opt/zed_ros2 /opt/velodyne /opt/astro-extra; do
+        if [[ -f "$overlay/setup.bash" ]]; then source "$overlay/setup.bash"; fi
+    done
+}
+load_ros
 apt-get update
 debs=()
 ros_packages=()
@@ -52,6 +55,7 @@ for name in "${names[@]}"; do
 done
 if (( ${#debs[@]} )); then
     apt-get install -y --no-install-recommends "${debs[@]}"
+    load_ros
 fi
 if (( ${#missing[@]} )); then
     apt-get install -y --no-install-recommends python3-rosinstall-generator python3-vcstool

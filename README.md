@@ -154,8 +154,10 @@ VLP16 clouds (~642 KB) need a large-data DDS transport, while TF, odometry and R
 On a viewer laptop, start the relay once; Docker restarts it after reboots or container rebuilds:
 
 ```bash
-cd .devcontainer && docker compose --profile viewer up -d lidar-relay
+cd .devcontainer && docker compose --profile viewer up -d --pull always lidar-relay
 ```
+
+Rerun it to update: `--pull always` fetches the current image, while `pull_policy: missing` alone would keep whatever image the host first downloaded.
 
 To inspect full clouds from a terminal, opt that shell into the profile: `export FASTRTPS_DEFAULT_PROFILES_FILE=$ROS_WS/install/share/mhseals_nav/config/fastdds_large_data.xml`.
 
@@ -273,7 +275,7 @@ docker compose \
   build dev
 ```
 
-This builds `core`; Jetson images use their platform-specific Dockerfiles. Source-built Jazzy dependencies are locked in [`ros2-jazzy.lock.repos`](.devcontainer/ros2-jazzy.lock.repos). Use [`.github/scripts/lock-repos.py`](.github/scripts/lock-repos.py) to regenerate the lock and [`.github/scripts/check-containers.py`](.github/scripts/check-containers.py) to verify it, reviewing the `rcutils` compatibility pin when updating dependencies.
+This builds `core`; Jetson images use their platform-specific Dockerfiles. On JetPack 6, Jazzy is built from source at the upstream release snapshot named by `ROS2_RELEASE` in [`Dockerfile.deps`](.devcontainer/Dockerfile.deps); bump it to the next `release-jazzy-*` tag of [ros2/ros2](https://github.com/ros2/ros2/tags) to update.
 
 #### Image publishing and deployment
 
@@ -295,12 +297,12 @@ For standalone deployment on either Jetson generation, run the same Compose serv
 
 ```bash
 .devcontainer/prebuild.sh
-docker compose -p astro_dock_devcontainer -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml up -d dev
+docker compose -p astro_dock_devcontainer -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml up -d --pull always dev
 .devcontainer/boat-validate.sh --container roboboat_dev
 docker exec -it roboboat_dev bash
 ```
 
-For offline deployment, transfer the ARM64 image with `docker save` / `docker load`; Compose reuses the loaded image.
+Rerun the `up` command to update; `--pull always` replaces a stale local image. For offline deployment, transfer the ARM64 image with `docker save` / `docker load` and drop `--pull always`.
 
 The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.github/scripts/registry-retention.py --repository lunarzdev/astro audit`.
 

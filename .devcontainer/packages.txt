@@ -9,6 +9,7 @@ python3-libgpiod
 python3-websocket
 
 # ROS packages
+ros_base  # standard core and the full ros2 CLI, even on non-ROS base images
 cv_bridge
 gz_ros2_control
 image_transport
@@ -21,26 +22,15 @@ nav2_bringup
 nav2_core
 nmea_msgs
 robot_localization
-robot_state_publisher
 ros2_control
 ros2_controllers
-ros2action
-ros2bag
-ros2cli
-ros2launch
-ros2run
-ros2topic
 ros_gz
-rosbag2_storage_default_plugins
 rosbridge_server
-rosidl_default_generators
-rosidl_default_runtime
 rqt_graph
 rqt_tf_tree
 rtabmap_ros
 rviz2
 slam_toolbox
-tf2_ros
 topic_tools
 twist_mux
 velodyne_driver

@@ -156,9 +156,9 @@ docker run -d --name "$container" \
 step "Checking identity, ROS, CUDA, and ZED installations"
 inside 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && sudo -n true'
 inside 'source /opt/ros/jazzy/setup.bash && ros2 doctor --report'
-inside 'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix topic_tools'
+inside 'source /opt/astro-setup.bash && ros2 pkg prefix topic_tools'
 inside 'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver'
-inside 'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix vision_msgs'
+inside 'source /opt/astro-setup.bash && ros2 pkg prefix vision_msgs'
 inside 'test -d /usr/local/zed && test -f /opt/zed_ros2/setup.bash'
 inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
 step "Checking non-root CUDA and live camera data"

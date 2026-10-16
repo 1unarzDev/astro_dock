@@ -155,7 +155,6 @@ jobs:
         run: |
           key="$(sha256sum \
             .devcontainer/Dockerfile.deps \
-            .devcontainer/ros2-jazzy.lock.repos \
             .devcontainer/normalize-python-permissions.sh \
             .devcontainer/astro-ros-install.sh \
             .devcontainer/jetson-packages.txt \
