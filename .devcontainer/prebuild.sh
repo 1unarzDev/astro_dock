@@ -47,9 +47,10 @@ host_name="${host_name%%.*}"
 [[ "$host_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || {
     echo "Invalid host name: $host_name" >&2; exit 1;
 }
-# Inject into the generated adapter only. Keep the base roboboat alias for
-# existing callers; Docker adds the actual hostname to /etc/hosts itself.
-sed -i.bak "/^  dev:$/a\\
+# Inject into the generated adapter only, for every service it defines, so each
+# container is named after its device. Keep the base roboboat alias for existing
+# callers; Docker adds the actual hostname to /etc/hosts itself.
+sed -i.bak -E "/^  (dev|lidar-relay):$/a\\
     hostname: ${host_name}\\
     extra_hosts: [\"${host_name}:127.0.1.1\"]
 " "${script_dir}/docker-compose.override.yml"
