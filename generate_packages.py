@@ -4,13 +4,6 @@ import ast
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-# Load ignored packages
-ignore_file = Path(".devcontainer/package-ignore.txt")
-ignored_packages = set()
-if ignore_file.exists():
-    with open(ignore_file, "r") as f:
-        ignored_packages = {line.strip() for line in f if line.strip()}
-
 # Helper function to read existing dependencies from a file
 def read_existing(file_path):
     if file_path.exists():
@@ -78,10 +71,6 @@ for package_xml in workspace.rglob("package.xml"):
         for dep in root.findall(dep_tag):
             if dep.text:
                 dep_name = dep.text.strip()
-                if dep_name in ignored_packages:
-                    # Skip ignored packages
-                    print(f"Skipping ignored package: {dep_name}")
-                    continue
                 if dep_name in local_packages:
                     resp = input(f"⚠️  '{dep_name}' appears to be a local package. Remove from apt list? [y/N] ")
                     if resp.lower() == "y":

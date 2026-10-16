@@ -242,6 +242,13 @@ stage_devices() {
     done
     command -v udevadm >/dev/null 2>&1 && run sudo udevadm control --reload-rules
     command -v udevadm >/dev/null 2>&1 && run sudo udevadm trigger
+    # Show attached robot devices and their access so problems are visible now.
+    local device
+    for device in /dev/serial/by-id/* /dev/ttyACM* /dev/video*; do
+        if [[ -e "$device" ]]; then
+            stat -Lc '  %n  %U:%G  %A' "$device"
+        fi
+    done
     COMPLETED+=(devices)
 }
 
@@ -270,11 +277,45 @@ stage_compose() {
 }
 
 stage_clock() {
+    local servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com}) server file config service
     heading "Automatic host time synchronization"
-    echo "Configures the existing NTP client before installing packages."
-    echo "Set ASTRO_NTP_SERVER to a reachable boat-LAN time server when offline."
+    echo "Points the host's existing NTP client (chrony or systemd-timesyncd) at: ${servers[*]}."
+    echo "Containers share the host clock. Set ASTRO_NTP_SERVER only when a local time server is available."
+    for server in "${servers[@]}"; do
+        [[ "$server" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || { echo "Invalid NTP server: $server" >&2; exit 2; }
+    done
     approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
-    run sudo bash "$SCRIPT_DIR/.devcontainer/setup-time-sync.sh" "${ASTRO_NTP_SERVER:-time.cloudflare.com}"
+    file="$(mktemp)"
+    if command -v chronyd >/dev/null && ! systemctl is-active --quiet systemd-timesyncd; then
+        config=/etc/chrony.conf service=chronyd
+        [[ -f /etc/chrony/chrony.conf ]] && config=/etc/chrony/chrony.conf service=chrony
+        [[ -f "$config" ]] || { echo "Cannot locate the chrony configuration." >&2; exit 1; }
+        printf 'server %s iburst\n' "${servers[@]}" > "$file"
+        run sudo install -D -m 0644 "$file" /etc/chrony/astro-sources/boat.sources
+        grep -Fxq 'sourcedir /etc/chrony/astro-sources' "$config" \
+            || run sudo sh -c "printf '\nsourcedir /etc/chrony/astro-sources\n' >> '$config'"
+    elif systemctl list-unit-files systemd-timesyncd.service --no-legend 2>/dev/null | grep -q timesyncd; then
+        service=systemd-timesyncd
+        # FallbackNTP is ignored while NTP= is set, so list public peers explicitly.
+        printf '[Time]\nNTP=%s time.cloudflare.com time.google.com\nFallbackNTP=time.cloudflare.com\nPollIntervalMinSec=16\nPollIntervalMaxSec=64\n' \
+            "${servers[*]}" > "$file"
+        run sudo install -D -m 0644 "$file" /etc/systemd/timesyncd.conf.d/60-astro.conf
+    else
+        rm -f "$file"
+        echo "Install chrony or systemd-timesyncd, then rerun this stage." >&2
+        exit 1
+    fi
+    rm -f "$file"
+    run sudo systemctl enable --now "$service"
+    run sudo systemctl restart "$service"
+    if ! $DRY_RUN; then
+        for _ in $(seq 30); do
+            [[ "$(timedatectl show -p NTPSynchronized --value)" == yes ]] && break
+            sleep 1
+        done
+        [[ "$(timedatectl show -p NTPSynchronized --value)" == yes ]] \
+            || echo "NTP is not synchronized yet; check the network before installing packages." >&2
+    fi
     COMPLETED+=(clock)
 }
 
@@ -340,7 +381,7 @@ main() {
     if [[ " ${COMPLETED[*]} " == *" docker " || " ${COMPLETED[*]} " == *" devices " ]]; then
         echo "Log out and back in before relying on new group memberships."
     fi
-    echo "Run .devcontainer/device-diagnostics.sh to inspect Cube/ZED access."
+    echo "Rerun ./setup.linux.sh --components devices to reapply and list device access."
 }
 
 main

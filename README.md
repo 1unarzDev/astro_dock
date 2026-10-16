@@ -180,7 +180,7 @@ ros2 action send_goal /compute_path_to_pose nav2_msgs/action/ComputePathToPose \
 
 `ComputePathToPose` exercises the planner and publishes `/plan` without driving a thruster. `/local_plan` is produced only while a controller is following a path. In RViz on the viewer laptop, add `/points`, `/map`, `/global_costmap/costmap`, `/local_costmap/costmap`, `/plan`, `/local_plan`, TF, and TF Static; all use ROS domain 42 and the normal DDS transport.
 
-For device access problems, run `.devcontainer/device-diagnostics.sh` on the host and inside the container to compare access. Reapply `./setup.linux.sh --components devices` after a JetPack upgrade if permissions change. Use scoped device rules rather than recursive permission changes under `/dev`.
+`./setup.linux.sh --components devices` lists attached serial and camera devices with their owners and modes; rerun it after a JetPack upgrade if permissions change. Use scoped device rules rather than recursive permission changes under `/dev`.
 
 Containers share the host clock. For an isolated network with a reachable NTP server, configure it on each Linux host before running timestamp-sensitive nodes or package updates:
 
@@ -189,7 +189,7 @@ Containers share the host clock. For an isolated network with a reachable NTP se
 timedatectl status
 ```
 
-Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. [`.devcontainer/Dockerfile.time-server`](.devcontainer/Dockerfile.time-server) and [`time-server.conf`](.devcontainer/time-server.conf) provide a chrony relay for an internet-connected Linux host; adjust the allowed subnet before using it. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
+Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
 
 If a Linux host has the wrong time, the common systemd recovery path is:
 
@@ -273,7 +273,7 @@ docker compose \
   build dev
 ```
 
-This builds `core`; Jetson images use their platform-specific Dockerfiles. Source-built Jazzy dependencies are locked in [`ros2-jazzy.lock.repos`](.devcontainer/ros2-jazzy.lock.repos). Use `lock-repos.py` to regenerate the lock and `check-dependency-lock.py` to verify it, reviewing the `rcutils` compatibility pin when updating dependencies.
+This builds `core`; Jetson images use their platform-specific Dockerfiles. Source-built Jazzy dependencies are locked in [`ros2-jazzy.lock.repos`](.devcontainer/ros2-jazzy.lock.repos). Use [`.github/scripts/lock-repos.py`](.github/scripts/lock-repos.py) to regenerate the lock and [`.github/scripts/check-containers.py`](.github/scripts/check-containers.py) to verify it, reviewing the `rcutils` compatibility pin when updating dependencies.
 
 #### Image publishing and deployment
 
@@ -291,16 +291,17 @@ Runtime tags select the current validated image, with `-prev` and `-old` retaini
 
 Validation checks the container user, ROS, non-root CUDA, and live camera messages. Promotion repeats validation and rotates the JetPack 6 release tags only after it passes. Stop any existing camera publisher before validation.
 
-For standalone deployment on either Jetson generation, use the matching runtime image:
+For standalone deployment on either Jetson generation, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 5 (Foxy) or 6 (Jazzy) image and domain, and the Jetson adapter restarts the container after reboots:
 
 ```bash
-.devcontainer/deploy-jetson.sh lunarzdev/astro:jetson-jp6-jazzy "$PWD"
-.devcontainer/validate-jetson-runtime.sh roboboat_dev
+.devcontainer/prebuild.sh
+docker compose -p astro_dock_devcontainer -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml up -d dev
+.devcontainer/boat-validate.sh --container roboboat_dev
 docker exec -it roboboat_dev bash
 ```
 
-Use `jetson-jp5-foxy` on R35. The deploy script checks architecture and JetPack compatibility and refuses to replace an existing `roboboat_dev`. For offline deployment, transfer an ARM64 image with `docker save` / `docker load`; deployment reuses the loaded image.
+For offline deployment, transfer the ARM64 image with `docker save` / `docker load`; Compose reuses the loaded image.
 
-The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.devcontainer/registry-retention.py --repository lunarzdev/astro audit`.
+The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.github/scripts/registry-retention.py --repository lunarzdev/astro audit`.
 
 Keep changes scoped, explain their purpose and validation in the pull request, and update this README when setup, usage, or architecture changes. Run ROS probes in an isolated container/domain without attached actuators.

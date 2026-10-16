@@ -85,7 +85,7 @@ jobs:
             --tag "${REGISTRY_IMAGE}:core-next" \
             "${REGISTRY_IMAGE}:core-amd64" \
             "${REGISTRY_IMAGE}:core-arm64"
-          .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+          .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" \
             rotate core core-next
 
   amd64-images:
@@ -136,7 +136,7 @@ jobs:
           TAG: ${{ matrix.tag }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" rotate "$TAG" "${TAG}-next"
+        run: .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" rotate "$TAG" "${TAG}-next"
 
   deps:
     runs-on: ${{ inputs.arm64_builder == 'self-hosted' && fromJSON('["self-hosted","linux","ARM64","arm64-builder"]') || 'ubuntu-24.04-arm' }}
@@ -202,7 +202,7 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" rotate deps deps-next --depth 2
+        run: .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" rotate deps deps-next --depth 2
 
   jetson-candidate:
     needs: deps
@@ -245,7 +245,7 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          output="$(.devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+          output="$(.github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" \
             candidate --family jetson-jp6-jazzy "${REGISTRY_IMAGE}@${CANDIDATE_DIGEST}")"
           echo "$output"
           slot="$(grep '^slot=' <<<"$output" | tail -1 | cut -d= -f2-)"

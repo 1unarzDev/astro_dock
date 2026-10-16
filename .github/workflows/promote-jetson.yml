@@ -44,5 +44,5 @@ jobs:
           image="lunarzdev/astro@${DIGEST}"
           labels="$(docker buildx imagetools inspect --format '{{json .Image.Config.Labels}}' "$image")"
           jq -e --arg expected "$expected" '."org.astro.jetpack" == $expected' <<<"$labels"
-          .devcontainer/registry-retention.py rotate "$FAMILY" "$image"
+          .github/scripts/registry-retention.py rotate "$FAMILY" "$image"
           printf 'Promoted %s at %s\n\n%s\n' "$FAMILY" "$DIGEST" "$VALIDATION" >> "$GITHUB_STEP_SUMMARY"

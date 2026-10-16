@@ -36,7 +36,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Capture pre-operation inventory
-        run: .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" snapshot docker-hub-before.json
+        run: .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" snapshot docker-hub-before.json
       - uses: actions/upload-artifact@v4
         with:
           name: docker-hub-inventory-${{ github.run_id }}
@@ -50,16 +50,16 @@ jobs:
         run: |
           case "$MODE" in
             audit)
-              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" audit
+              .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" audit
               ;;
             prune)
-              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+              .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" \
                 prune --count 5 --days 30
               ;;
             migrate)
-              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+              .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" \
                 migrate --apply
-              .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" \
+              .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" \
                 prune --count 5 --days 30
               ;;
             *)
@@ -69,4 +69,4 @@ jobs:
           esac
       - name: Report final inventory
         if: always()
-        run: .devcontainer/registry-retention.py --repository "$REGISTRY_IMAGE" audit >> "$GITHUB_STEP_SUMMARY"
+        run: .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" audit >> "$GITHUB_STEP_SUMMARY"
