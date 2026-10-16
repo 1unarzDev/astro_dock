@@ -4,7 +4,7 @@ on:
     branches: [main]
     paths:
       - '.devcontainer/Dockerfile.jetson-jp5'
-      - '.devcontainer/jetson-jp5-packages.txt'
+      - '.devcontainer/jetson-packages.txt'
       - '.devcontainer/astro-ros-install.sh'
       - '.devcontainer/jetson-user.sh'
       - '.devcontainer/configure-zed-access.sh'

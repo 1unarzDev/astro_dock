@@ -77,9 +77,8 @@ for package_xml in workspace.rglob("package.xml"):
                         continue
                 apt_packages.add(dep_name)
 
-ros_distro = os.environ.get("ROS_DISTRO", "jazzy")
-apt_packages = {f"ros-{ros_distro}-{p.replace('_', '-')}" for p in apt_packages}
-apt_file = Path("apt-packages.txt")
+# astro-ros-install resolves ROS names to the current distro's debs.
+apt_file = Path("packages.txt")
 if apt_packages:
     added_count = append_to_file(apt_file, apt_packages)
     print(f"✅ Updated {apt_file} with {added_count} new packages.")

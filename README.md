@@ -35,7 +35,7 @@ Images supply the platform dependencies; the mounted workspace supplies your app
 
 [`docker-compose.yml`](.devcontainer/docker-compose.yml) defines the shared services. `prebuild.sh` copies a host adapter to the ignored `docker-compose.override.yml`, which Dev Containers merges after the base file. Adapters add display sockets, devices, NVIDIA runtime settings, or immutable-host mounts as needed; The probe preserves the host hostname and maps device group IDs; Jetson detection also selects the JetPack image and DDS domain. Rerunning the probe regenerates this file, so keep persistent changes in an adapter or an additional override.
 
-Extend the environment at the layer that owns the change: add application packages under `src/`, reusable dependencies to [`apt-packages.txt`](.devcontainer/apt-packages.txt), [`requirements.txt`](.devcontainer/requirements.txt), or the Jetson package lists, and host mounts or services to a Compose override. Add another `-f` file after the base and host adapter for project-specific settings; later files override earlier values according to Compose's merge rules. For Dev Containers, include that file in `devcontainer.json`'s `dockerComposeFile` list. `ASTRO_IMAGE` selects a custom runtime image without changing the adapter.
+Extend the environment at the layer that owns the change: add application packages under `src/`, reusable dependencies to [`packages.txt`](.devcontainer/packages.txt) (ROS package names such as `nav2_bringup`, or apt package names; no distro prefix) or [`requirements.txt`](.devcontainer/requirements.txt) (pip), or Jetson-only packages to [`jetson-packages.txt`](.devcontainer/jetson-packages.txt), and host mounts or services to a Compose override. Add another `-f` file after the base and host adapter for project-specific settings; later files override earlier values according to Compose's merge rules. For Dev Containers, include that file in `devcontainer.json`'s `dockerComposeFile` list. `ASTRO_IMAGE` selects a custom runtime image without changing the adapter.
 
 ### Setup
 
@@ -261,7 +261,7 @@ colcon test --packages-select your_package
 colcon test-result --verbose
 ```
 
-On either Jetson image, `sudo -E astro-ros-install <package>` installs a ROS package using distro packages where available and source builds otherwise. Source additions live in `/opt/astro-extra`; open a new shell afterward. To persist additions across recreation, add package names to [`jetson-jp5-packages.txt`](.devcontainer/jetson-jp5-packages.txt) or [`jetson-jp6-packages.txt`](.devcontainer/jetson-jp6-packages.txt) and rebuild the image.
+On any image, `sudo -E astro-ros-install <name>` installs a package by distro-independent name: ROS package names resolve to the image's `ros-$ROS_DISTRO-*` debs, with a source build when no deb exists, and other names install from apt. Source additions live in `/opt/astro-extra`; open a new shell afterward. To persist additions across recreation, add the names to [`packages.txt`](.devcontainer/packages.txt) or [`jetson-packages.txt`](.devcontainer/jetson-packages.txt) and rebuild the image.
 
 For a local `core` image build, add the build override from the host:
 

@@ -1,0 +1,51 @@
+# Dev and CUDA images, installed by astro-ros-install. ROS package names resolve to
+# ros-$ROS_DISTRO-* debs (or a source build); other names install from apt as-is.
+
+# System packages
+geographiclib-tools
+python3-scipy
+python3-rich
+python3-libgpiod
+python3-websocket
+
+# ROS packages
+cv_bridge
+gz_ros2_control
+image_transport
+image_transport_plugins
+joint_state_publisher
+joint_state_publisher_gui
+mavros
+mavros_extras
+nav2_bringup
+nav2_core
+nmea_msgs
+robot_localization
+robot_state_publisher
+ros2_control
+ros2_controllers
+ros2action
+ros2bag
+ros2cli
+ros2launch
+ros2run
+ros2topic
+ros_gz
+rosbag2_storage_default_plugins
+rosbridge_server
+rosidl_default_generators
+rosidl_default_runtime
+rqt_graph
+rqt_tf_tree
+rtabmap_ros
+rviz2
+slam_toolbox
+tf2_ros
+topic_tools
+twist_mux
+velodyne_driver
+velodyne_pointcloud
+vision_msgs
+vision_msgs_rviz_plugins
+xacro
+zed_msgs

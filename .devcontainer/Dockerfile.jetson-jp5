@@ -32,10 +32,9 @@ RUN git clone https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed_ws/src
 COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
 COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
 COPY jetson-user.sh /usr/local/sbin/jetson-user
-COPY jetson-jp5-packages.txt /tmp/jetson-packages.txt
+COPY jetson-packages.txt /tmp/jetson-packages.txt
 RUN chmod +x /usr/local/bin/astro-ros-install /usr/local/sbin/jetson-user \
-    && sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' /tmp/jetson-packages.txt \
-       | xargs -r /usr/local/bin/astro-ros-install
+    && /usr/local/bin/astro-ros-install --file /tmp/jetson-packages.txt
 COPY dev.helper.txt /home/roboboat/.helper.txt
 # Foxy's last rosapi release crashes metadata discovery for image byte arrays.
 COPY rosapi-foxy-sequences.patch /tmp/rosapi-foxy-sequences.patch

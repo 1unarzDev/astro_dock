@@ -1,38 +1,58 @@
 #!/usr/bin/env bash
-# Same interface on JP5/Foxy and JP6/Jazzy: binary first, source fallback.
+# Install packages by distro-independent name on every Astro image (Foxy or Jazzy).
+# A ROS package name (nav2_bringup) installs ros-$ROS_DISTRO-nav2-bringup; any other
+# name installs from apt as-is; ROS packages without a deb are built from source.
 set -eo pipefail
 if [[ $# == 0 || "$1" == --help ]]; then
-    echo 'Usage: sudo -E astro-ros-install [--source] ROS_PACKAGE [ROS_PACKAGE ...]'
-    echo 'Installs available distro debs; resolves/builds missing source dependencies.'
+    echo 'Usage: sudo -E astro-ros-install [--source] NAME [NAME ...]'
+    echo '       sudo -E astro-ros-install --file LIST   (one name per line, # comments)'
     echo 'Source installs live in /opt/astro-extra; open a new shell afterward.'
-    echo 'For persistent images add names to jetson-jp5-packages.txt or jetson-jp6-packages.txt.'
+    echo 'For persistent images add names to packages.txt or jetson-packages.txt.'
     exit 0
 fi
 [[ $EUID == 0 ]] || { echo 'Run with sudo -E.' >&2; exit 1; }
 force_source=false
 if [[ "$1" == --source ]]; then force_source=true; shift; fi
-(( $# )) || { echo 'Specify at least one ROS package.' >&2; exit 2; }
+if [[ "$1" == --file ]]; then
+    mapfile -t names < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "${2:?--file needs a path}")
+else
+    names=("$@")
+fi
+(( ${#names[@]} )) || { echo 'Specify at least one package.' >&2; exit 2; }
+ros_name='^[a-z][a-z0-9_]*$'
+for name in "${names[@]}"; do
+    [[ "$name" =~ ^[a-z0-9][a-z0-9.+_-]*$ ]] || { echo "Invalid package name: $name" >&2; exit 2; }
+done
 exec 9>/var/lock/astro-ros-install.lock
 flock 9
 export ROS_HOME=/var/cache/astro-ros
-for package in "$@"; do
-    [[ "$package" =~ ^[a-z][a-z0-9_]*$ ]] || { echo "Invalid ROS package: $package" >&2; exit 2; }
-done
 source "/opt/ros/${ROS_DISTRO:?ROS_DISTRO must be set}/setup.bash"
 for overlay in /opt/zed_ros2 /opt/velodyne /opt/astro-extra; do
     if [[ -f "$overlay/setup.bash" ]]; then source "$overlay/setup.bash"; fi
 done
 apt-get update
+debs=()
+ros_packages=()
 missing=()
-for package in "$@"; do
-    if ros2 pkg prefix "$package" >/dev/null 2>&1; then continue; fi
-    deb="ros-${ROS_DISTRO}-${package//_/-}"
-    if ! $force_source && apt-cache show "$deb" >/dev/null 2>&1; then
-        apt-get install -y --no-install-recommends "$deb"
+for name in "${names[@]}"; do
+    deb="ros-${ROS_DISTRO}-${name//_/-}"
+    if [[ "$name" =~ $ros_name ]] && ros2 pkg prefix "$name" >/dev/null 2>&1; then
+        ros_packages+=("$name")
+    elif ! $force_source && apt-cache show "$deb" >/dev/null 2>&1; then
+        debs+=("$deb")
+        ros_packages+=("$name")
+    elif ! $force_source && apt-cache show "$name" >/dev/null 2>&1; then
+        debs+=("$name")
+    elif [[ "$name" =~ $ros_name ]]; then
+        missing+=("$name")
+        ros_packages+=("$name")
     else
-        missing+=("$package")
+        echo "No ROS or apt package named $name" >&2; exit 1
     fi
 done
+if (( ${#debs[@]} )); then
+    apt-get install -y --no-install-recommends "${debs[@]}"
+fi
 if (( ${#missing[@]} )); then
     apt-get install -y --no-install-recommends python3-rosinstall-generator python3-vcstool
     if [[ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]]; then rosdep init; fi
@@ -56,4 +76,4 @@ if (( ${#missing[@]} )); then
     # Delete only this command's successful temporary workspace.
     rm -rf "$work"
 fi
-for package in "$@"; do ros2 pkg prefix "$package"; done
+for package in "${ros_packages[@]}"; do ros2 pkg prefix "$package"; done

@@ -10,7 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ROS_WS=/home/roboboat/roboboat_ws \
     PATH=/workspace/venv/bin:${PATH}
 
-COPY apt-packages.txt requirements.txt /tmp/astro/
+COPY packages.txt requirements.txt /tmp/astro/
+COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
 COPY pip.conf /etc/pip.conf
 COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
@@ -28,7 +29,7 @@ RUN apt-get update \
          apt-get update; \
        fi \
     && apt-get install -y --no-install-recommends python3-colcon-common-extensions python3-rosdep \
-    && xargs -r apt-get install -y --no-install-recommends < /tmp/astro/apt-packages.txt \
+    && astro-ros-install --file /tmp/astro/packages.txt \
     && python3 -m venv --system-site-packages /workspace/venv \
     && /workspace/venv/bin/pip install --upgrade pip \
     && /workspace/venv/bin/pip install --no-cache-dir -r /tmp/astro/requirements.txt \
