@@ -6,7 +6,7 @@ set -eo pipefail
 if [[ $# == 0 || "$1" == --help ]]; then
     echo 'Usage: sudo -E astro-ros-install [--source] NAME [NAME ...]'
     echo '       sudo -E astro-ros-install --file LIST   (one name per line, # comments)'
-    echo 'Source installs live in /opt/astro-extra; open a new shell afterward.'
+    echo 'Source installs live in /opt/astro-extra; container shells reload after this command.'
     echo 'For persistent images add names to packages.txt or jetson-packages.txt.'
     exit 0
 fi

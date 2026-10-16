@@ -1,8 +1,7 @@
 BOAT COMMANDS
 
 Build
-  colcon build --packages-select mhseals_nav mhseals_hardware
-  source install/setup.bash
+  colcon build --packages-select mhseals_nav mhseals_hardware  # the shell reloads itself
 
 Launch
   ros2 launch mhseals_nav robot.launch.py sim:=true

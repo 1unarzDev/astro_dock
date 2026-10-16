@@ -78,9 +78,10 @@ Add your project's ROS packages under `src/` inside the container. [`optional_re
 
 ```bash
 colcon build --symlink-install
-source install/setup.bash
 help
 ```
+
+Container shells load ROS, the image overlays and the workspace at startup, and reload them after a successful `colcon build` or `astro-ros-install`; run `ros_env` to reload by hand.
 
 Camera images already include the ZED wrapper. Only clone it when developing the driver, and match the revision pinned in the corresponding Dockerfile. On JetPack 5, use `humble-v4.0.8` with its recursive submodules; the optional clone helper defaults to `master`, which is incompatible with that image.
 
@@ -258,12 +259,11 @@ Develop application packages inside the container. After adding packages or chan
 ```bash
 ASTRO_ROSDEP_INSTALL=1 .devcontainer/postcreate.sh
 colcon build --symlink-install --packages-select your_package
-source install/setup.bash
 colcon test --packages-select your_package
 colcon test-result --verbose
 ```
 
-On any image, `sudo -E astro-ros-install <name>` installs a package by distro-independent name: ROS package names resolve to the image's `ros-$ROS_DISTRO-*` debs, with a source build when no deb exists, and other names install from apt. Source additions live in `/opt/astro-extra`; open a new shell afterward. To persist additions across recreation, add the names to [`packages.txt`](.devcontainer/packages.txt) or [`jetson-packages.txt`](.devcontainer/jetson-packages.txt) and rebuild the image.
+On any image, `astro-ros-install <name>` (it adds `sudo -E` in container shells) installs a package by distro-independent name: ROS package names resolve to the image's `ros-$ROS_DISTRO-*` debs, with a source build when no deb exists, and other names install from apt. Source additions live in `/opt/astro-extra`. To persist additions across recreation, add the names to [`packages.txt`](.devcontainer/packages.txt) or [`jetson-packages.txt`](.devcontainer/jetson-packages.txt) and rebuild the image.
 
 For a local `core` image build, add the build override from the host:
 
