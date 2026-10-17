@@ -21,6 +21,7 @@ mavros_extras
 nav2_bringup
 nav2_core
 nav2_mppi_controller
+nav2_smac_planner
 spatio_temporal_voxel_layer
 nmea_msgs
 py_trees  # mhseals_nav task trees
