@@ -170,10 +170,11 @@ if [[ "$jetpack" == 6 ]]; then
     inside 'source /opt/astro-setup.bash && ros2 pkg prefix topic_tools'
     inside 'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver'
     inside 'source /opt/astro-setup.bash && ros2 pkg prefix vision_msgs'
+    inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
 fi
 inside "source /opt/ros/${distro}/setup.bash && source /opt/zed_ros2/setup.bash && ros2 pkg prefix zed_wrapper && ros2 pkg prefix compressed_image_transport && ros2 pkg prefix rosbridge_server"
 inside 'test -d /usr/local/zed && test -f /opt/zed_ros2/setup.bash'
-inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
+# The headless JP5 SDK omits GUI tools; CUDA and live frames are checked below.
 step "Checking non-root CUDA and live camera data"
 validate_runtime "$container"
 

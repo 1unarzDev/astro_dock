@@ -84,6 +84,8 @@ echo "retention $*" >> "$MOCK_LOG"
                               commands)
                 self.assertEqual('pkg prefix topic_tools' in commands,
                                  jetpack == '6')
+                self.assertEqual('test -x /usr/local/zed/tools/ZED_Diagnostic'
+                                 in commands, jetpack == '6')
                 self.assertIn('rm -f astro_boat_validate_', commands)
 
     def test_mismatched_image_never_starts_a_container(self):
