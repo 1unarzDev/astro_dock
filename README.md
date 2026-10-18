@@ -144,6 +144,8 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 
 In Foxglove, choose **Rosbridge**, connect to `ws://<jetson-host>:9090`, and select an image topic. Inspect `ros2 topic list` because ZED 4 and 5 topic names differ. Keep the unauthenticated connection on a trusted LAN.
 
+For JP5 buoy detection, use `ros2 launch mhseals_nav legacy_zed.launch.py` instead of the two standalone commands. It adds TensorRT inference for SDK 4; [mhseals_nav's README](https://github.com/MHSeals/mhseals_nav#architecture) covers the ODROID bridge and the `/objects/map`, `/objects/points`, and RViz marker outputs shared with Unity.
+
 Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching their domain IDs can cause discovery failures and crashes. Use an explicit cross-version bridge for shared data. Jazzy RViz cannot directly view the Foxy camera stream; use Foxglove or a matching Foxy environment. `ASTRO_ROS_DOMAIN_ID` overrides the Jetson default for networks with compatible peers.
 
 #### Lidar DDS transport
@@ -151,7 +153,7 @@ Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching th
 VLP16 clouds (~642 KB) need a large-data DDS transport, while TF, odometry and RViz stay on the default one. Both halves live in `mhseals_nav`:
 
 - `config/fastdds_large_data.xml` is the single large-data profile (Fast DDS `LARGE_DATA` with netmask filtering, so hosts with Wi-Fi, WARP or Docker interfaces still reach the boat). `sensors.launch.py` applies it to the Velodyne driver and transform only.
-- `lidar_relay` runs on the viewer as two processes, because Fast DDS picks a transport per process: one receives `/points` on the large-data profile and pipes it to the other, which republishes a decimated cloud (32 KiB payload, one reliable writer for RViz and Nav2) on the default transport.
+- `lidar_relay` runs on each consumer host as two processes, because Fast DDS picks a transport per process: one receives `/points` on the large-data profile and pipes it to the other, which republishes a decimated cloud (32 KiB payload, one reliable writer for RViz and Nav2) locally on the default transport. The boat's hardware sensor launch starts its relay; each viewer runs its own, avoiding duplicate scans across hosts.
 
 On a viewer laptop, start the relay once; Docker restarts it after reboots or container rebuilds:
 
@@ -165,7 +167,7 @@ To inspect full clouds from a terminal, opt that shell into the profile: `export
 
 #### Lidar-only RTAB-Map and Nav2 commissioning
 
-The current physical stack publishes VLP16 data as `/points`, not `sensor_msgs/LaserScan` on `/scan`, and the Jetson camera is optional on a separate ROS domain. The checked-in RTAB-Map profile therefore uses `subscribe_scan_cloud: true` and remaps `scan_cloud` to `/points`; RGB/depth are disabled so a stopped camera cannot block map updates. Start mapping and navigation on the ODROID after the sensor/odom terminals and the persistent point-cloud bridge are running:
+The current physical stack publishes VLP16 data as `/points`, not `sensor_msgs/LaserScan` on `/scan`, and the Jetson camera is optional on a separate ROS domain. The checked-in RTAB-Map profile therefore uses `subscribe_scan_cloud: true` and remaps `scan_cloud` to `/points`; RGB/depth are disabled so a stopped camera cannot block map updates. Start mapping and navigation on the ODROID after hardware sensors (which start the local relay) and odometry are running:
 
 ```bash
 ros2 launch mhseals_nav slam.launch.py sim:=false
