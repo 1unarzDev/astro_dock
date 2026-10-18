@@ -263,7 +263,7 @@ jobs:
             echo "Validate the immutable digest on the boat:"
             echo
             echo '```bash'
-            echo 'gh workflow run promote-jetson.yml -f family=jetson-jp6-jazzy'
+            echo './promote_jetson.sh jp6 user@your-jp6-host'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

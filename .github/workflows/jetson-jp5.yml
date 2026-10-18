@@ -58,7 +58,7 @@ jobs:
           jq -n --arg family jetson-jp5-foxy --arg digest "$DIGEST" \
             --arg revision "$GITHUB_SHA" \
             '{family: $family, digest: $digest, revision: $revision}' > candidate.json
-          echo 'Promote on hardware: `gh workflow run promote-jetson.yml -f family=jetson-jp5-foxy`' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Promote on hardware: `./promote_jetson.sh jp5`' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: jetson-jp5-foxy-candidate
