@@ -25,6 +25,7 @@ nav2_smac_planner
 spatio_temporal_voxel_layer
 nmea_msgs
 py_trees  # mhseals_nav task trees
+rmw_cyclonedds_cpp
 robot_localization
 ros2_control
 ros2_controllers

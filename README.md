@@ -55,7 +55,7 @@ On Linux, preview the host setup before applying it:
 ./setup.linux.sh
 ```
 
-The script configures host time synchronization, Docker, NVIDIA container support, scoped device rules, development tools, and the Compose adapter. It can also install the optional lidar/TF DDS bridge on a Jazzy viewer host. It asks before each stage and supports Debian/Ubuntu, Arch, Fedora, RHEL derivatives, immutable Fedora hosts, and Ubuntu Core. Use `--components clock,docker,devices,compose` to select stages, or `--non-interactive --yes` for provisioning. An NVIDIA driver must already be installed when needed.
+The script configures host time synchronization, Docker, NVIDIA container support, scoped device rules, development tools, and the Compose adapter. It asks before each stage and supports Debian/Ubuntu, Arch, Fedora, RHEL derivatives, immutable Fedora hosts, and Ubuntu Core. Use `--components clock,docker,devices,compose` to select stages, or `--non-interactive --yes` for provisioning. An NVIDIA driver must already be installed when needed.
 
 On Windows or macOS, use `setup.windows.bat` or `./setup.mac.sh` and keep Docker Desktop running. Container GUI applications additionally need [VcXsrv](https://sourceforge.net/projects/vcxsrv/) on Windows or [XQuartz](https://www.xquartz.org/) on macOS, with network connections enabled. Graphics and hardware access depend on the host; use native Linux for robotics hardware.
 
@@ -150,20 +150,14 @@ Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching th
 
 #### Lidar DDS transport
 
-VLP16 clouds (~642 KB) need a large-data DDS transport, while TF, odometry and RViz stay on the default one. Both halves live in `mhseals_nav`:
+VLP16 clouds (~642 KB) use a separate large-data DDS transport. Compose and Jazzy container shells load `config/fastdds.xml` for the normal TF, odometry and RViz graph: its 1400-byte UDP messages avoid IP fragment-buffer stalls when viewing maps and costmaps together.
 
-- `config/fastdds_large_data.xml` is the single large-data profile (Fast DDS `LARGE_DATA` with netmask filtering, so hosts with Wi-Fi, WARP or Docker interfaces still reach the boat). `sensors.launch.py` applies it to the Velodyne driver and transform only.
-- `lidar_relay` runs on each consumer host as two processes, because Fast DDS picks a transport per process: one receives `/points` on the large-data profile and pipes it to the other, which republishes a decimated cloud (32 KiB payload, one reliable writer for RViz and Nav2) locally on the default transport. The boat's hardware sensor launch starts its relay; each viewer runs its own, avoiding duplicate scans across hosts.
+- `mhseals_nav/config/fastdds_large_data.xml` uses TCP with netmask filtering and TCP_NODELAY. SHM stays disabled here to keep raw and relayed `/points` separate. `sensors.launch.py` applies it to the Velodyne driver and transform only.
+- `lidar_relay` runs once on the sensor host as two processes with separate transports. It receives full `/points`, preserves all 16 rings while reducing the payload to 32 KiB, and publishes one reliable `/points` writer on normal DDS for both Nav2 and remote RViz. The hardware sensor launch starts it automatically. Its reader keeps only the latest scan; the output publishes asynchronously so viewer delays stay separate from sensor ingestion.
 
-On a viewer laptop, start the relay once; Docker restarts it after reboots or container rebuilds:
+Viewers only run `rviz2` in a container shell; the helper keeps `config/dark.rviz` and uses Cyclone DDS when installed on Jazzy to avoid redundant traffic across a laptop's multiple interfaces. The core image includes it. No viewer relay or transport export is needed. If an older setup created `astro_lidar_relay`, remove it once with `docker rm -f astro_lidar_relay` to avoid duplicate scans. The checked-in profiles use no device addresses and load again after container recreation or reboot.
 
-```bash
-cd .devcontainer && docker compose --profile viewer up -d --pull always lidar-relay
-```
-
-Rerun it to update: `--pull always` fetches the current image, while `pull_policy: missing` alone would keep whatever image the host first downloaded.
-
-To inspect full clouds from a terminal, opt that shell into the profile: `export FASTRTPS_DEFAULT_PROFILES_FILE=$ROS_WS/install/share/mhseals_nav/config/fastdds_large_data.xml`.
+To inspect full clouds on the sensor host, set both `FASTRTPS_DEFAULT_PROFILES_FILE` and `FASTDDS_DEFAULT_PROFILES_FILE` to `$ROS_WS/install/share/mhseals_nav/config/fastdds_large_data.xml` in a dedicated shell.
 
 #### Lidar-only RTAB-Map and Nav2 commissioning
 

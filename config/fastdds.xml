@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Default Jazzy graph: DDS fragments fit a 1500-byte LAN MTU, avoiding
+     IP reassembly stalls when RViz subscribes to maps and costmaps together.
+     Large raw LiDAR uses mhseals_nav/config/fastdds_large_data.xml instead. -->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+<profiles>
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>mtu_udp</transport_id>
+      <type>UDPv4</type>
+      <maxMessageSize>1400</maxMessageSize>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>local_shm</transport_id>
+      <type>SHM</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="boat_default" is_default_profile="true">
+    <rtps>
+      <userTransports><transport_id>mtu_udp</transport_id><transport_id>local_shm</transport_id></userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>
+</dds>

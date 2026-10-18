@@ -36,10 +36,23 @@ fi
 # Terminals use the default DDS transport; the lidar participants opt into
 # mhseals_nav/config/fastdds_large_data.xml from their launch files.
 unset FASTDDS_BUILTIN_TRANSPORTS
+if [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$ROS_WS/config/fastdds.xml" ]]; then
+  export FASTRTPS_DEFAULT_PROFILES_FILE="$ROS_WS/config/fastdds.xml"
+  export FASTDDS_DEFAULT_PROFILES_FILE="$FASTRTPS_DEFAULT_PROFILES_FILE"
+fi
 export GZ_SIM_RESOURCE_PATH="${ROS_WS}/src/asv_wave_sim/gz-waves-models/models:${ROS_WS}/src/asv_wave_sim/gz-waves-models/world_models:${ROS_WS}/src/asv_wave_sim/gz-waves-models/worlds${GZ_SIM_RESOURCE_PATH:+:${GZ_SIM_RESOURCE_PATH}}"
 export GZ_SIM_SYSTEM_PLUGIN_PATH="${ROS_WS}/install/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:${GZ_SIM_SYSTEM_PLUGIN_PATH}}"
 
-alias rviz2="rviz2 -d $ROS_WS/config/dark.rviz --stylesheet $ROS_WS/config/dark.qss"
+unalias rviz2 2>/dev/null || true
+rviz2() {
+  local middleware="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+  # Cyclone advertises one interface, avoiding duplicate traffic on viewer
+  # laptops with Ethernet, Wi-Fi and several addresses on the boat subnet.
+  if [[ "${ROS_DISTRO:-}" == jazzy && -f "/opt/ros/jazzy/lib/librmw_cyclonedds_cpp.so" ]]; then
+    middleware=rmw_cyclonedds_cpp
+  fi
+  RMW_IMPLEMENTATION="$middleware" command rviz2 -d "$ROS_WS/config/dark.rviz" --stylesheet "$ROS_WS/config/dark.qss" "$@"
+}
 alias rqt_tf_tree="ros2 run rqt_tf_tree rqt_tf_tree"
 
 help() {
