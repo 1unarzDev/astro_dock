@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: jetson-jp5-foxy-build
+  group: docker-hub-mutations
   cancel-in-progress: false
 jobs:
   legacy:
@@ -28,7 +28,8 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: .devcontainer
           file: .devcontainer/Dockerfile.jetson-jp5
@@ -46,3 +47,20 @@ jobs:
         run: |
           docker run --rm --user root lunarzdev/astro:jetson-jp5-foxy-next \
             astro-ros-install --source examples_rclcpp_minimal_publisher
+      - name: Retain successful candidate
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          .github/scripts/registry-retention.py candidate \
+            --family jetson-jp5-foxy "lunarzdev/astro@${DIGEST}"
+          jq -n --arg family jetson-jp5-foxy --arg digest "$DIGEST" \
+            --arg revision "$GITHUB_SHA" \
+            '{family: $family, digest: $digest, revision: $revision}' > candidate.json
+          echo 'Promote on hardware: `gh workflow run promote-jetson.yml -f family=jetson-jp5-foxy`' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jetson-jp5-foxy-candidate
+          path: candidate.json
+          retention-days: 30
