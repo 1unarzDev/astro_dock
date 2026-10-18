@@ -249,6 +249,9 @@ jobs:
           echo "$output"
           slot="$(grep '^slot=' <<<"$output" | tail -1 | cut -d= -f2-)"
           digest="$(grep '^digest=' <<<"$output" | tail -1 | cut -d= -f2-)"
+          jq -n --arg family jetson-jp6-jazzy --arg digest "$digest" \
+            --arg revision "$GITHUB_SHA" \
+            '{family: $family, digest: $digest, revision: $revision}' > candidate.json
           {
             echo "### Jetson candidate"
             echo
@@ -257,6 +260,11 @@ jobs:
             echo "Validate the immutable digest on the boat:"
             echo
             echo '```bash'
-            echo ".devcontainer/boat-validate.sh --promote ${REGISTRY_IMAGE}@${digest}"
+            echo 'gh workflow run promote-jetson.yml -f family=jetson-jp6-jazzy'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jetson-jp6-jazzy-candidate
+          path: candidate.json
+          retention-days: 30

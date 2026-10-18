@@ -20,6 +20,8 @@ jobs:
         run: bash -n setup.linux.sh .devcontainer/*.sh
       - name: Validate registry retention policy
         run: .github/scripts/test-registry-retention.py
+      - name: Validate Jetson hardware gates
+        run: python3 .github/scripts/test-jetson-validation.py
       - name: Check dependency locks, Compose and Jetson image policy
         run: .github/scripts/check-containers.py
       - name: Validate Compose adapters

@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Exercise hardware-validation gates without attaching real boat hardware."""
+
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+IMAGE = 'example/astro@sha256:' + 'a' * 64
+
+
+class JetsonValidationTest(unittest.TestCase):
+    """Check host compatibility and promotion ordering at the Docker boundary."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = Path(self.directory.name)
+        self.script = root / '.devcontainer' / 'boat-validate.sh'
+        self.script.parent.mkdir()
+        shutil.copyfile(ROOT / '.devcontainer/boat-validate.sh', self.script)
+        self.log = root / 'commands'
+        self.env = dict(os.environ, MOCK_LOG=str(self.log), MOCK_L4T='35',
+                        MOCK_JETPACK='5', MOCK_FAIL_CAMERA='0')
+        binaries = root / 'bin'
+        binaries.mkdir()
+        self.env['PATH'] = str(binaries) + os.pathsep + self.env['PATH']
+        self.executable(binaries / 'head', '''#!/bin/sh
+if [ "$2" = /etc/nv_tegra_release ]; then
+    echo "# R$MOCK_L4T (release), REVISION: 4.1"
+else
+    exec /usr/bin/head "$@"
+fi
+''')
+        self.executable(binaries / 'docker', '''#!/usr/bin/env python3
+import os
+import sys
+args = sys.argv[1:]
+with open(os.environ['MOCK_LOG'], 'a') as stream:
+    stream.write(' '.join(args) + '\\n')
+if args[:2] == ['image', 'inspect']:
+    print('arm64' if 'Architecture' in args[3]
+          else os.environ['MOCK_JETPACK'])
+if args[0] == 'exec' and '-i' in args:
+    sys.stdin.read()
+    if os.environ['MOCK_FAIL_CAMERA'] == '1' and 'bash' in args:
+        sys.exit(1)
+''')
+        retention = root / '.github/scripts/registry-retention.py'
+        retention.parent.mkdir(parents=True)
+        self.executable(retention, '''#!/bin/sh
+echo "retention $*" >> "$MOCK_LOG"
+''')
+
+    @staticmethod
+    def executable(path, content):
+        """Create a substitute executable in the isolated test directory."""
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def run_validation(self, *options):
+        """Run the real shell entry point with isolated external commands."""
+        return subprocess.run(
+            ['bash', str(self.script), *options, IMAGE], env=self.env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, timeout=10)
+
+    def test_both_generations_validate_and_rotate_their_own_family(self):
+        for release, jetpack, distro in [('35', '5', 'foxy'),
+                                         ('36', '6', 'jazzy')]:
+            with self.subTest(jetpack=jetpack):
+                self.env.update(MOCK_L4T=release, MOCK_JETPACK=jetpack)
+                self.log.write_text('')
+                result = self.run_validation('--promote')
+                self.assertEqual(result.returncode, 0, result.stdout)
+                commands = self.log.read_text()
+                self.assertIn('source /opt/ros/' + distro, commands)
+                self.assertIn('ROS_DOMAIN_ID=223', commands)
+                self.assertIn('rotate jetson-jp' + jetpack + '-' + distro,
+                              commands)
+                self.assertEqual('pkg prefix topic_tools' in commands,
+                                 jetpack == '6')
+                self.assertEqual('test -x /usr/local/zed/tools/ZED_Diagnostic'
+                                 in commands, jetpack == '6')
+                self.assertIn('rm -f astro_boat_validate_', commands)
+
+    def test_mismatched_image_never_starts_a_container(self):
+        self.env['MOCK_JETPACK'] = '6'
+        result = self.run_validation('--promote')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('does not match host', result.stdout)
+        commands = self.log.read_text()
+        self.assertNotIn('run -d', commands)
+        self.assertNotIn('retention ', commands)
+
+    def test_failed_camera_never_promotes_and_cleans_up(self):
+        self.env['MOCK_FAIL_CAMERA'] = '1'
+        result = self.run_validation('--promote')
+        self.assertNotEqual(result.returncode, 0)
+        commands = self.log.read_text()
+        self.assertNotIn('retention ', commands)
+        self.assertIn('rm -f astro_boat_validate_', commands)
+
+    def test_non_jetson_host_is_rejected_before_pull(self):
+        self.env['MOCK_L4T'] = '34'
+        result = self.run_validation()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_mutable_candidate_is_rejected(self):
+        result = subprocess.run(
+            ['bash', str(self.script), 'example/astro:next'], env=self.env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.log.exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

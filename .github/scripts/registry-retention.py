@@ -237,6 +237,9 @@ def rotate(repository: str, family: str, source: str, depth: int) -> None:
     source_digest = resolve_digest(repository, source)
     existing = {tag.name: tag for tag in inventory(repository)}
     current = existing.get(family)
+    if current and current.digest == source_digest:
+        print(f"[retention] {family} already references {source_digest}")
+        return
     previous = existing.get(f"{family}-prev")
     evicted = existing.get(f"{family}-old") if depth == 3 else previous
 
