@@ -16,7 +16,7 @@ defaults:
   run:
     shell: bash
 concurrency:
-  group: docker-hub-mutations
+  group: ${{ inputs.family }}-release
   cancel-in-progress: false
 jobs:
   candidate:
@@ -90,6 +90,7 @@ jobs:
         with:
           name: ${{ inputs.family }}-hardware-validation
           path: validation.log
+          overwrite: true
 
   promote:
     needs: [candidate, validate]

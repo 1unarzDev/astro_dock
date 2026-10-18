@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: docker-hub-mutations
+  group: jetson-jp5-foxy-release
   cancel-in-progress: false
 jobs:
   legacy:
@@ -63,4 +63,5 @@ jobs:
         with:
           name: jetson-jp5-foxy-candidate
           path: candidate.json
+          overwrite: true
           retention-days: 30
