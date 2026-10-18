@@ -11,6 +11,7 @@ on:
       - '.devcontainer/configure-zed-access.sh'
       - '.devcontainer/dev.helper.txt'
       - '.devcontainer/rosapi-foxy-sequence-fields.patch'
+      - '.devcontainer/zed-sdk4-custom-boxes.patch'
       - '.github/workflows/jetson-jp5.yml'
   workflow_dispatch:
 permissions:

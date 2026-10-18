@@ -570,34 +570,18 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /waypoints
       Value: true
-    - Alpha: 1
-      Class: vision_msgs_rviz_plugins/Detection3DArray
-      ConfigPath: ""
-      Enabled: true
-      Line Width: 0.01
-      Name: Detection3DArray
-      Namespaces:
-        bounding_box: true
-      Only Edge: true
-      Show Score: false
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: detections
-      Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: Detection confidence
+      Name: Detection boxes and confidence
       Namespaces:
         confidence: true
+        detection_boxes: true
       Topic:
-        Depth: 5
+        Depth: 1
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /detections/confidence
+        Value: /detections/markers
       Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true

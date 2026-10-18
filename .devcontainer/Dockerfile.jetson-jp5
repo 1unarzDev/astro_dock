@@ -18,9 +18,11 @@ RUN echo 'deb [arch=arm64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg]
       ros-foxy-xacro ros-foxy-robot-state-publisher \
     && if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then rosdep init; fi \
     && rosdep update --include-eol-distros --rosdistro foxy
+COPY zed-sdk4-custom-boxes.patch /tmp/zed-sdk4-custom-boxes.patch
 RUN git clone https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed_ws/src/zed-ros2-wrapper \
     && git -C /tmp/zed_ws/src/zed-ros2-wrapper checkout "${ZED_WRAPPER_REF}" \
     && git -C /tmp/zed_ws/src/zed-ros2-wrapper submodule update --init --recursive \
+    && git -C /tmp/zed_ws/src/zed-ros2-wrapper apply /tmp/zed-sdk4-custom-boxes.patch \
     && apt-get update \
     && rosdep install --from-paths /tmp/zed_ws/src --ignore-src --rosdistro foxy -y \
     && source /opt/ros/foxy/setup.bash && cd /tmp/zed_ws \
