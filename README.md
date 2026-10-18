@@ -144,7 +144,7 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 
 In Foxglove, choose **Rosbridge**, connect to `ws://<jetson-host>:9090`, and select an image topic. Inspect `ros2 topic list` because ZED 4 and 5 topic names differ. Keep the unauthenticated connection on a trusted LAN.
 
-For JP5 buoy detection, use `ros2 launch mhseals_nav legacy_zed.launch.py` instead of the two standalone commands. It adds TensorRT inference for SDK 4; [mhseals_nav's README](https://github.com/MHSeals/mhseals_nav#architecture) covers the ODROID bridge and the `/objects/map`, `/objects/points`, and RViz marker outputs shared with Unity.
+For JP5 buoy detection, use `ros2 launch mhseals_nav legacy_zed.launch.py` instead of the two standalone commands. It adds TensorRT inference for SDK 4; [mhseals_nav's README](https://github.com/MHSeals/mhseals_nav#architecture) covers the ODROID bridge and the `/objects/map` and RViz marker outputs shared with Unity.
 
 Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching their domain IDs can cause discovery failures and crashes. Use an explicit cross-version bridge for shared data. Jazzy RViz cannot directly view the Foxy camera stream; use Foxglove or a matching Foxy environment. `ASTRO_ROS_DOMAIN_ID` overrides the Jetson default for networks with compatible peers.
 
