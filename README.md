@@ -284,16 +284,16 @@ This builds `core`; Jetson images use their platform-specific Dockerfiles. On Je
 
 For a persistent ARM64 build server, register a GitHub runner with `self-hosted`, `linux`, `ARM64`, and `arm64-builder` labels, then dispatch the image workflow with `arm64_builder=self-hosted`. This switches the JetPack 6 jobs; normal automatic builds use hosted runners. Publishing requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets, with Read, Write, and Delete access for retention. [Pull-request checks](.github/workflows/container-checks.yml) validate adapters, scripts, dependency locks, and image policy, then build `core` without publishing.
 
-Runtime tags select the current validated image, with `-prev` and `-old` retaining two rollback generations. `-next` and candidate slots are staging references. Both Jetson families use [hardware-gated promotion](.github/workflows/promote-jetson.yml), dispatched from an authenticated GitHub CLI:
+Runtime tags select the current validated image, with `-prev` and `-old` retaining two rollback generations. `-next` and candidate slots are staging references. Both Jetson families use the on-demand [promotion helper](promote_jetson.sh) from a machine with Bash, SSH, `jq`, and an authenticated GitHub CLI:
 
 ```bash
-gh workflow run promote-jetson.yml -f family=jetson-jp5-foxy
-gh workflow run promote-jetson.yml -f family=jetson-jp6-jazzy
+./promote_jetson.sh jp5
+./promote_jetson.sh jp6 user@your-jp6-host
 ```
 
-Promotion selects the latest successful `main` build's immutable candidate artifact, checks the container user, ROS, non-root CUDA, and three live ZED frames on the matching Jetson, then rotates only that family's tags and pulls the release on that host. Add `-f run_id=BUILD_RUN_ID` to select an earlier successful build. Candidate artifacts last 30 days; rebuild if they expire. A failed check leaves release tags unchanged, and repeating a promotion preserves rollback history. Running containers are unchanged; use the Compose command below to deploy.
+The helper selects the latest successful `main` build's immutable candidate, connects through `ssh tranquility` using Tranquility's keys, and checks ROS, non-root CUDA, and three live ZED frames on the Jetson. It then waits for [hosted CI](.github/workflows/promote-jetson.yml) to verify the build digest and rotate that family's tags, and pulls the release on the Jetson. It installs no services and leaves running containers unchanged. JP5 defaults to `roboboat@squirtle-jetson.local`; JP6 requires a compatible L4T R36 Jetson. Set `ASTRO_JETSON_GATEWAY` to another SSH gateway, or empty for a direct connection. An optional third argument selects a successful build run; candidate artifacts expire after 30 days, so rebuild if needed.
 
-Hardware jobs use a trusted self-hosted GitHub runner with `self-hosted`, `linux`, and `jetson-validator` labels on Tranquility (or another boat LAN host), with Docker and batch-mode SSH access to the Jetsons. Run its service at boot; Tranquility uses the user service `astro-jetson-runner.service` with user lingering enabled. Set repository Actions variables `JETSON_JP5_HOST=roboboat@squirtle-jetson.local` and `JETSON_JP6_HOST=user@your-jp6-host` to SSH destinations reachable by that runner. JP6 requires an L4T R36 Jetson; the ODROID cannot substitute for GPU validation. Docker Hub credentials stay on hosted promotion runners. Stop any existing camera publisher before validation; the probe uses isolated ROS domain 223 and removes its temporary container. For a manual diagnostic, run `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST` on either matching Jetson.
+Stop any existing camera publisher before validation. The probe uses isolated ROS domain 223 and removes its temporary container and helper. A failed check prevents promotion; repeating a promotion preserves rollback history. Docker Hub credentials stay in GitHub CI. For a manual diagnostic, run `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST` on either matching Jetson. Use the Compose command below to deploy after promotion.
 
 For standalone deployment on either Jetson generation, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 5 (Foxy) or 6 (Jazzy) image and domain, and the Jetson adapter restarts the container after reboots:
 
