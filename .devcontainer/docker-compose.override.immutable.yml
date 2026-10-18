@@ -2,7 +2,7 @@ services:
   dev:
     image: ${ASTRO_IMAGE:-lunarzdev/astro:core}
     volumes:
-      - ${PWD}:/home/roboboat/roboboat_ws:z
+      - ..:/home/roboboat/roboboat_ws:z
       - /dev:/dev
       - /sys:/sys:rw
   sitl:
