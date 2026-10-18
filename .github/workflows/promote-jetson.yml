@@ -6,19 +6,93 @@ on:
         type: choice
         required: true
         options: [jetson-jp5-foxy, jetson-jp6-jazzy]
-      digest:
-        description: 'Hardware-validated sha256 digest (not a mutable tag)'
-        required: true
-      validation:
-        description: 'Host and successful GPU/camera validation notes'
-        required: true
+      run_id:
+        description: 'Successful main-branch build run (blank selects latest)'
+        required: false
 permissions:
   contents: read
+  actions: read
+defaults:
+  run:
+    shell: bash
 concurrency:
   group: docker-hub-mutations
   cancel-in-progress: false
 jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.resolve.outputs.digest }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      host: ${{ steps.resolve.outputs.host }}
+    steps:
+      - name: Resolve a successful build's immutable candidate
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAMILY: ${{ inputs.family }}
+          RUN_ID: ${{ inputs.run_id }}
+          JP5_HOST: ${{ vars.JETSON_JP5_HOST }}
+          JP6_HOST: ${{ vars.JETSON_JP6_HOST }}
+        run: |
+          case "$FAMILY" in
+            jetson-jp5-foxy) workflow=jetson-jp5.yml; host="$JP5_HOST" ;;
+            jetson-jp6-jazzy) workflow=images.yml; host="$JP6_HOST" ;;
+            *) exit 2 ;;
+          esac
+          [[ "$host" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.@:-]*$ ]] || {
+            echo "Set JETSON_JP5_HOST or JETSON_JP6_HOST to a matching Jetson reachable by the validator runner." >&2
+            exit 2
+          }
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID="$(gh run list --workflow "$workflow" --branch main \
+              --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          fi
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'No successful build found.' >&2; exit 2; }
+          metadata="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}")"
+          jq -e --arg path ".github/workflows/$workflow" \
+            '.path == $path and .head_branch == "main" and .conclusion == "success"' <<<"$metadata"
+          revision="$(jq -r .head_sha <<<"$metadata")"
+          gh run download "$RUN_ID" --name "${FAMILY}-candidate" --dir candidate
+          jq -e --arg family "$FAMILY" --arg revision "$revision" \
+            '.family == $family and .revision == $revision and (.digest | test("^sha256:[0-9a-f]{64}$"))' \
+            candidate/candidate.json
+          echo "digest=$(jq -r .digest candidate/candidate.json)" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+          echo "Build: https://github.com/${GH_REPO}/actions/runs/${RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
+
+  validate:
+    needs: candidate
+    runs-on: [self-hosted, linux, jetson-validator]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate candidate on the matching Jetson through the LAN runner
+        env:
+          HOST: ${{ needs.candidate.outputs.host }}
+          DIGEST: ${{ needs.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ssh_options=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30)
+          remote_dir="$(ssh "${ssh_options[@]}" "$HOST" 'mktemp -d /tmp/astro-jetson.XXXXXX')"
+          [[ "$remote_dir" =~ ^/tmp/astro-jetson\.[a-zA-Z0-9]+$ ]]
+          trap 'ssh "${ssh_options[@]}" "$HOST" "rm -rf -- $remote_dir" || true' EXIT
+          scp "${ssh_options[@]}" .devcontainer/boat-validate.sh "$HOST:$remote_dir/boat-validate.sh"
+          ssh "${ssh_options[@]}" "$HOST" \
+            "bash $remote_dir/boat-validate.sh lunarzdev/astro@$DIGEST" 2>&1 | tee validation.log
+          echo "Hardware validation passed on $HOST for $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.family }}-hardware-validation
+          path: validation.log
+
   promote:
+    needs: [candidate, validate]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -27,15 +101,14 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Rotate the selected family only
+      - name: Rotate the validated family only
         env:
           FAMILY: ${{ inputs.family }}
-          DIGEST: ${{ inputs.digest }}
-          VALIDATION: ${{ inputs.validation }}
+          DIGEST: ${{ needs.candidate.outputs.digest }}
+          REVISION: ${{ needs.candidate.outputs.revision }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 2
           case "$FAMILY" in
             jetson-jp5-foxy) expected=5 ;;
             jetson-jp6-jazzy) expected=6 ;;
@@ -43,6 +116,23 @@ jobs:
           esac
           image="lunarzdev/astro@${DIGEST}"
           labels="$(docker buildx imagetools inspect --format '{{json .Image.Config.Labels}}' "$image")"
-          jq -e --arg expected "$expected" '."org.astro.jetpack" == $expected' <<<"$labels"
+          jq -e --arg expected "$expected" --arg revision "$REVISION" \
+            '."org.astro.jetpack" == $expected and ."org.opencontainers.image.revision" == $revision' <<<"$labels"
           .github/scripts/registry-retention.py rotate "$FAMILY" "$image"
-          printf 'Promoted %s at %s\n\n%s\n' "$FAMILY" "$DIGEST" "$VALIDATION" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Promoted %s at %s\n' "$FAMILY" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+  pull:
+    needs: [candidate, promote]
+    runs-on: [self-hosted, linux, jetson-validator]
+    timeout-minutes: 15
+    steps:
+      - name: Pull release tag on the validated Jetson
+        env:
+          HOST: ${{ needs.candidate.outputs.host }}
+          FAMILY: ${{ inputs.family }}
+          DIGEST: ${{ needs.candidate.outputs.digest }}
+        run: |
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 "$HOST" \
+            "docker pull lunarzdev/astro:$FAMILY && docker image inspect --format '{{json .RepoDigests}}' lunarzdev/astro:$FAMILY" | tee pull.log
+          grep -F "lunarzdev/astro@$DIGEST" pull.log
+          echo "Pulled lunarzdev/astro:$FAMILY ($DIGEST) on $HOST. Running containers are unchanged; recreate dev with Compose to deploy." >> "$GITHUB_STEP_SUMMARY"

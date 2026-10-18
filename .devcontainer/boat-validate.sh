@@ -7,7 +7,7 @@ Usage: boat-validate.sh [--promote [TAG]] REPOSITORY@sha256:DIGEST
        boat-validate.sh --container NAME
 
 Pull and validate an immutable Jetson candidate digest on the boat. With
---promote, rotate the repository's jetson-jp6-jazzy release ring.
+--promote, rotate the matching JetPack 5 or 6 release ring.
 An explicit TAG bypasses the release ring. Docker credentials must already be
 available to Docker for promotion. --container checks non-root CUDA and live
 camera images in an already running container, such as roboboat_dev.
@@ -103,7 +103,11 @@ image="${1:-}"
 
 container="astro_boat_validate_$$"
 repository="${image%@*}"
-family=jetson-jp6-jazzy
+case "$(head -1 /etc/nv_tegra_release)" in
+    '# R35 '*) family=jetson-jp5-foxy; distro=foxy; jetpack=5 ;;
+    '# R36 '*) family=jetson-jp6-jazzy; distro=jazzy; jetpack=6 ;;
+    *) echo 'Validation requires JetPack 5 / L4T R35 or 6 / R36.' >&2; exit 1 ;;
+esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 lease_active=false
 promoted=false
@@ -126,11 +130,16 @@ step() { printf '\n[boat] %s\n' "$*"; }
 inside() { docker exec "$container" bash -lc "$1"; }
 
 step "Pulling immutable candidate $image"
-grep -q '^# R36 ' /etc/nv_tegra_release || {
-    echo 'This validation path requires JetPack 6 / L4T R36.' >&2
+# Serialize camera access even when validation is launched outside Actions.
+exec 9>/tmp/astro-jetson-validation.lock
+flock -n 9 || { echo 'Another camera validation is running.' >&2; exit 1; }
+docker pull "$image"
+
+image_jetpack="$(docker image inspect --format '{{index .Config.Labels "org.astro.jetpack"}}' "$image")"
+[[ "$image_jetpack" == "$jetpack" ]] || {
+    echo "Image JetPack $image_jetpack does not match host JetPack $jetpack." >&2
     exit 1
 }
-docker pull "$image"
 
 if $promote; then
     step "Protecting the candidate digest during hardware validation"
@@ -149,18 +158,23 @@ docker run -d --name "$container" \
     --hostname "$(uname -n)" \
     --privileged --network host --ipc host --pid host \
     --runtime nvidia --shm-size 2g \
+    -e ROS_DOMAIN_ID=223 -e ROS_LOCALHOST_ONLY=1 \
     -v /dev:/dev \
     -v /tmp/argus_socket:/tmp/argus_socket \
     "$image" sleep infinity >/dev/null
 
 step "Checking identity, ROS, CUDA, and ZED installations"
 inside 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && sudo -n true'
-inside 'source /opt/ros/jazzy/setup.bash && ros2 doctor --report'
-inside 'source /opt/astro-setup.bash && ros2 pkg prefix topic_tools'
-inside 'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver'
-inside 'source /opt/astro-setup.bash && ros2 pkg prefix vision_msgs'
+inside "source /opt/ros/${distro}/setup.bash && ros2 doctor --report"
+if [[ "$jetpack" == 6 ]]; then
+    inside 'source /opt/astro-setup.bash && ros2 pkg prefix topic_tools'
+    inside 'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver'
+    inside 'source /opt/astro-setup.bash && ros2 pkg prefix vision_msgs'
+    inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
+fi
+inside "source /opt/ros/${distro}/setup.bash && source /opt/zed_ros2/setup.bash && ros2 pkg prefix zed_wrapper && ros2 pkg prefix compressed_image_transport && ros2 pkg prefix rosbridge_server"
 inside 'test -d /usr/local/zed && test -f /opt/zed_ros2/setup.bash'
-inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
+# The headless JP5 SDK omits GUI tools; CUDA and live frames are checked below.
 step "Checking non-root CUDA and live camera data"
 validate_runtime "$container"
 

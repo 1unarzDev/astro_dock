@@ -16,6 +16,16 @@ spec.loader.exec_module(module)
 
 
 class RetentionPolicyTest(unittest.TestCase):
+    @mock.patch.object(module, 'retag')
+    @mock.patch.object(module, 'resolve_digest', return_value='sha256:current')
+    @mock.patch.object(module, 'inventory')
+    def test_repeated_promotion_preserves_rollbacks(self, inventory, resolve, retag):
+        inventory.return_value = [module.Tag(
+            'jetson-jp5-foxy', 'sha256:current',
+            dt.datetime.now(dt.timezone.utc), 1)]
+        module.rotate('example/astro', 'jetson-jp5-foxy', 'candidate', 3)
+        retag.assert_not_called()
+
     @mock.patch.object(module, 'delete_unreferenced')
     @mock.patch.object(module, 'retag')
     @mock.patch.object(module, 'resolve_digest', return_value='sha256:new')
