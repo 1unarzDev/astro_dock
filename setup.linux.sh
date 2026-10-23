@@ -277,13 +277,17 @@ stage_compose() {
 }
 
 stage_clock() {
-    local servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com}) server file config service
+    local servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com}) allow="${ASTRO_NTP_ALLOW:-}" server file config service
     heading "Automatic host time synchronization"
     echo "Points the host's existing NTP client (chrony or systemd-timesyncd) at: ${servers[*]}."
     echo "Containers share the host clock. Set ASTRO_NTP_SERVER only when a local time server is available."
     for server in "${servers[@]}"; do
         [[ "$server" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || { echo "Invalid NTP server: $server" >&2; exit 2; }
     done
+    if [[ -n "$allow" ]]; then
+        [[ "$allow" =~ ^[0-9a-fA-F.:/]+$ ]] || { echo "Invalid ASTRO_NTP_ALLOW: $allow" >&2; exit 2; }
+        echo "Serves time to $allow (chrony allow) and keeps serving at local stratum 10 when the internet is gone."
+    fi
     approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
     file="$(mktemp)"
     if command -v chronyd >/dev/null && ! systemctl is-active --quiet systemd-timesyncd; then
@@ -292,8 +296,17 @@ stage_clock() {
         [[ -f "$config" ]] || { echo "Cannot locate the chrony configuration." >&2; exit 1; }
         printf 'server %s iburst\n' "${servers[@]}" > "$file"
         run sudo install -D -m 0644 "$file" /etc/chrony/astro-sources/boat.sources
+        if [[ -n "$allow" ]]; then
+            printf 'allow %s\nlocal stratum 10\n' "$allow" > "$file"
+            run sudo install -D -m 0644 "$file" /etc/chrony/astro-sources/boat-serve.conf
+            grep -Fxq 'confdir /etc/chrony/astro-sources' "$config" \
+                || run sudo sh -c "printf '\nconfdir /etc/chrony/astro-sources\n' >> '$config'"
+        fi
         grep -Fxq 'sourcedir /etc/chrony/astro-sources' "$config" \
             || run sudo sh -c "printf '\nsourcedir /etc/chrony/astro-sources\n' >> '$config'"
+    elif [[ -n "$allow" ]]; then
+        echo "ASTRO_NTP_ALLOW needs chrony; systemd-timesyncd cannot serve time." >&2
+        exit 1
     elif systemctl list-unit-files systemd-timesyncd.service --no-legend 2>/dev/null | grep -q timesyncd; then
         service=systemd-timesyncd
         # FallbackNTP is ignored while NTP= is set, so list public peers explicitly.

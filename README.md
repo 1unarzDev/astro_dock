@@ -189,7 +189,7 @@ Containers share the host clock. For an isolated network with a reachable NTP se
 timedatectl status
 ```
 
-Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
+Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. With no internet in the field, run `ASTRO_NTP_ALLOW=192.168.0.0/24 ./setup.linux.sh --components clock` on the ODROID (chrony) to serve boat time at local stratum 10, and `ASTRO_NTP_SERVER=192.168.0.152` on squirtle to follow it. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
 
 If a Linux host has the wrong time, the common systemd recovery path is:
 
