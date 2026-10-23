@@ -6,6 +6,7 @@ on:
       - ".devcontainer/**"
       - "setup.linux.sh"
       - "promote_jetson.sh"
+      - "fetch_bags.sh"
       - ".github/workflows/**"
       - ".github/scripts/**"
 
@@ -32,6 +33,8 @@ jobs:
         run: python3 .github/scripts/test-ros-transport.py
       - name: Validate the clock stage
         run: .github/scripts/test-clock-stage.sh
+      - name: Validate the bag fetch fallback
+        run: .github/scripts/test-fetch-bags.sh
       - name: Check dependency locks, Compose and Jetson image policy
         run: .github/scripts/check-containers.py
       - name: Validate Compose adapters

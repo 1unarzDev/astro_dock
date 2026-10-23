@@ -254,6 +254,8 @@ cx
 
 Open a terminal or persistent shell on the robot host, change to its `astro_dock` checkout, and use `devcontainer exec --workspace-folder . bash` to enter the ROS workspace. Managed sessions keep running when the viewer disconnects. The router and sharing scripts provide network access; `cx` uses that access for remote work.
 
+To copy session bags off a host into `bags/<name>`, run `./fetch_bags.sh host:~/astro_dock/bags/<session> <name>`. It reads the remote only, and streams a tar over ssh when the remote has no rsync.
+
 #### Refresh and stop
 
 Compose pulls missing images while allowing Dev Containers to use its local UID-adjusted image. To refresh published images, run this from the host before reopening the container:
