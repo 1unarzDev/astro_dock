@@ -1,0 +1,16 @@
+// Jetson client: connects to the boat router at the reserved address
+// (@BOAT_TRANSPORT_IP@ is filled in by setup.linux.sh --components transport).
+{
+  mode: "client",
+  connect: { endpoints: ["tcp/@BOAT_TRANSPORT_IP@:7447"] },
+  scouting: { multicast: { enabled: false } },
+  plugins: {
+    ros2dds: {
+      domain: 142,
+      allow: {
+        publishers: ["^/transport/squirtle/(detections|odom)$"],
+        subscribers: ["^/transport/blastoise/(detections|odom)$"],
+      },
+    },
+  },
+}

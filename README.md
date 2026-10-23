@@ -228,6 +228,8 @@ On the gateway device (any Linux host), give its LAN interface `GATEWAY_IP` and 
 
 `astro-gateway.service` enables IPv4 forwarding and NATs `BOAT_SUBNET` through the device's normal routing, so boat devices reach the internet through WARP when it is connected and through the default uplink otherwise. Edit the config file and rerun the stage to change the subnet. It names no interfaces, reapplies its rules after Docker or iptables restarts, and survives reboots. Check internet access and DNS from a LAN client afterward.
 
+On the boat and Jetson computers, `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service`. The Jetson connects to `BOAT_TRANSPORT_IP`, the boat's reserved address.
+
 #### Remote work
 
 [`cx`](https://github.com/1unarzDev/cx) is a recommended companion for working remotely with `astro_dock` on a robot. It provides SSH device management, persistent terminal sessions, file browsing/transfers, and access through an enrolled gateway. It runs on Linux AMD64 and ARM64.

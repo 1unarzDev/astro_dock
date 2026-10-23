@@ -24,7 +24,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway
+  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway,transport
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -360,6 +360,58 @@ EOF
     COMPLETED+=(gateway)
 }
 
+stage_transport() {
+    local version=1.10.1 zip_sha=fdb64d942d4b6beccbe9b1f8a359a01a2fca95a023c27535bf97b233603fad5f
+    local host distro subnet transport_ip work config unit
+    host="$(uname -n)"
+    case "$host" in
+        blastoise*|squirtle*) host="${host%%[-.]*}" ;;
+        *) echo "No transport config for host $host; expected blastoise or squirtle." >&2; exit 2 ;;
+    esac
+    read -r subnet transport_ip < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_SUBNET" "$BOAT_TRANSPORT_IP")
+    # Foxy only on JetPack 5; every other host runs Jazzy.
+    distro=jazzy
+    grep -qs 'R35' /etc/nv_tegra_release && distro=foxy
+    heading "ROS 2 zenoh transport bridge"
+    echo "Installs zenoh-bridge-ros2dds $version and ros-transport.service for $host (ROS $distro)."
+    echo "It cross-connects the boat and Jetson DDS domains for the listed /transport topics only."
+    [[ "$ARCH" == aarch64 ]] || { echo "The pinned bridge build is aarch64 only." >&2; exit 2; }
+    approve "Install the transport bridge?" || { SKIPPED+=(transport); return; }
+    work="$(mktemp -d)"
+    config="$work/config.json5"
+    unit="$work/ros-transport.service"
+    sed "s/@BOAT_TRANSPORT_IP@/$transport_ip/" "$SCRIPT_DIR/config/ros-transport/$host.json5" > "$config"
+    # Cyclone matches a network address with a zero host part against the interfaces,
+    # so the bridge follows the boat LAN whichever address DHCP hands out.
+    cat > "$unit" <<EOF
+[Unit]
+Description=ROS 2 zenoh transport bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=roboboat
+Environment=ROS_DISTRO=$distro
+Environment='CYCLONEDDS_URI=<CycloneDDS><Domain><General><Interfaces><NetworkInterface address="${subnet%/*}"/></Interfaces></General></Domain></CycloneDDS>'
+ExecStart=/usr/local/lib/ros-transport/zenoh-bridge-ros2dds -c /etc/ros-transport/config.json5
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    run curl -fsSL -o "$work/bridge.zip" "https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/releases/download/$version/zenoh-plugin-ros2dds-$version-aarch64-unknown-linux-gnu-standalone.zip"
+    run_shell "echo '$zip_sha  $work/bridge.zip' | sha256sum -c -"
+    run python3 -m zipfile -e "$work/bridge.zip" "$work/bridge"
+    run sudo install -D -m 0755 "$work/bridge/zenoh-bridge-ros2dds" /usr/local/lib/ros-transport/zenoh-bridge-ros2dds
+    run sudo install -D -m 0644 "$config" /etc/ros-transport/config.json5
+    run sudo install -m 0644 "$unit" /etc/systemd/system/ros-transport.service
+    rm -rf "$work"
+    run sudo systemctl daemon-reload
+    run sudo systemctl enable ros-transport.service
+    run sudo systemctl restart ros-transport.service
+    COMPLETED+=(transport)
+}
+
 main() {
     detect_platform
     show_probe
@@ -374,6 +426,7 @@ main() {
     has_component devtools && stage_devtools
     has_component compose && stage_compose
     has_component gateway && stage_gateway
+    has_component transport && stage_transport
 
     heading "Summary"
     $DRY_RUN && printf 'Planned:   %s\n' "${COMPLETED[*]:-none}" || printf 'Completed: %s\n' "${COMPLETED[*]:-none}"
