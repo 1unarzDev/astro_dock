@@ -211,6 +211,13 @@ The boat LAN is defined once in [`config/boat-network.env`](config/boat-network.
 ./router_setup.sh
 ```
 
+Reservations for the boat computers sit above the DHCP pool, so each keeps one address. Once per boat computer, drop any hand-set address and let DHCP supply it, the gateway and DNS (use the wired profile's name and interface):
+
+```bash
+nmcli con mod "Wired connection 1" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""
+nmcli dev reapply <interface>
+```
+
 The preview connects and inspects without changing router settings. Applying requires confirmation, saves an NVRAM backup when supported, reboots, and verifies the configuration. SSH keys, trusted host keys, and backups live in the ignored `router_setup_state/` directory; the menu also provides backup restoration.
 
 On the gateway device (any Linux host), give its LAN interface `GATEWAY_IP` and install the persistent forwarding service:

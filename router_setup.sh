@@ -349,7 +349,7 @@ nvset_line() {
 }
 
 build_apply_script() {
-    local script='' radio existing_keys merged_keys dns_options
+    local script='' radio existing_keys merged_keys dns_options lease static_leases='' static_count=0
     existing_keys=$(router_ssh 'nvram get sshd_authorized_keys' 2>/dev/null || true)
     if grep -Fq -- "$PUBLIC_KEY" <<<"$existing_keys"; then
         merged_keys=$existing_keys
@@ -360,8 +360,13 @@ build_apply_script() {
     fi
     # Explicitly advertise the LAN mask as well as the laptop gateway. With a
     # correct connected route, clients reach the DD-WRT UI at .1 directly while
-    # sending only off-subnet traffic to the forwarding laptop at .2.
-    dns_options="dhcp-option=1,$NETMASK"$'\n'"dhcp-option=3,$LAPTOP_IP"$'\n'"dhcp-option=6,$DNS_PRIMARY,$DNS_SECONDARY"
+    # sending only off-subnet traffic to the forwarding laptop at .2. Options are
+    # tagged br0: DD-WRT's own dhcp-option=br0,3,<router> outranks untagged ones.
+    dns_options="dhcp-option=br0,1,$NETMASK"$'\n'"dhcp-option=br0,3,$LAPTOP_IP"$'\n'"dhcp-option=br0,6,$DNS_PRIMARY,$DNS_SECONDARY"
+    for lease in $STATIC_LEASES; do
+        static_leases+="$lease=1440 "
+        ((static_count += 1))
+    done
 
     script+="set -e"$'\n'
     script+="command -v nvram >/dev/null"$'\n'
@@ -378,6 +383,8 @@ build_apply_script() {
     script+=$(nvset_line dhcp_start "$DHCP_START")$'\n'
     script+=$(nvset_line dhcp_num "$DHCP_COUNT")$'\n'
     script+=$(nvset_line dhcp_lease 1440)$'\n'
+    script+=$(nvset_line static_leases "${static_leases% }")$'\n'
+    script+=$(nvset_line static_leasenum "$static_count")$'\n'
     script+=$(nvset_line dhcpfwd_enable 0)$'\n'
     script+=$(nvset_line dhcpd_enable 1)$'\n'
     script+=$(nvset_line dnsmasq_enable 1)$'\n'
@@ -432,6 +439,7 @@ Client gateway      : $LAPTOP_IP (the forwarding laptop)
 Client LAN route    : ${ROUTER_IP%.*}.0 / $NETMASK (router UI remains directly reachable)
 Client DNS          : $DNS_PRIMARY, $DNS_SECONDARY
 DHCP pool           : ${ROUTER_IP%.*}.$DHCP_START - ${ROUTER_IP%.*}.$((DHCP_START + DHCP_COUNT - 1))
+Reservations        : ${STATIC_LEASES:-none}
 WAN / router NAT    : disabled
 DHCP server         : enabled (static router LAN address)
 Router name / SSID  : $ROUTER_NAME / $SSID
@@ -464,8 +472,8 @@ wait_for_router() {
 }
 
 verify_router() {
-    local result
-    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'lan_proto='; nvram get lan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'") \
+    local result lease mac ip
+    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'lan_proto='; nvram get lan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'; cat /tmp/dnsmasq.conf 2>/dev/null") \
         || die "Post-reboot verification failed"
     grep -qx "lan=$ROUTER_IP" <<<"$result" || die "Router LAN address verification failed"
     grep -qx "gateway=$LAPTOP_IP" <<<"$result" || die "Router gateway verification failed"
@@ -477,7 +485,14 @@ verify_router() {
     if ! grep -q "^route=.*via $LAPTOP_IP" <<<"$result"; then
         warn "DD-WRT saved LAN gateway $LAPTOP_IP but did not expose a matching default route yet."
     fi
-    info "Core NVRAM settings verified. Check that a client receives gateway $LAPTOP_IP and has internet access."
+    # NVRAM is not what dnsmasq serves: check the generated config as well.
+    grep -qx "dhcp-option=br0,3,$LAPTOP_IP" <<<"$result" \
+        || warn "dnsmasq.conf lacks the tagged gateway option; fall back to dhcp-option=tag:boat,3 with set:boat on the reservations."
+    for lease in $STATIC_LEASES; do
+        IFS== read -r mac _ ip <<<"$lease"
+        grep -qi "^dhcp-host=.*$mac.*$ip" <<<"$result" || warn "dnsmasq.conf has no reservation for $lease"
+    done
+    info "Core NVRAM settings verified. On one client, check 'nmcli -f DHCP4 device show' reports routers = $LAPTOP_IP."
 }
 
 configure_router() {
