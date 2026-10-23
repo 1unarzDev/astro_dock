@@ -226,7 +226,9 @@ On the gateway device (any Linux host), give its LAN interface `GATEWAY_IP` and 
 ./setup.linux.sh --components gateway
 ```
 
-`astro-gateway.service` enables IPv4 forwarding and NATs `BOAT_SUBNET` through the device's normal routing, so boat devices reach the internet through WARP when it is connected and through the default uplink otherwise. Edit the config file and rerun the stage to change the subnet. It names no interfaces, reapplies its rules after Docker or iptables restarts, and survives reboots. Check internet access and DNS from a LAN client afterward.
+`astro-gateway.service` enables IPv4 forwarding and NATs `BOAT_SUBNET` through the device's normal routing, so boat devices reach the internet through WARP when it is connected and through the default uplink otherwise. Edit the config file and rerun the stage to change the subnet. It names no interfaces apart from excluding `docker0`, places its rules in `DOCKER-USER` when Docker is present, reapplies them after Docker or iptables restarts, keeps the boat subnet on the main routing table ahead of WARP, and survives reboots. Check internet access and DNS from a LAN client afterward.
+
+Keep the boat LAN and internet uplink on different subnets. With NetworkManager, the stage also installs a dispatcher that gives any link that joins the boat LAN `GATEWAY_IP` and marks its profile `never-default`, so the internet follows the uplink rather than looping through the boat router. Other network managers need the boat interface configured without a default route.
 
 On the boat and Jetson computers, `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service`. The Jetson connects to `BOAT_TRANSPORT_IP`, the boat's reserved address.
 

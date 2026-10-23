@@ -320,14 +320,37 @@ stage_clock() {
 }
 
 stage_gateway() {
-    local subnet unit
-    subnet="$(. "$SCRIPT_DIR/config/boat-network.env" && echo "$BOAT_SUBNET")"
+    local subnet gateway_ip unit hook device
+    read -r subnet gateway_ip < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP")
     heading "Boat LAN internet gateway"
     echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
     echo "persisted as astro-gateway.service. Run it only on the device that serves as the boat gateway."
     [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || { echo "Invalid BOAT_SUBNET in config/boat-network.env: $subnet" >&2; exit 2; }
     approve "Share this host's internet with $subnet?" || { SKIPPED+=(gateway); return; }
+    # The boat routes internet back through us; accepting its default route loops.
+    # A NetworkManager dispatcher claims the gateway address on whichever link joins the boat LAN.
+    if command -v nmcli >/dev/null 2>&1 && [[ "$(nmcli -g RUNNING general 2>/dev/null)" == running ]]; then
+        hook="$(mktemp)"
+        sed -e "s|@SUBNET@|$subnet|g" -e "s|@GATEWAY@|$gateway_ip|g" -e "s|@PREFIX@|${subnet#*/}|g" > "$hook" <<'EOF'
+#!/bin/sh
+# Claim the boat gateway address on whichever wired link joins the boat LAN.
+case "$2" in up|dhcp4-change) ;; *) exit 0 ;; esac
+ip -4 -o addr show dev "$1" to @SUBNET@ | grep -q . || exit 0
+uuid=$(nmcli -g GENERAL.CON-UUID device show "$1") && [ -n "$uuid" ] || exit 0
+nmcli -g ipv4.addresses connection show uuid "$uuid" | grep -q "@GATEWAY@/" &&
+    [ "$(nmcli -g ipv4.never-default connection show uuid "$uuid")" = yes ] && exit 0
+nmcli connection modify uuid "$uuid" +ipv4.addresses @GATEWAY@/@PREFIX@ ipv4.never-default yes ipv6.never-default yes
+nmcli device reapply "$1"
+EOF
+        run sudo install -m 0755 "$hook" /etc/NetworkManager/dispatcher.d/90-astro-gateway
+        rm -f "$hook"
+        for device in $(nmcli -g DEVICE device); do
+            run sudo /etc/NetworkManager/dispatcher.d/90-astro-gateway "$device" up
+        done
+    fi
     unit="$(mktemp)"
+    # Rules name no interfaces except docker0, which is never a target for the boat LAN.
+    # They go in DOCKER-USER when Docker owns FORWARD. Doubled dollars are systemd's escape.
     cat > "$unit" <<EOF
 [Unit]
 Description=Share this host's internet with the boat LAN ($subnet)
@@ -337,11 +360,11 @@ PartOf=docker.service iptables.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Rules name no interfaces: traffic follows the host's routing, so it uses WARP
-# when connected and the default uplink otherwise. Each rule is added once.
-ExecStart=/bin/sh -c 'iptables -C FORWARD -s $subnet -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s $subnet -j ACCEPT'
-ExecStart=/bin/sh -c 'iptables -C FORWARD -d $subnet -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d $subnet -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
-ExecStart=/bin/sh -c 'iptables -t nat -C POSTROUTING -s $subnet ! -d $subnet -j MASQUERADE 2>/dev/null || iptables -t nat -I POSTROUTING 1 -s $subnet ! -d $subnet -j MASQUERADE'
+# Traffic follows the host's routing, so it uses WARP when connected and the
+# default uplink otherwise. Each rule is added once.
+ExecStart=/bin/sh -c 'c=FORWARD; iptables -nL DOCKER-USER >/dev/null 2>&1 && c=DOCKER-USER; r() { t=\$\$1; k=\$\$2; shift 2; iptables -t \$\$t -C \$\$k "\$\$@" 2>/dev/null || iptables -t \$\$t -I \$\$k 1 "\$\$@"; }; r filter \$\$c -s $subnet ! -o docker0 -j ACCEPT; r filter \$\$c -d $subnet -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; r nat POSTROUTING -s $subnet ! -d $subnet ! -o docker0 -j MASQUERADE'
+# Keep the boat LAN on the main table ahead of WARP's rule at 9999.
+ExecStart=/bin/sh -c 'ip rule show priority 9000 | grep -q "to $subnet" || ip rule add priority 9000 to $subnet lookup main'
 
 [Install]
 WantedBy=multi-user.target
