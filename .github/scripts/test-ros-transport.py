@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import re
 import unittest
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +41,15 @@ class RosTransportTest(unittest.TestCase):
         readme = (ROOT / 'README.md').read_text()
         listed = set(re.findall(r'^\| `(/transport/[^`]+)` \|', readme, re.M))
         self.assertEqual(listed, {f'/transport/{h}/odom' for h in HOSTS})
+
+    def test_fastdds_requests_the_raised_receive_buffer(self):
+        # rmem_max only caps a request; without receiveBufferSize sockets stay at rmem_default.
+        sysctl = re.search(r'rmem_max=(\d+)', (ROOT / 'setup.linux.sh').read_text())
+        udp = ET.parse(ROOT / 'config' / 'fastdds.xml').getroot().iter()
+        sizes = [e.text for d in udp if d.tag.endswith('transport_descriptor')
+                 and d.findtext('{*}transport_id', '') == 'mtu_udp'
+                 for e in d if e.tag.endswith('receiveBufferSize')]
+        self.assertEqual(sizes, [sysctl.group(1)])
 
 
 if __name__ == '__main__':

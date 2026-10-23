@@ -230,7 +230,7 @@ On the gateway device (any Linux host), give its LAN interface `GATEWAY_IP` and 
 
 Keep the boat LAN and internet uplink on different subnets. With NetworkManager, the stage also installs a dispatcher that gives any link that joins the boat LAN `GATEWAY_IP` and marks its profile `never-default`, so the internet follows the uplink rather than looping through the boat router. Other network managers need the boat interface configured without a default route.
 
-On the boat and Jetson computers, `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service`. The Jetson connects to `BOAT_TRANSPORT_IP`, the boat's reserved address. It also raises `net.core.rmem_max` to 4 MiB (`/etc/sysctl.d/90-astro-dds.conf`) so DDS bursts fit the UDP receive buffer.
+On the boat and Jetson computers, `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service`. The Jetson connects to `BOAT_TRANSPORT_IP`, the boat's reserved address. It also raises `net.core.rmem_max` to 4 MiB (`/etc/sysctl.d/90-astro-dds.conf`) so DDS bursts fit the UDP receive buffer; `config/fastdds.xml` requests that size with `receiveBufferSize`, because Fast DDS ignores `rmem_max` alone and sizes sockets from `rmem_default`.
 
 | Transport topic | Direction |
 | --- | --- |
