@@ -442,6 +442,13 @@ EOF
     run sudo install -D -m 0644 "$config" /etc/ros-transport/config.json5
     run sudo install -m 0644 "$unit" /etc/systemd/system/ros-transport.service
     rm -rf "$work"
+    # DDS bursts overflow the stock 208 KB UDP receive buffer on the Jetson.
+    if $DRY_RUN; then
+        quote_command sudo tee /etc/sysctl.d/90-astro-dds.conf
+    else
+        echo net.core.rmem_max=4194304 | sudo tee /etc/sysctl.d/90-astro-dds.conf >/dev/null
+    fi
+    run sudo sysctl -q -p /etc/sysctl.d/90-astro-dds.conf
     run sudo systemctl daemon-reload
     run sudo systemctl enable ros-transport.service
     run sudo systemctl restart ros-transport.service
