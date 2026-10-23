@@ -7,8 +7,8 @@
     ros2dds: {
       domain: 42,
       allow: {
-        publishers: ["^/transport/blastoise/(detections|odom)$"],
-        subscribers: ["^/transport/squirtle/(detections|odom)$"],
+        publishers: ["^/transport/blastoise/odom$"],
+        subscribers: ["^/transport/squirtle/odom$"],
       },
     },
   },

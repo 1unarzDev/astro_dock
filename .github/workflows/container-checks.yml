@@ -28,6 +28,8 @@ jobs:
         run: python3 .github/scripts/test-jetson-validation.py
       - name: Validate local Jetson promotion
         run: python3 .github/scripts/test-jetson-promotion.py
+      - name: Validate zenoh bridge topics
+        run: python3 .github/scripts/test-ros-transport.py
       - name: Check dependency locks, Compose and Jetson image policy
         run: .github/scripts/check-containers.py
       - name: Validate Compose adapters

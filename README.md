@@ -232,6 +232,13 @@ Keep the boat LAN and internet uplink on different subnets. With NetworkManager,
 
 On the boat and Jetson computers, `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service`. The Jetson connects to `BOAT_TRANSPORT_IP`, the boat's reserved address.
 
+| Transport topic | Direction |
+| --- | --- |
+| `/transport/blastoise/odom` | boat computer to Jetson |
+| `/transport/squirtle/odom` | Jetson to boat computer |
+
+Only odometry crosses the bridge: Foxy and Jazzy encode `vision_msgs` differently over CDR, so detections travel over rosbridge instead.
+
 #### Remote work
 
 [`cx`](https://github.com/1unarzDev/cx) is a recommended companion for working remotely with `astro_dock` on a robot. It provides SSH device management, persistent terminal sessions, file browsing/transfers, and access through an enrolled gateway. It runs on Linux AMD64 and ARM64.
