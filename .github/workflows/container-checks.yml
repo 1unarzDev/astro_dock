@@ -37,6 +37,8 @@ jobs:
         run: .github/scripts/test-fetch-bags.sh
       - name: Check the image installs the bag transfer tools
         run: .github/scripts/test-packages.sh
+      - name: Check the pyubx2 floor keeps PARSE_META
+        run: .github/scripts/test-requirements.sh
       - name: Check dependency locks, Compose and Jetson image policy
         run: .github/scripts/check-containers.py
       - name: Validate Compose adapters
