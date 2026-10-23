@@ -11,7 +11,7 @@
   "containerUser": "roboboat",
   "remoteUser": "roboboat",
   "updateRemoteUserUID": true,
-  "overrideCommand": true,
+  "overrideCommand": false,
   "customizations": {
     "vscode": {
       "extensions": [

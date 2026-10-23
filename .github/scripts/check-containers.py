@@ -53,6 +53,12 @@ environment = dev.get("environment", {})
 require(environment.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "SUBNET"
         and "ROS_LOCALHOST_ONLY" not in environment,
         "compose: deprecated ROS discovery environment")
+# docker stop only reaches stop-children.sh if nothing replaces the compose command: Dev Containers
+# swaps it for its own sleep wrapper whenever overrideCommand is true.
+require(json.loads(read(devcontainer / "devcontainer.json")).get("overrideCommand") is False,
+        "devcontainer: overrideCommand must be false or stop-children.sh never runs as PID 1")
+require(dev.get("command") and dev["command"][-1].endswith("stop-children.sh"),
+        "compose: dev command must be stop-children.sh")
 
 # Jetson image architecture: native layered builds and validated promotion.
 workflow = read(root / ".github/workflows/images.yml")

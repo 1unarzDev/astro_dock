@@ -13,10 +13,15 @@ services:
     ipc: host
     pid: host
     shm_size: 2gb
+    # docker stop signals only PID 1, then SIGKILLs the rest; stop-children.sh forwards the
+    # TERM to the exec'd keepers and waits for them, so it needs this longer grace period.
+    # No init: with pid: host there is no PID namespace to reap in.
+    stop_grace_period: 30s
     environment:
       ROS_AUTOMATIC_DISCOVERY_RANGE: SUBNET
       ROS_DOMAIN_ID: "42"
       ROS_WS: /home/roboboat/roboboat_ws
+      MHSEALS_DATA: /home/roboboat/roboboat_ws/bags
       # Non-interactive bash (docker exec ... bash -c) sources the same ROS and DDS setup.
       BASH_ENV: /home/roboboat/roboboat_ws/.devcontainer/dev.bashrc
       FASTRTPS_DEFAULT_PROFILES_FILE: /home/roboboat/roboboat_ws/config/fastdds.xml
@@ -25,7 +30,7 @@ services:
       - ..:/home/roboboat/roboboat_ws
     user: roboboat
     working_dir: /home/roboboat/roboboat_ws
-    command: sleep infinity
+    command: ["bash", "/home/roboboat/roboboat_ws/.devcontainer/stop-children.sh"]
 
   sitl:
     profiles: ["sitl"]

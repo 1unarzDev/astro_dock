@@ -23,6 +23,8 @@ jobs:
           for script in setup.linux.sh promote_jetson.sh .devcontainer/*.sh .github/scripts/*.sh; do
             bash -n "$script"
           done
+      - name: Prove docker stop reaches exec'd keepers
+        run: .devcontainer/stop-test.sh ubuntu:24.04
       - name: Validate registry retention policy
         run: .github/scripts/test-registry-retention.py
       - name: Validate Jetson hardware gates

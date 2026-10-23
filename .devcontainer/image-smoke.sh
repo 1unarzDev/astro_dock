@@ -41,6 +41,7 @@ if [[ "$mode" == jetson ]]; then
 else
     check "ROS run and bag commands" bash -lc \
         'source /opt/ros/jazzy/setup.bash && ros2 run --help >/dev/null && ros2 bag --help >/dev/null'
+    check "bag transfer tools (rsync, ssh)" bash -c 'command -v rsync >/dev/null && command -v ssh >/dev/null'
     check "hardware TUI Python dependencies" /usr/bin/python3 -c 'import rich, gpiod, yaml'
     check "MAVROS and Extras" bash -lc \
         'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix mavros && ros2 pkg prefix mavros_extras'
