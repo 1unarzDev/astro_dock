@@ -17,6 +17,8 @@ services:
       ROS_AUTOMATIC_DISCOVERY_RANGE: SUBNET
       ROS_DOMAIN_ID: "42"
       ROS_WS: /home/roboboat/roboboat_ws
+      # Non-interactive bash (docker exec ... bash -c) sources the same ROS and DDS setup.
+      BASH_ENV: /home/roboboat/roboboat_ws/.devcontainer/dev.bashrc
       FASTRTPS_DEFAULT_PROFILES_FILE: /home/roboboat/roboboat_ws/config/fastdds.xml
       FASTDDS_DEFAULT_PROFILES_FILE: /home/roboboat/roboboat_ws/config/fastdds.xml
     volumes:

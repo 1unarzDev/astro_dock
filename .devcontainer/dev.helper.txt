@@ -23,6 +23,7 @@ Monitor
   ros2 topic hz /points
   ros2 run rqt_tf_tree rqt_tf_tree
   rviz2
+  docker exec roboboat_dev bash -c 'ros2 topic hz /odom/local'  # non-interactive: needs bash -c
   ros2 launch rosbridge_server rosbridge_websocket_launch.xml  # ws://<host>:9090
 
 Settings / details
