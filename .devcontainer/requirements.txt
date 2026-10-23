@@ -1,6 +1,8 @@
 matplotlib
 opencv-contrib-python
 pyserial==3.5
+pyubx2>=1.2.50
+pymavlink>=2.4.41
 pyyaml
 scikit-learn
 setuptools

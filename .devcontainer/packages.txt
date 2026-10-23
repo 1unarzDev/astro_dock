@@ -10,6 +10,7 @@ python3-websocket
 
 # ROS packages
 ros_base  # standard core and the full ros2 CLI, even on non-ROS base images
+rosbag2  # boat_test session recording and ros2 bag
 cv_bridge
 gz_ros2_control
 image_transport
