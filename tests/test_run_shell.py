@@ -17,15 +17,15 @@ class ShellTest(unittest.TestCase):
             dev.mkdir()
             shutil.copy(ROOT / '.devcontainer/dev.bashrc', dev / 'dev.bashrc')
             selection = root / 'run.yaml'
-            selection.write_text('ros: {domain_id: 73, discovery_range: LOCALHOST}\n'
-                                 'data: {root: ' + WS + '/bags/experiment}')
+            selection.write_text(json.dumps({'ros': {'domain_id': 73, 'discovery_range': 'LOCALHOST'},
+                'data': {'root': WS + "/bags/experiment `touch SHOULD_NOT_EXIST` 'one'"}}))
             adapter = root / 'adapter.yaml'
             adapter.write_text('services: {dev: {}}')
             generation = render(ROOT / 'config/run-defaults.yaml', selection, {}, adapter,
                                 ROOT / 'config/fastdds.xml', dev / 'override.yml', 'linux')
             expected = verify(generation)
             self.assertEqual(expected['ROS_DOMAIN_ID'], '73')
-            self.assertEqual(expected['MHSEALS_DATA'], WS + '/bags/experiment')
+            self.assertEqual(expected['MHSEALS_DATA'], WS + "/bags/experiment `touch SHOULD_NOT_EXIST` 'one'")
             self.assertEqual(expected['ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
             composed = subprocess.run(['docker', 'compose', '-f',
                 str(ROOT / '.devcontainer/docker-compose.yml'), '-f', str(dev / 'override.yml'),
@@ -36,7 +36,10 @@ class ShellTest(unittest.TestCase):
                 self.assertEqual(compose_env[key], value)
             # Inert overlays deliberately clobber selected keys, then restoration wins.
             setup = root / 'setup.bash'
-            setup.write_text('export ROS_DOMAIN_ID=3 RMW_IMPLEMENTATION=wrong MHSEALS_DATA=/tmp/wrong\n'
+            setup.write_text('export ROS_DOMAIN_ID=3 RMW_IMPLEMENTATION=wrong MHSEALS_DATA=/tmp/wrong ROS_DISTRO=foxy\n'
+                             'export FASTDDS_BUILTIN_TRANSPORTS=TCPv4 CYCLONEDDS_URI=overlay ROS_LOCALHOST_ONLY=1\n'
+                             'export ASTRO_DDS_SUBNET=overlay ASTRO_DDS_ADDRESS=overlay ASTRO_ROS_DOMAIN_ID=4\n'
+                             'export FASTDDS_DEFAULT_PROFILES_FILE=/tmp/wrong FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/wrong\n'
                              'printf overlay >> "$HOME/overlay.log"\n')
             stubs = root / 'bin'
             stubs.mkdir()
@@ -44,6 +47,12 @@ class ShellTest(unittest.TestCase):
                 p = stubs / name
                 p.write_text('#!/bin/sh\necho forbidden >&2; exit 89\n')
                 p.chmod(0o755)
+            colcon = stubs / 'colcon'
+            colcon.write_text('#!/bin/sh\nexit 0\n')
+            colcon.chmod(0o755)
+            secondary = root / 'secondary/install'
+            secondary.mkdir(parents=True)
+            shutil.copy(setup, secondary / 'setup.bash')
             rviz = stubs / 'rviz2'
             rviz.write_text('#!/bin/sh\n/usr/bin/env\n')
             rviz.chmod(0o755)
@@ -63,14 +72,25 @@ class ShellTest(unittest.TestCase):
                 for key, value in expected.items():
                     self.assertEqual(actual[key], value, key)
                 self.assertNotIn('forbidden', result.stderr)
+                for key in ('FASTDDS_BUILTIN_TRANSPORTS', 'CYCLONEDDS_URI', 'ROS_LOCALHOST_ONLY',
+                            'ASTRO_DDS_SUBNET', 'ASTRO_DDS_ADDRESS', 'ASTRO_ROS_DOMAIN_ID'):
+                    self.assertNotIn(key, actual)
             assert_values(run(['/usr/bin/env']))  # direct exec frozen Compose environment
             assert_values(run(['bash', '--noprofile', '--norc', '-c', '/usr/bin/env']))
             assert_values(run(['bash', '--noprofile', '--norc', '-ic',
                                'source "$BASH_ENV"; /usr/bin/env']))
             assert_values(run(['bash', '--noprofile', '--norc', '-c', 'rviz2']))
+            assert_values(run(['bash', '--noprofile', '--norc', '-c',
+                               'cd secondary; colcon build; /usr/bin/env']))
             selection.write_text('ros: {domain_id: 92}')
             assert_values(run(['bash', '--noprofile', '--norc', '-c', '/usr/bin/env']))
+            self.assertFalse((root / 'SHOULD_NOT_EXIST').exists())
             overlay_before = (root / 'overlay.log').read_bytes()
+            wrong_distro = run(['bash', '--noprofile', '--norc', '-c', 'echo CHILD'],
+                               {'ROS_DISTRO': 'foxy'})
+            self.assertNotEqual(wrong_distro.returncode, 0)
+            self.assertNotIn('CHILD', wrong_distro.stdout)
+            self.assertEqual((root / 'overlay.log').read_bytes(), overlay_before)
             conflict = run(['bash', '--noprofile', '--norc', '-c', 'echo CHILD'], {'ROS_DOMAIN_ID': '4'})
             self.assertNotEqual(conflict.returncode, 0)
             self.assertNotIn('CHILD', conflict.stdout)

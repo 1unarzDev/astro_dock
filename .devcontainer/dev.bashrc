@@ -6,6 +6,8 @@ if [[ -n "${ASTRO_RUN_MANAGED:-}" || -v ASTRO_RUN_GENERATION ]]; then
   astro_restore() {
     local key value frozen
     frozen="$(astro-run-config --verify "$__astro_generation" --restore)" || exit 2
+    unset FASTDDS_BUILTIN_TRANSPORTS CYCLONEDDS_URI ROS_LOCALHOST_ONLY \
+      ASTRO_DDS_SUBNET ASTRO_DDS_ADDRESS ASTRO_ROS_DOMAIN_ID
     while IFS=$'\t' read -r key value; do export "$key=$value"; done <<< "$frozen"
   }
   astro_restore
@@ -19,7 +21,10 @@ export ROS_WS="${ROS_WS:-$HOME/roboboat_ws}"
 ros_env() {
   local prefix
   for prefix in "/opt/ros/${ROS_DISTRO:-jazzy}" /opt/zed_ros2 /opt/velodyne /opt/astro-extra "$ROS_WS/install"; do
-    if [[ -f "$prefix/setup.bash" ]]; then source "$prefix/setup.bash"; fi
+    if [[ -f "$prefix/setup.bash" ]]; then
+      source "$prefix/setup.bash"
+      [[ -z "${__astro_generation:-}" ]] || astro_restore
+    fi
   done
   [[ -z "${__astro_generation:-}" ]] || astro_restore
 }
@@ -32,6 +37,7 @@ colcon() {
   if [[ "${1:-}" == build ]]; then
     ros_env
     if [[ "$PWD" != "$ROS_WS" && -f install/setup.bash ]]; then source install/setup.bash; fi
+    [[ -z "${__astro_generation:-}" ]] || astro_restore
   fi
 }
 astro-ros-install() {
