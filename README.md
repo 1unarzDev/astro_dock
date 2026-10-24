@@ -81,6 +81,22 @@ colcon build --symlink-install
 help
 ```
 
+For the configuration consumers, use `colcon build --packages-up-to mhseals_testing`
+so declared dependencies include the tracked `mhseals_config` package. To verify a
+private, non-symlink installation without starting ROS nodes, source its
+`install/local_setup.bash`, change to a directory outside the source tree, and run:
+
+```bash
+python3 /path/to/astro_dock/scripts/check_config_install.py --prefix /absolute/install --include-testing
+```
+
+The check imports only pure configuration modules and verifies import origins,
+versions, ament markers, hardware defaults, and nav/testing share resources.
+For an isolated build, start a clean shell with only `/opt/ros/jazzy/setup.bash`
+and select private build/log/install paths; an existing workspace overlay is not
+an installation test. Host pip installations can use the same check with their
+venv prefix. This gate checks packaging, not running consumers or physical outputs.
+
 Container shells load ROS, the image overlays and the workspace at startup, and reload them after a successful `colcon build` or `astro-ros-install`; run `ros_env` to reload by hand.
 
 Camera images already include the ZED wrapper. Only clone it when developing the driver, and match the revision pinned in the corresponding Dockerfile. On JetPack 5, use `humble-v4.0.8` with its recursive submodules; the optional clone helper defaults to `master`, which is incompatible with that image.
