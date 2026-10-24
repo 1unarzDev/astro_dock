@@ -102,8 +102,8 @@ def parse(text, source, layer, fields):
         def finite(item):
             if isinstance(item, float) and not math.isfinite(item):
                 raise ValueError('nonfinite value')
-            if isinstance(item, list):
-                for child in item:
+            if isinstance(item, (list, dict)):
+                for child in (item.values() if isinstance(item, dict) else item):
                     finite(child)
         finite(value)
         # Sequences are immutable whole-value replacements.
