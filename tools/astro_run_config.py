@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import sys
-import shlex
 import shutil
 import tempfile
 import yaml
@@ -90,6 +89,15 @@ def render(defaults, selected, inherited, adapter, transport, output, platform):
     projection = yaml.safe_load(inputs['adapter.yaml'])
     if not isinstance(projection.get('services', {}).get('dev'), dict):
         raise ValueError('adapter requires dev service')
+    workspace = output.parent.parent.resolve()
+    data_host = (workspace / result['effective']['data.root'][len(WS) + 1:]).resolve()
+    if not data_host.is_relative_to(workspace):
+        raise ValueError('data path escapes workspace through symlink')
+    existing = data_host
+    while not existing.exists():
+        existing = existing.parent
+    if not existing.is_dir() or not os.access(existing, os.W_OK):
+        raise ValueError('data path needs writable workspace ancestor')
     parent = output.parent / 'run-generations'
     parent.mkdir(exist_ok=True)
     generation = Path(tempfile.mkdtemp(prefix='run-', dir=parent))
@@ -104,6 +112,9 @@ def render(defaults, selected, inherited, adapter, transport, output, platform):
                    'ASTRO_RUN_GENERATION': container,
                    'BASH_ENV': WS + '/.devcontainer/dev.bashrc'}
     result['environment'] = environment
+    result['adapter_derivations'] = {k: projection['services']['dev'].get(k)
+                                     for k in ('hostname', 'extra_hosts', 'group_add')}
+    result['platform'] = platform
     result['inherited_adapter'] = {k: inherited[k] for k in
                                   ('ASTRO_HOSTNAME', 'DISPLAY') if k in inherited}
     dev = projection['services']['dev']
@@ -169,7 +180,7 @@ def main():
     try:
         if args.verify:
             environment = verify(args.verify, None if args.restore else dict(os.environ))
-            print('\n'.join('export ' + k + '=' + shlex.quote(v) for k, v in environment.items()))
+            print('\n'.join(k + '\t' + v for k, v in environment.items()))
         elif args.config and args.defaults and args.output and args.adapter and args.transport:
             print(render(args.defaults, args.config, dict(os.environ), args.adapter,
                          args.transport, args.output, args.platform))
