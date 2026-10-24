@@ -4,6 +4,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from mhseals_config import BaselineRevision
+from mhseals_config._evidence import Recipe
+
+
+def evaluate_nav(document, evidence):
+    return (set(evidence) == {"period_ns"}
+            and type(evidence["period_ns"]) is int
+            and evidence["period_ns"] * document["frequency"] == 1_000_000_000)
+
+
+EVALUATORS = {"fixture.nav/1": Recipe("fixture.nav/1", evaluate_nav)}
 from mhseals_config._bootstrap import begin_bootstrap, finish_bootstrap, read_active, read_candidate
 
 
@@ -15,20 +25,18 @@ class BootstrapTests(unittest.TestCase):
 
     def begin(self, scope='s', **kwargs):
         return begin_bootstrap(self.root, scope, BaselineRevision('b', ()),
-                               {'nav': {'frequency': 20}}, {'nav': ['behavior']},
-                               source_identity='sourcehash', participant_identities={'nav': 'pid/boot'}, **kwargs)
+                               {'nav': {'frequency': 20}}, {'nav': 'fixture.nav/1'},
+                               source_identity='sourcehash', participant_identities={'nav': 'pid/boot'}, evaluators=EVALUATORS, **kwargs)
 
     def test_empty_root_then_verified_passive(self):
         with self.assertRaises(FileNotFoundError):
-            read_active(self.root, 's')
+            read_active(self.root, 's', evaluators=EVALUATORS)
         ticket = self.begin()
         self.assertFalse((Path(self.root) / 's/active.json').exists())
         self.assertEqual(read_candidate(self.root, ticket)['closure'], 'passive')
-        receipt = finish_bootstrap(self.root, ticket, {'nav': dict(identity='pid/boot',
-                                  source='sourcehash', candidate=ticket.candidate,
-                                  checks={'behavior': True})})
+        receipt = finish_bootstrap(self.root, ticket, self.observation(ticket), evaluators=EVALUATORS)
         self.assertEqual(receipt['status'], 'verified_startup')
-        self.assertEqual(read_active(self.root, 's').session.session, 's')
+        self.assertEqual(read_active(self.root, 's', evaluators=EVALUATORS).session.session, 's')
         with self.assertRaises(FileExistsError):
             self.begin()
 
@@ -36,7 +44,7 @@ class BootstrapTests(unittest.TestCase):
         ticket = self.begin()
         self.assertEqual(finish_bootstrap(self.root, ticket, {})['status'], 'initialized_unverified')
         with self.assertRaises(FileNotFoundError):
-            read_active(self.root, 's')
+            read_active(self.root, 's', evaluators=EVALUATORS)
         with self.assertRaises(ValueError):
             self.begin('other', closure='output_open')
         path = Path(self.root) / 'owned'
@@ -66,9 +74,10 @@ class BootstrapTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             self.begin()
         ticket = self.begin('wrong')
-        observations = {'nav': dict(identity='stale-boot', source='sourcehash',
-                                   candidate=ticket.candidate, checks={'behavior': True})}
-        self.assertEqual(finish_bootstrap(self.root, ticket, observations)['verified'], [])
+        observations = self.observation(ticket)
+        observations['nav']['identity'] = 'stale-boot'
+        self.assertEqual(finish_bootstrap(self.root, ticket, observations,
+                                         evaluators=EVALUATORS)['verified'], [])
         self.assertFalse((Path(self.root) / 'wrong/active.json').exists())
 
     def test_exclusive_reservation_unknown_participant_and_wrong_scope(self):
@@ -82,3 +91,48 @@ class BootstrapTests(unittest.TestCase):
             read_candidate(self.root, replace(ticket, scope='wrong-scope'))
         with self.assertRaises(ValueError):
             read_candidate(self.root, replace(ticket, candidate='bad-checksum'))
+
+    def observation(self, ticket):
+        return {'nav': dict(identity='pid/boot', source='sourcehash', scope=ticket.scope,
+                            candidate=ticket.candidate, recipe='fixture.nav/1',
+                            evidence={'period_ns': 50_000_000})}
+
+    def test_fabricated_partial_stale_or_wrong_scope_evidence(self):
+        for index, change in enumerate(({'evidence': {'checks': {'invented': True}}},
+                                        {'evidence': {}}, {'scope': 'wrong'},
+                                        {'source': 'old'}, {'candidate': 'old'},
+                                        {'recipe': 'invented/1'}, {'identity': 'old-boot'})):
+            ticket = self.begin('case' + str(index))
+            observation = self.observation(ticket)
+            observation['nav'].update(change)
+            receipt = finish_bootstrap(self.root, ticket, observation, evaluators=EVALUATORS)
+            self.assertEqual(receipt['status'], 'initialized_unverified')
+        with self.assertRaises(ValueError):
+            begin_bootstrap(self.root, 'invented', BaselineRevision('b', ()),
+                            {'nav': {}}, {'nav': 'invented/1'}, source_identity='s',
+                            participant_identities={'nav': 'i'}, evaluators=EVALUATORS)
+
+    def test_active_manifest_and_evidence_tampering(self):
+        for index, target in enumerate(('receipt', 'trial', 'profile', 'role', 'evidence')):
+            ticket = self.begin('tamper' + str(index))
+            finish_bootstrap(self.root, ticket, self.observation(ticket), evaluators=EVALUATORS)
+            directory = Path(self.root) / ticket.scope
+            active_path = directory / 'active.json'
+            active = json.loads(active_path.read_text())
+            if target in ('receipt', 'evidence'):
+                receipt_path = directory / 'initializing/receipt.json'
+                receipt = json.loads(receipt_path.read_text())
+                receipt['observations'] = {}
+                receipt['verified'] = []
+                receipt_path.write_text(json.dumps(receipt))
+                if target == 'evidence':
+                    from mhseals_config import digest
+                    active['receipt'] = digest(receipt)
+            elif target == 'trial':
+                active['manifest']['trial'] = dict(trial='invented', session=ticket.scope,
+                                                  claim='c', expires=9999999999)
+            else:
+                active['manifest']['session'][target] = 'invented'
+            active_path.write_text(json.dumps(active))
+            with self.assertRaises(ValueError):
+                read_active(self.root, ticket.scope, evaluators=EVALUATORS)

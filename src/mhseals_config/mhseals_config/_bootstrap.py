@@ -9,6 +9,7 @@ import json
 import os
 import uuid
 from .model import Artifact, BaselineRevision, Manifest, SessionSelection, digest, _identity
+from ._evidence import Recipe, verified
 
 
 def _sync_dir(path):
@@ -46,11 +47,11 @@ def _scope(root, scope):
 
 
 def begin_bootstrap(root, scope, baseline, validated_inputs, recipes, *,
-                    source_identity, participant_identities, closure='passive'):
+                    source_identity, participant_identities, closure='passive', evaluators=None):
     """Reserve an unowned scope and materialize domain-validated inputs.
 
-    Each recipe lists actual boolean observation checks required for a participant.
-    Empty recipes cannot verify. External unknowns remain unverified. Explicit
+    Recipes name versioned, trusted domain-owned pure evaluators.
+    Unknown evidence cannot verify. Explicit
     output activation is outside this helper's permitted closure.
     """
     if closure not in ('passive', 'inert', 'disarmed'):
@@ -59,16 +60,17 @@ def begin_bootstrap(root, scope, baseline, validated_inputs, recipes, *,
         raise ValueError('persistent baseline required')
     if not validated_inputs or set(validated_inputs) != set(recipes) or set(recipes) != set(participant_identities):
         raise ValueError('participant closure mismatch')
-    for participant, checks in recipes.items():
+    evaluators = evaluators or {}
+    for participant, recipe_id in recipes.items():
         _identity(participant)
-        if not isinstance(checks, (tuple, list)) or any(not isinstance(c, str) or not c for c in checks):
-            raise ValueError('invalid observation recipe')
+        if not isinstance(recipe_id, str) or not isinstance(evaluators.get(recipe_id), Recipe):
+            raise ValueError('unregistered observation recipe')
     path = _scope(root, scope)
     path.mkdir(parents=True, exist_ok=True)
     _sync_dir(path.parent)
     active = path / 'active.json'
     if active.exists():
-        read_active(root, scope)  # Corruption is an error, never first-run fallback.
+        read_active(root, scope, evaluators=evaluators)  # Corruption is an error, never first-run fallback.
         raise FileExistsError('scope already has active selection')
     if (path / 'owner.json').exists():
         raise FileExistsError('scope owned/running')
@@ -105,51 +107,52 @@ def read_candidate(root, ticket):
     return candidate
 
 
-def finish_bootstrap(root, ticket, observations):
+def finish_bootstrap(root, ticket, observations, *, evaluators=None):
     """Record supplied observations; only complete identity-bound recipes promote."""
     candidate = read_candidate(root, ticket)
     path = _scope(root, ticket.scope)
-    if set(observations) - set(candidate['recipes']):
-        raise ValueError('unknown observation participant')
     if (path / 'owner.json').exists() or (path / 'active.json').exists():
         raise FileExistsError('scope became owned/active')
-    verified = []
-    for participant, checks in candidate['recipes'].items():
-        observation = observations.get(participant, {})
-        if (observation.get('identity') == candidate['participants'][participant]
-                and observation.get('source') == candidate['source']
-                and observation.get('candidate') == ticket.candidate
-                and checks and all(observation.get('checks', {}).get(c) is True for c in checks)):
-            verified.append(participant)
-    complete = len(verified) == len(candidate['recipes'])
+    documents = {p: _read(path / 'initializing' / a['name'])
+                 for p, a in candidate['artifacts'].items()}
+    accepted = verified(candidate, ticket, observations, evaluators or {}, documents)
+    complete = len(accepted) == len(candidate['recipes'])
     receipt = dict(status='verified_startup' if complete else 'initialized_unverified',
-                   ticket=asdict(ticket), observations=observations, verified=verified)
+                   ticket=asdict(ticket), observations=observations, verified=accepted)
     _write(path / 'initializing' / 'receipt.json', receipt)
     if complete:
-        manifest = dict(schema=1, baseline=candidate['baseline'],
-                        session=asdict(SessionSelection(ticket.scope, candidate['baseline']['revision'],
-                                                       ticket.candidate)), trial=None,
-                        effective=list(candidate['artifacts'].values()))
+        manifest = _manifest(candidate, ticket)
         Manifest.read(manifest)
-        _write(path / 'active.json', dict(manifest=manifest, ticket=asdict(ticket)))
+        _write(path / 'active.json', dict(manifest=manifest, ticket=asdict(ticket),
+                                         receipt=digest(receipt)))
     return receipt
 
 
-def read_active(root, scope):
+def _manifest(candidate, ticket):
+    return dict(schema=1, baseline=candidate['baseline'],
+                session=asdict(SessionSelection(ticket.scope, candidate['baseline']['revision'],
+                                               ticket.candidate)), trial=None,
+                effective=list(candidate['artifacts'].values()))
+
+
+def read_active(root, scope, *, evaluators=None):
     path = _scope(root, scope)
     active = _read(path / 'active.json')  # Missing/corrupt is never defaults.
+    if set(active) != {'manifest', 'ticket', 'receipt'}:
+        raise ValueError('invalid active selection')
     ticket = Ticket(**active['ticket'])
     if ticket.scope != scope:
         raise ValueError('wrong active scope')
     candidate = read_candidate(root, ticket)
+    if active['manifest'] != _manifest(candidate, ticket):
+        raise ValueError('active selection mismatch')
     manifest = Manifest.read(active['manifest'])
-    if (not manifest.session or manifest.session.session != scope
-            or manifest.session.overlay != ticket.candidate
-            or active['manifest']['baseline'] != candidate['baseline']):
-        raise ValueError('active candidate mismatch')
-    if list(active['manifest']['effective']) != list(candidate['artifacts'].values()):
-        raise ValueError('active artifacts mismatch')
     receipt = _read(path / 'initializing' / 'receipt.json')
-    if receipt['status'] != 'verified_startup' or receipt['ticket'] != asdict(ticket):
-        raise ValueError('missing verified startup receipt')
+    documents = {p: _read(path / 'initializing' / a['name'])
+                 for p, a in candidate['artifacts'].items()}
+    accepted = verified(candidate, ticket, receipt['observations'], evaluators or {}, documents)
+    if (digest(receipt) != active['receipt'] or receipt['status'] != 'verified_startup'
+            or receipt['ticket'] != asdict(ticket) or receipt['verified'] != accepted
+            or set(accepted) != set(candidate['recipes'])):
+        raise ValueError('invalid verified startup evidence')
     return manifest
