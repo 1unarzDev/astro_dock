@@ -41,6 +41,32 @@ def read_selected_inputs(root, scope, *, evaluators=None):
         return _active(store, scope, evaluators or {})
 
 
+def read_selected_subset(root, scope, participants, *, evaluators, expected_candidate=None):
+    """Validate the complete owner selection, rechecking only named own recipes.
+
+    Foreign evidence receives structural validation, not a behavior claim.
+    """
+    if isinstance(participants, str):
+        raise ValueError('explicit participant collection required')
+    requested = tuple(participants)
+    if not requested or len(set(requested)) != len(requested):
+        raise ValueError('nonempty unique participant subset required')
+    with Store(root, scope) as store:
+        inputs, observations = _selection(store, scope)
+        candidate, documents = inputs.candidate, inputs.documents
+        if expected_candidate is not None and inputs.ticket.candidate != expected_candidate:
+            raise ValueError('managed candidate mismatch')
+        if not set(requested) <= set(candidate['recipes']):
+            raise ValueError('unknown selected participant')
+        # Evaluators receive captured ordinary JSON, as in the strict full reader.
+        own_candidate = dict(candidate, recipes={p: candidate['recipes'][p] for p in requested})
+        accepted = verified(own_candidate, inputs.ticket,
+                            {p: observations[p] for p in requested}, evaluators, documents)
+        if set(accepted) != set(requested):
+            raise ValueError('subset behavior evidence unavailable or invalid')
+        return StartupInputs(inputs.ticket, inputs.manifest, freeze(candidate), freeze(documents))
+
+
 def begin_bootstrap(root, scope, baseline, validated_inputs, recipes, *,
                     source_identity, participant_identities, closure='passive', evaluators=None):
     """Reserve an unowned scope and materialize domain-validated inputs.
@@ -134,7 +160,7 @@ def read_active(root, scope, *, evaluators=None):
     return read_selected_inputs(root, scope, evaluators=evaluators).manifest
 
 
-def _active(store, scope, evaluators):
+def _selection(store, scope):
     try:
         active = store.read('active.json')
     except FileNotFoundError as error:
@@ -149,9 +175,40 @@ def _active(store, scope, evaluators):
         raise ValueError('active selection mismatch')
     manifest = Manifest.read(active['manifest'])
     receipt = store.read('initializing/receipt.json')
-    accepted = verified(candidate, ticket, receipt['observations'], evaluators or {}, documents)
-    if (digest(receipt) != active['receipt'] or receipt['status'] != 'verified_startup'
-            or receipt['ticket'] != asdict(ticket) or receipt['verified'] != accepted
-            or set(accepted) != set(candidate['recipes'])):
+    closure = set(candidate['artifacts'])
+    if (not closure or closure != set(candidate['recipes'])
+            or closure != set(candidate['participants'])
+            or set(receipt) != {'status', 'ticket', 'observations', 'verified'}
+            or set(receipt['observations']) != closure
+            or not isinstance(receipt['verified'], list)
+            or len(receipt['verified']) != len(closure)
+            or set(receipt['verified']) != closure
+            or digest(receipt) != active['receipt']
+            or receipt['status'] != 'verified_startup'
+            or receipt['ticket'] != asdict(ticket)):
+        raise ValueError('invalid complete startup receipt')
+    for participant in closure:
+        recipe = candidate['recipes'][participant]
+        observation = receipt['observations'][participant]
+        expected = dict(scope=scope, candidate=ticket.candidate, source=candidate['source'],
+                        identity=candidate['participants'][participant], recipe=recipe)
+        if (not isinstance(recipe, str) or '/' not in recipe
+                or not isinstance(observation, dict)
+                or set(observation) != {*expected, 'evidence'}
+                or any(observation.get(k) != v for k, v in expected.items())):
+            raise ValueError('invalid bound participant evidence')
+    references = {a['name']: a['sha256'] for a in candidate['artifacts'].values()}
+    if len(references) != len(closure):
+        raise ValueError('duplicate candidate artifact reference')
+    for artifact in manifest.baseline.artifacts:
+        if references.get(artifact.name) != artifact.sha256:
+            raise ValueError('baseline reference outside candidate')
+    return StartupInputs(ticket, manifest, candidate, documents), receipt['observations']
+
+
+def _active(store, scope, evaluators):
+    inputs, observations = _selection(store, scope)
+    accepted = verified(inputs.candidate, inputs.ticket, observations, evaluators, inputs.documents)
+    if set(accepted) != set(inputs.candidate['recipes']):
         raise ValueError('invalid verified startup evidence')
-    return StartupInputs(ticket, manifest, freeze(candidate), freeze(documents))
+    return StartupInputs(inputs.ticket, inputs.manifest, freeze(inputs.candidate), freeze(inputs.documents))
