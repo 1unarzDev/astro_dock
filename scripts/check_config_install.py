@@ -12,6 +12,37 @@ from pathlib import Path
 import sys
 
 
+def check_resources(prefix, name, origin):
+    """Require exact resource names and contain every resolved installed path."""
+    package_prefix = prefix / name if (prefix / name / 'share').is_dir() else prefix
+    share = package_prefix / 'share' / name
+    marker = package_prefix / 'share/ament_index/resource_index/packages' / name
+
+    def require(path, directory=False):
+        exists = path.is_dir() if directory else path.is_file()
+        if not exists or not path.resolve().is_relative_to(prefix):
+            raise SystemExit(f'{name}: missing or external installed resource {path}')
+        return path.resolve()
+
+    resources = [require(marker)]
+    required = ['package.xml']
+    if name == 'mhseals_nav':
+        required += ['config/nav2_params.yaml', 'launch/robot.launch.py']
+    for suffix in required:
+        require(share / suffix)
+    directories = {'mhseals_nav': ['behavior_trees'],
+                   'mhseals_testing': ['config']}.get(name, [])
+    for suffix in directories:
+        directory = share / suffix
+        require(directory, directory=True)
+        if not any(path.is_file() for path in directory.rglob('*')):
+            raise SystemExit(f'{name}: empty installed resource directory {directory}')
+    resources += [require(path) for path in share.rglob('*') if path.is_file()]
+    if name == 'mhseals_hardware':
+        resources.append(require(origin.parent / 'config/default.yaml'))
+    return resources
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prefix', type=Path, required=True)
@@ -36,29 +67,7 @@ def main():
         if not origin.is_relative_to(prefix):
             raise SystemExit(f'{name} imported outside installation {prefix}: {origin}')
         dist = importlib.metadata.distribution(name)
-        # pip installs share directly; default colcon uses one prefix per package.
-        package_prefix = prefix / name if (prefix / name / 'share').is_dir() else prefix
-        share = package_prefix / 'share' / name
-        marker = package_prefix / 'share/ament_index/resource_index/packages' / name
-        resources = sorted(path.resolve() for path in share.rglob('*') if path.is_file())
-        if not marker.is_file() or not resources or not all(
-                path.is_relative_to(prefix) for path in resources):
-            raise SystemExit(f'{name}: missing or external installed share resources')
-        resources.append(marker.resolve())
-        required = {'mhseals_config': ['package.xml'],
-                    'mhseals_hardware': ['package.xml'],
-                    'mhseals_nav': ['config/nav2_params.yaml', 'launch/robot.launch.py'],
-                    'mhseals_testing': ['config/']}[name]
-        for suffix in required:
-            if not any(f'share/{name}/{suffix}' in str(path) for path in resources):
-                raise SystemExit(f'{name}: missing installed {suffix}')
-        if name == 'mhseals_hardware':
-            default = origin.parent / 'config/default.yaml'
-            if not default.is_file():
-                raise SystemExit(f'{name}: missing package data {default}')
-            resources.append(default)
-        if name == 'mhseals_nav' and not any('/behavior_trees/' in str(p) for p in resources):
-            raise SystemExit(f'{name}: missing installed behavior trees')
+        resources = check_resources(prefix, name, origin)
         report[name] = {'version': dist.version, 'origin': str(origin),
                         'resources': [str(path) for path in sorted(resources)]}
     print(json.dumps({'python': sys.version, 'packages': report}, indent=2))
