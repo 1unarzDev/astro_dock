@@ -341,3 +341,71 @@ Rerun the `up` command to update; `--pull always` replaces a stale local image. 
 The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.github/scripts/registry-retention.py --repository lunarzdev/astro audit`.
 
 Keep changes scoped, explain their purpose and validation in the pull request, and update this README when setup, usage, or architecture changes. Run ROS probes in an isolated container/domain without attached actuators.
+
+### Opt-in static Linux run YAML (off-boat)
+
+`ASTRO_RUN_CONFIG=/absolute/run.yaml bash .devcontainer/prebuild.sh` (or
+`bash .devcontainer/prebuild.sh --config /absolute/run.yaml`) selects strict YAML
+with defaults in `config/run-defaults.yaml`. This supports Linux/Jazzy, the fixed
+`/home/roboboat/roboboat_ws` bind and existing static FastDDS XML only. Example:
+
+```yaml
+ros:
+  domain_id: 73
+  discovery_range: LOCALHOST
+data:
+  root: /home/roboboat/roboboat_ws/bags/experiment
+transport:
+  mode: static-fastdds
+```
+
+The prebuild automatically installs normal local `mhseals_config` and
+`astro-run-config` distributions into `.devcontainer/run-tooling`, using host
+Python venv, setuptools and PyYAML prerequisites without downloading packages.
+No `PYTHONPATH` is needed. A missing dependency or invalid selection refuses
+without replacing the previous generated adapter. Supported managed images must
+include installed tooling: build the core image using the existing
+`.devcontainer/docker-compose.build.yml` configuration (its `astro_repo` build
+context supplies both packages). Older pulled images without the verifier refuse
+selected Bash startup; rebuild before selecting this mode.
+
+Use Dev Containers normally after prebuild, or inspect the same projection with:
+
+```sh
+docker compose --env-file /dev/null -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.override.yml config --format json
+```
+
+Only explicitly present `ASTRO_ROS_DOMAIN_ID` or `ROS_DOMAIN_ID` (both is an
+error), `ROS_AUTOMATIC_DISCOVERY_RANGE` and `MHSEALS_DATA` override YAML. Empty
+values refuse. Provenance records these as session assignments, separately from
+the YAML baseline. Explicit transport overrides refuse. Data paths must be
+normalized beneath the workspace bind with a writable existing ancestor; symlink
+escapes refuse. Other platforms, workspace locations and transports are excluded.
+
+Generated `.devcontainer/run-generations/` snapshots contain source bytes and
+hashes, baseline/effective JSON, environment provenance, Compose and XML plus a
+compiler identity manifest. These are immutable startup artifacts, never editable
+authority. New YAML takes effect only after prebuild and container recreation.
+Existing generations keep their selected values after YAML edits. Installed
+compiler changes require regeneration. Noninteractive `BASH_ENV`, interactive
+Bash and managed RViz verify artifacts before use and restore selection after
+ROS overlays. Selected mode skips interface discovery and daemon stops. Explicit
+conflicting `docker exec -e` inputs refuse in Bash; raw exec environment overrides
+are outside this contract. Direct exec inherits the frozen Compose environment.
+
+`config/run-catalog.yaml` records only these four startup-supported leaves.
+Offline tests use actual Compose rendering and Bash with inert overlays/commands;
+they establish startup parity, not DDS endpoint discovery or message delivery.
+Boat network configuration, dynamic interface pinning, Cyclone/RViz fallback,
+other platforms, colcon defaults, optional repositories, images and SITL remain
+outside this YAML contract. Without YAML selection prebuild reports **legacy
+unmanaged environment** and retains the existing dynamic boat shell behavior.
+No running processes, interfaces, routes, daemons or host services are changed.
+
+The installed `astro_run_config.catalog_bundle()` provider returns an existing
+core read-only `DescriptorBundle` for explicit catalog assembly. Connecting it
+to a cross-package assembly caller and production UI/CLI remains a separate
+packet; this does not claim central registry integration or runtime mutation
+support. Quote YAML `"OFF"` when selecting that discovery enum (YAML 1.1 otherwise
+reads the unquoted spelling as a boolean).

@@ -25,7 +25,7 @@ class InstalledTest(unittest.TestCase):
             tmp = Path(tmp)
             wheels = tmp / 'wheels'
             wheels.mkdir()
-            subprocess.run([os.sys.executable, '-m', 'pip', 'wheel', '--no-deps',
+            subprocess.run([os.sys.executable, '-m', 'pip', 'wheel', '--no-index', '--disable-pip-version-check', '--no-deps',
                             '--no-build-isolation', '--wheel-dir', str(wheels),
                             str(ROOT / 'src/mhseals_config'), str(ROOT / 'tools')],
                            cwd=tmp, check=True, capture_output=True)
@@ -35,13 +35,13 @@ class InstalledTest(unittest.TestCase):
             pip = str(venv / 'bin/pip')
             tool = next(wheels.glob('astro_run_config-*.whl'))
             core = next(wheels.glob('mhseals_config-*.whl'))
-            subprocess.run([pip, 'install', '--no-deps', str(tool)], cwd=tmp,
+            subprocess.run([pip, 'install', '--no-index', '--disable-pip-version-check', '--no-deps', str(tool)], cwd=tmp,
                            check=True, capture_output=True)
             missing = subprocess.run([str(venv / 'bin/astro-run-config'), '--help'],
                                      cwd=tmp, capture_output=True, text=True)
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn('Install mhseals_config', missing.stderr)
-            subprocess.run([pip, 'install', '--no-deps', str(core)], cwd=tmp,
+            subprocess.run([pip, 'install', '--no-index', '--disable-pip-version-check', '--no-deps', str(core)], cwd=tmp,
                            check=True, capture_output=True)
             result = subprocess.run([str(venv / 'bin/python'), '-c',
                 'import astro_run_config as a; import mhseals_config.resolver as r; '
