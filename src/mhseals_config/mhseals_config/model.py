@@ -21,7 +21,8 @@ class Artifact:
 
     def __post_init__(self):
         _identity(self.name)
-        if len(self.sha256) != 64 or any(c not in '0123456789abcdef' for c in self.sha256):
+        if (not isinstance(self.sha256, str) or len(self.sha256) != 64
+                or any(c not in '0123456789abcdef' for c in self.sha256)):
             raise ValueError('invalid artifact digest')
 
 
