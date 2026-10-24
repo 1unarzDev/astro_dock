@@ -36,3 +36,28 @@ class ResolverTests(unittest.TestCase):
                 parse(text, 'fixture.yaml', 'operator', FIELDS)
         with self.assertRaisesRegex(ValueError, 'line=1.*line=2'):
             parse('timeout: .5\ncommand_mux: {timeout: .5}', 'x', 'operator', FIELDS)
+
+    def test_empty_maps_alias_use_and_immutable_fields(self):
+        for text in ('unknown: {}', 'nav: {frequency: {}}', 'nav: []'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse(text, 'shape.yaml', 'operator', FIELDS)
+        self.assertEqual(parse('{}', 'x', 'operator', FIELDS), ())
+        self.assertEqual(parse('nav: {}', 'x', 'operator', FIELDS), ())
+        with self.assertRaisesRegex(ValueError, 'line=1.*line=2'):
+            parse('timeout: &x 0.5\ncommand_mux: {timeout: *x}', 'x', 'operator', FIELDS)
+        assignments = parse('timeout: &x 0.5\nreverse: *x', 'x', 'operator', FIELDS)
+        self.assertEqual([a.origin.line for a in assignments], [1, 2])
+        self.assertEqual([a.value for a in assignments], [.5, .5])
+        aliases, layers = ['old'], ['operator']
+        field = Field(float, aliases=aliases, layers=layers)
+        aliases.append('new')
+        layers.append('session')
+        self.assertEqual(field.aliases, ('old',))
+        self.assertEqual(field.layers, ('operator',))
+        for bad in (dict(aliases=[1]), dict(layers=['unknown'])):
+            with self.assertRaises(ValueError):
+                Field(float, **bad)
+        with self.assertRaises(ValueError):
+            parse('new: 0.5', 'x', 'operator', {'value': field})
+        with self.assertRaises(ValueError):
+            parse('old: 0.5', 'x', 'session', {'value': field})

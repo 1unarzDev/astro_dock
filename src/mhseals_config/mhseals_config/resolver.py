@@ -24,6 +24,18 @@ class Field:
     nullable: bool = False
     aliases: tuple = ()
 
+    def __post_init__(self):
+        for name in ('layers', 'aliases'):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                raise ValueError('field collections must contain strings')
+            value = tuple(value)
+            if any(not isinstance(item, str) or not item for item in value):
+                raise ValueError('invalid field collection member')
+            object.__setattr__(self, name, value)
+        if any(layer not in ORDER for layer in self.layers):
+            raise ValueError('unknown field layer')
+
 
 @dataclass(frozen=True)
 class Assignment:
@@ -67,29 +79,22 @@ def parse(text, source, layer, fields):
             for child in node.value:
                 check(child, ancestors)
 
-    def walk(node, path, ancestors):
-        if id(node) in ancestors:
-            raise ValueError(f'recursive alias at {location(node)}')
-        ancestors = ancestors | {id(node)}
-        if isinstance(node, MappingNode):
-            keys = {}
-            for k, v in node.value:
-                if not isinstance(k, ScalarNode) or k.tag != 'tag:yaml.org,2002:str':
-                    raise ValueError(f'non-string/merge key at {location(k)}')
-                if k.value == '<<':
-                    raise ValueError(f'merge key at {location(k)}')
-                if k.value in keys:
-                    fail('duplicate mapping key', keys[k.value], k)
-                keys[k.value] = k
-                walk(v, (*path, k.value), ancestors)
-            return
+    def walk(node, path, assignment_node=None):
         spelling = '.'.join(path)
+        use = assignment_node if assignment_node is not None else node
         if spelling not in aliases:
-            raise ValueError(f'unknown key {spelling} at {location(node)}')
+            prefix = spelling + '.' if spelling else ''
+            if not isinstance(node, MappingNode) or (path and not any(
+                    name.startswith(prefix) for name in aliases)):
+                raise ValueError(f'unknown key {spelling} at {location(use)}')
+            # Empty root and registered grouping prefixes are valid omissions.
+            for k, v in node.value:
+                walk(v, (*path, k.value), k)
+            return
         key = aliases[spelling]
         if key in seen:
-            fail('duplicate canonical assignment', seen[key], node)
-        seen[key] = node
+            fail('duplicate canonical assignment', seen[key], use)
+        seen[key] = use
         field = fields[key]
         if layer not in field.layers:
             raise ValueError(f'layer {layer} forbidden for {key}')
@@ -107,16 +112,16 @@ def parse(text, source, layer, fields):
                     finite(child)
         finite(value)
         # Sequences are immutable whole-value replacements.
-        if isinstance(value, list):
+        if isinstance(value, (list, dict)):
             value = freeze(value)
-        result.append(Assignment(key, value, location(node)))
+        result.append(Assignment(key, value, location(use)))
 
     try:
         root = loader.get_single_node()
         if not isinstance(root, MappingNode):
             raise ValueError('configuration must be a mapping')
         check(root, set())
-        walk(root, (), set())
+        walk(root, ())
         return tuple(result)
     finally:
         loader.dispose()
