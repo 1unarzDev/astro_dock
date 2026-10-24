@@ -58,3 +58,27 @@ class BootstrapTests(unittest.TestCase):
         (Path(self.root) / 'other/initializing/nav.json').write_text('{}')
         with self.assertRaises(ValueError):
             read_candidate(self.root, ticket)
+
+    def test_write_fault_and_wrong_identity_never_promote(self):
+        with patch('mhseals_config._bootstrap._write', side_effect=OSError('disk')):
+            with self.assertRaises(OSError):
+                self.begin()
+        with self.assertRaises(FileExistsError):
+            self.begin()
+        ticket = self.begin('wrong')
+        observations = {'nav': dict(identity='stale-boot', source='sourcehash',
+                                   candidate=ticket.candidate, checks={'behavior': True})}
+        self.assertEqual(finish_bootstrap(self.root, ticket, observations)['verified'], [])
+        self.assertFalse((Path(self.root) / 'wrong/active.json').exists())
+
+    def test_exclusive_reservation_unknown_participant_and_wrong_scope(self):
+        from dataclasses import replace
+        ticket = self.begin()
+        with self.assertRaises(FileExistsError):
+            self.begin()
+        with self.assertRaises(ValueError):
+            finish_bootstrap(self.root, ticket, {'unknown': {}})
+        with self.assertRaises(FileNotFoundError):
+            read_candidate(self.root, replace(ticket, scope='wrong-scope'))
+        with self.assertRaises(ValueError):
+            read_candidate(self.root, replace(ticket, candidate='bad-checksum'))

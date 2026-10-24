@@ -30,7 +30,8 @@ class ResolverTests(unittest.TestCase):
                      'timeout: .5\ncommand_mux: {timeout: .8}',
                      'nav: {<<: {frequency: 20}}', 'nav: &a {x: *a}',
                      'unknown: 1', 'timeout: null', 'timeout: .nan',
-                     'nav: {frequency: true}'):
+                     'nav: {frequency: true}', 'nav: {limits: &a [*a]}',
+                     'nav: {limits: [{x: 1, x: 2}]}'):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse(text, 'fixture.yaml', 'operator', FIELDS)
         with self.assertRaisesRegex(ValueError, 'line=1.*line=2'):

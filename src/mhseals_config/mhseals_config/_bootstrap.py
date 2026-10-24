@@ -109,6 +109,8 @@ def finish_bootstrap(root, ticket, observations):
     """Record supplied observations; only complete identity-bound recipes promote."""
     candidate = read_candidate(root, ticket)
     path = _scope(root, ticket.scope)
+    if set(observations) - set(candidate['recipes']):
+        raise ValueError('unknown observation participant')
     if (path / 'owner.json').exists() or (path / 'active.json').exists():
         raise FileExistsError('scope became owned/active')
     verified = []
