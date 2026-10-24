@@ -25,7 +25,8 @@ class PrebuildTest(unittest.TestCase):
                 path = stubs / name
                 path.write_text('#!/bin/sh\n' + body + '\n')
                 path.chmod(0o755)
-            for name in ('bash', 'dirname', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3', 'docker', 'mkdir'):
+            for name in ('bash', 'dirname', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3',
+                         'docker', 'mkdir'):
                 (stubs / name).symlink_to('/usr/bin/' + name)
             selection = root / 'run.yaml'
             selection.write_text('ros: {domain_id: 73, discovery_range: LOCALHOST}\n'
