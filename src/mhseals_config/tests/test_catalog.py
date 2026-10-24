@@ -71,6 +71,9 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bundle.field('nav.controller_frequency.unknown_descendant')
         self.assertNotIn('resolved_default', yaml.safe_dump(data))
+        marked = '---\n' + yaml.safe_dump(data) + '...\n'
+        self.assertEqual(DescriptorBundle.read_yaml(marked, {'defaults': RAW}, REGISTRY,
+                         {'fixture': 'build-1'}).rows[0].default, .5)
 
     def test_incomplete_inventory_is_explicit(self):
         data = fixture()

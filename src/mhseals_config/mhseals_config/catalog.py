@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import math
+import yaml
 from pathlib import PurePosixPath
 
 from .model import Artifact
@@ -69,6 +70,10 @@ def _pointer(root, pointer):
 
 def _yaml(text):
     # Reuse located strict YAML validation, including recursive aliases and duplicates.
+    node = yaml.compose(text, Loader=yaml.SafeLoader)
+    if not isinstance(node, yaml.nodes.MappingNode):
+        raise ValueError('catalog resource must be a mapping')
+    text = yaml.serialize(node)
     wrapped = 'document:\n' + ''.join('  ' + line + '\n' for line in text.splitlines())
     return parse(wrapped, '<catalog>', 'defaults', {'document': Field(dict)})[0].value
 
