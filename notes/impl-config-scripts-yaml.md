@@ -49,3 +49,24 @@ Limits: image Dockerfile wiring was inspected, not built; managed images must
 be rebuilt with the existing build Compose config before selection. No endpoint
 or delivery verification, boat networking, DDS interface pinning, daemon control,
 host boot/network changes, full suite, merge, integration branch or push.
+
+## Bounded review repairs (SYR01–SYR04)
+
+- `ee880f0`: validate baseline separately from effective session values; freeze
+  `ROS_DISTRO=jazzy` into every selected environment; reject dollar-containing
+  data paths before rendering until downstream Compose escaping has a proof.
+  Quote/space paths remain supported. Focused compiler tests: 3 passed; frozen
+  projection test: 1 passed, including retained prior output on dollar refusal.
+- `e917f8e`: clear overlay-introduced builtin/Cyclone/localhost/subnet/address and
+  domain-alias controls, then restore frozen values after every installed setup,
+  secondary-workspace colcon setup and managed RViz boundary. Actual inert Bash
+  overlay test passed with each control injected, wrong-distro refusal before
+  overlay sentinel changes, and quote/space/backtick payload kept literal with
+  no payload file created. Direct environment and real Compose config match.
+
+These repairs do not claim dollar-path runtime corruption: review established
+only a missing acceptance proof for Compose serialization. The temporary policy
+fails closed before generation instead of requiring any container operation.
+Focused prebuild/installed wheel regressions are rerun for the changed projection;
+no full suite, container create/start, ROS nodes, daemon/network controls, main
+or integration branch edits, merge or push are part of this repair.
