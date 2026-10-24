@@ -381,7 +381,9 @@ error), `ROS_AUTOMATIC_DISCOVERY_RANGE` and `MHSEALS_DATA` override YAML. Empty
 values refuse. Provenance records these as session assignments, separately from
 the YAML baseline. Explicit transport overrides refuse. Data paths must be
 normalized beneath the workspace bind with a writable existing ancestor; symlink
-escapes refuse. Other platforms, workspace locations and transports are excluded.
+escapes refuse. Dollar-containing data paths currently refuse before rendering,
+pending proof of exact downstream Compose runtime escaping. Spaces, quotes and
+backticks remain literal supported path characters. Other platforms, workspace locations and transports are excluded.
 
 Generated `.devcontainer/run-generations/` snapshots contain source bytes and
 hashes, baseline/effective JSON, environment provenance, Compose and XML plus a

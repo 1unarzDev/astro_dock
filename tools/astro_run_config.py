@@ -57,6 +57,14 @@ def compile_config(defaults, selected, inherited):
         raise ValueError('managed startup requires fixed workspace and Jazzy')
     result = resolve([*layers, session])
     values = dict(result.effective)
+    validate_values(result.baseline)
+    validate_values(values)
+    return {'baseline': dict(result.baseline), 'effective': values,
+            'origins': {k: [asdict(o) for o in v] for k, v in result.origins.items()},
+            'session': {k: inherited[k] for k in ENV if k in inherited}, 'sources': sources}
+
+
+def validate_values(values):
     if not 0 <= values['ros.domain_id'] <= 232:
         raise ValueError('domain must be 0..232')
     if values['ros.discovery_range'] not in ('OFF', 'LOCALHOST', 'SUBNET'):
@@ -64,13 +72,12 @@ def compile_config(defaults, selected, inherited):
     if values['transport.mode'] != 'static-fastdds':
         raise ValueError('unsupported transport mode')
     root = values['data.root']
+    if '$' in root:
+        raise ValueError('dollar-containing data paths unsupported pending Compose runtime proof')
     path = PurePosixPath(root)
     if (not root.startswith(WS + '/') or str(path) != root or '..' in path.parts
             or any(ord(c) < 32 or ord(c) == 127 for c in root)):
         raise ValueError('data root must be normalized beneath workspace bind')
-    return {'baseline': dict(result.baseline), 'effective': values,
-            'origins': {k: [asdict(o) for o in v] for k, v in result.origins.items()},
-            'session': {k: inherited[k] for k in ENV if k in inherited}, 'sources': sources}
 
 
 def encoded(value):
@@ -105,7 +112,7 @@ def render(defaults, selected, inherited, adapter, transport, output, platform):
     values = result['effective']
     environment = {'ROS_DOMAIN_ID': str(values['ros.domain_id']),
                    'ROS_AUTOMATIC_DISCOVERY_RANGE': values['ros.discovery_range'],
-                   'MHSEALS_DATA': values['data.root'], 'ROS_WS': WS,
+                   'MHSEALS_DATA': values['data.root'], 'ROS_WS': WS, 'ROS_DISTRO': 'jazzy',
                    'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp',
                    'FASTDDS_DEFAULT_PROFILES_FILE': container + '/fastdds.xml',
                    'FASTRTPS_DEFAULT_PROFILES_FILE': container + '/fastdds.xml',

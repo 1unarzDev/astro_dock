@@ -34,3 +34,12 @@ class CompilerTest(unittest.TestCase):
                     {'CYCLONEDDS_URI': ''}, {'ROS_DOMAIN_ID': 'true'}]:
             with self.subTest(env=env), self.assertRaises(ValueError):
                 self.compile(env=env)
+
+    def test_session_cannot_mask_invalid_baseline(self):
+        for text, env in [
+            ('ros: {domain_id: 999}', {'ROS_DOMAIN_ID': '73'}),
+            ('ros: {discovery_range: INVALID}', {'ROS_AUTOMATIC_DISCOVERY_RANGE': 'SUBNET'}),
+            ('data: {root: /tmp/bad}', {'MHSEALS_DATA': WS + '/bags/valid'}),
+            ('data: {root: "' + WS + '/bags/$x"}', {'MHSEALS_DATA': WS + '/bags/valid'})]:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                self.compile(text, env)
