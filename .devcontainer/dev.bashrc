@@ -68,15 +68,19 @@ fi
 # Set ASTRO_DDS_ADDRESS to force an address.
 ros_net() {
   [[ -z "${__astro_generation:-}" ]] || return 0
-  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat
+  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override
   subnet="${ASTRO_DDS_SUBNET:-$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
-  # ASTRO_DDS_ADDRESS wins. Otherwise the kernel's source address toward the boat
+  # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported
+  # (remembered in __ASTRO_DDS_AUTO) is not an override and is detected again.
+  # Otherwise the kernel's source address toward the boat
   # (a host with Wi-Fi and the boat link both on the subnet must use the route's
   # one), else the first interface primary address (SIOCGIFADDR) in the subnet;
   # secondaries such as a bridge's own are skipped; the image has no iproute2.
   boat="$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_TRANSPORT_IP")"
-  address="${ASTRO_DDS_ADDRESS:-$(python3 -c '
+  override="${ASTRO_DDS_ADDRESS:-}"
+  [[ "$override" != "${__ASTRO_DDS_AUTO:-}" ]] || override=
+  address="${override:-$(python3 -c '
 import fcntl, ipaddress, socket, struct, sys
 net = ipaddress.ip_network(sys.argv[1], strict=False)
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -121,6 +125,7 @@ EOF
     printf '%s' "$address" > "$state" 2>/dev/null || true
   fi
   export ASTRO_DDS_ADDRESS="$address"
+  [[ -n "$override" ]] || export __ASTRO_DDS_AUTO="$address"
   export FASTRTPS_DEFAULT_PROFILES_FILE="$profile" FASTDDS_DEFAULT_PROFILES_FILE="$profile"
   [[ $- == *i* ]] && echo "DDS: ${address:-all interfaces (not on ${subnet:-the boat subnet})}"
   return 0

@@ -32,4 +32,7 @@ check "boat transport ip is the route target" "$(cat "$tmp/peer")" 192.168.0.152
 check "override wins" "$(ros_net FAKE_SRC=192.168.0.2 ASTRO_DDS_ADDRESS=192.168.0.157)" 192.168.0.157
 check "off-subnet source falls back to scan" "$(ros_net FAKE_SRC=10.0.0.5)" 192.168.0.157
 check "no route falls back to scan" "$(ros_net FAKE_SRC=192.168.0.2 FAKE_NO_ROUTE=1)" 192.168.0.157
+twice="$(env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" FAKE_PEER="$tmp/peer" \
+  FAKE_SRC=10.0.0.5 bash -c 'ros2() { :; }; . "$1"; ros_net; export FAKE_SRC=192.168.0.2; ros_net; echo "$ASTRO_DDS_ADDRESS"' _ "$tmp/ros_net.sh")"
+check "inherited auto-detected address is re-detected" "$twice" 192.168.0.2
 echo "ros_net ok"
