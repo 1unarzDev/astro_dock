@@ -1,8 +1,8 @@
 """Lint of docs/config-conventions.md plus readback against its real consumers."""
-import re
 from collections.abc import Mapping
-import unittest
 from pathlib import Path
+import re
+import unittest
 
 from astro_run_config import compile_config
 
