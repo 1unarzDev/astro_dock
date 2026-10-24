@@ -25,7 +25,7 @@ class PrebuildTest(unittest.TestCase):
                 path = stubs / name
                 path.write_text('#!/bin/sh\n' + body + '\n')
                 path.chmod(0o755)
-            for name in ('bash', 'dirname', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3', 'docker'):
+            for name in ('bash', 'dirname', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3', 'docker', 'mkdir'):
                 (stubs / name).symlink_to('/usr/bin/' + name)
             selection = root / 'run.yaml'
             selection.write_text('ros: {domain_id: 73, discovery_range: LOCALHOST}\n'
@@ -41,7 +41,11 @@ class PrebuildTest(unittest.TestCase):
             result = subprocess.run(command, env={**env, 'ASTRO_ROS_DOMAIN_ID': '99'},
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            values = json.loads(result.stdout)['services']['dev']['environment']
+            dev = json.loads(result.stdout)['services']['dev']
+            values = dev['environment']
+            self.assertTrue((root / '.config/mhseals').is_dir())
+            self.assertIn((str(root / '.config/mhseals'), '/home/roboboat/.config/mhseals'),
+                          [(v['source'], v['target']) for v in dev['volumes']])
             self.assertEqual(values['ROS_DOMAIN_ID'], '73')
             self.assertEqual(values['ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
             self.assertEqual(values['MHSEALS_DATA'], WS + '/bags/experiment')

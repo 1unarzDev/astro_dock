@@ -7,6 +7,8 @@ if (($#)); then
     [[ $# == 2 && $1 == --config && -n $2 ]] || { echo 'Usage: prebuild.sh [--config FILE]' >&2; exit 2; }
     selection="$2"
 fi
+# Host operator config dir, bind-mounted by docker-compose.yml (Docker would create it root-owned).
+mkdir -p "${HOME}/.config/mhseals"
 os_type=linux
 
 if [[ "$(uname -s)" == Darwin ]]; then
