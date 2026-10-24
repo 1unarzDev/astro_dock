@@ -171,6 +171,12 @@ def inspect(spool_path):
                 result[key] = _read(fd, name)[1]
             except FileNotFoundError:
                 result[key] = None
+        try:
+            published = json.loads(_read(spool, 'published')[0])
+        except FileNotFoundError:
+            published = None
+        result['destination_changed'] = (published is not None and
+                                         result['destination'] != published)
         result['source_changed'] = (result['displaced'] is not None and
                                     result['displaced'] != intent['expected'])
         return result
