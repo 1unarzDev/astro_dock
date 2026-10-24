@@ -182,3 +182,89 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(results.count('refused'), 1)
         ticket = next(result for result in results if result != 'refused')
         self.assertEqual(read_candidate(self.root, ticket)['scope'], 's')
+
+    def test_captured_readers_immutable_and_single_read(self):
+        from mhseals_config._bootstrap import read_bootstrap_inputs, read_selected_inputs
+        from mhseals_config._store import Store
+        ticket = self.begin()
+        artifact = Path(self.root) / 's/initializing/nav.json'
+        original_read, reads = Store.read, []
+
+        def replace_after_capture(store, name):
+            result = original_read(store, name)
+            if name == 'initializing/nav.json':
+                reads.append(name)
+                artifact.write_text('{"frequency": 999}')
+            return result
+
+        for operation in (lambda: read_bootstrap_inputs(self.root, ticket),
+                          lambda: finish_bootstrap(self.root, ticket, self.observation(ticket),
+                                                   evaluators=EVALUATORS),
+                          lambda: read_selected_inputs(self.root, 's', evaluators=EVALUATORS)):
+            artifact.write_text('{"frequency": 20}')
+            reads.clear()
+            with patch.object(Store, 'read', replace_after_capture):
+                result = operation()
+            self.assertEqual(len(reads), 1)
+            if hasattr(result, 'documents'):
+                self.assertEqual(result.documents['nav']['frequency'], 20)
+                self.assertEqual(result.ticket, ticket)
+                with self.assertRaises(TypeError):
+                    result.documents['nav']['frequency'] = 1
+                with self.assertRaises(TypeError):
+                    result.candidate['participants']['nav'] = 'other'
+        self.assertEqual(result.manifest.session.session, 's')
+
+    def test_reader_absence_and_required_input_faults(self):
+        from dataclasses import replace
+        from mhseals_config._bootstrap import (read_bootstrap_inputs, read_selected_inputs,
+                                               NoActiveSelection)
+        with self.assertRaises(NoActiveSelection):
+            read_selected_inputs(self.root, 's')
+        ticket = self.begin()
+        self.assertIsNone(read_bootstrap_inputs(self.root, ticket).manifest)
+        with self.assertRaises(ValueError):
+            read_bootstrap_inputs(self.root, replace(ticket, candidate='wrong'))
+        with self.assertRaises(FileNotFoundError):
+            read_bootstrap_inputs(self.root, replace(ticket, scope='wrong'))
+        finish_bootstrap(self.root, ticket, self.observation(ticket), evaluators=EVALUATORS)
+        directory = Path(self.root) / 's/initializing'
+        for name in ('nav.json', 'ticket.json', 'receipt.json'):
+            path = directory / name
+            content = path.read_bytes()
+            path.unlink()
+            try:
+                read_selected_inputs(self.root, 's', evaluators=EVALUATORS)
+                self.fail('missing required input accepted')
+            except FileNotFoundError as error:
+                self.assertNotIsInstance(error, NoActiveSelection)
+            path.write_bytes(content)
+        (directory / 'nav.json').write_text('{}')
+        with self.assertRaises(ValueError):
+            read_bootstrap_inputs(self.root, ticket)
+        active = Path(self.root) / 's/active.json'
+        active.unlink()
+        active.symlink_to(Path(self.root) / 'missing')
+        with self.assertRaises(OSError) as error:
+            read_selected_inputs(self.root, 's', evaluators=EVALUATORS)
+        self.assertNotIsInstance(error.exception, NoActiveSelection)
+
+    def test_reader_nested_documents_and_invented_trial(self):
+        from mhseals_config._bootstrap import read_bootstrap_inputs, read_selected_inputs
+        documents = {'hardware': {'matrix': [[1, 0]]}, 'nav': {'frequency': 20}}
+        ticket = begin_bootstrap(self.root, 'pair', BaselineRevision('b', ()), documents,
+                                 dict.fromkeys(documents, 'fixture.nav/1'), source_identity='src',
+                                 participant_identities=dict.fromkeys(documents, 'id'),
+                                 evaluators=EVALUATORS)
+        inputs = read_bootstrap_inputs(self.root, ticket)
+        self.assertEqual(set(inputs.documents), set(documents))
+        with self.assertRaises(TypeError):
+            inputs.documents['hardware']['matrix'][0][0] = 2
+        ticket = self.begin()
+        finish_bootstrap(self.root, ticket, self.observation(ticket), evaluators=EVALUATORS)
+        active = Path(self.root) / 's/active.json'
+        data = json.loads(active.read_text())
+        data['manifest']['trial'] = {'trial': 'invented'}
+        active.write_text(json.dumps(data))
+        with self.assertRaises(ValueError):
+            read_selected_inputs(self.root, 's', evaluators=EVALUATORS)

@@ -8,6 +8,7 @@ import uuid
 from .model import Artifact, BaselineRevision, Manifest, SessionSelection, digest, _identity
 from ._evidence import Recipe, verified
 from ._store import Store
+from .resolver import freeze
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,29 @@ class Ticket:
     scope: str
     token: str
     candidate: str
+
+
+class NoActiveSelection(FileNotFoundError):
+    """Only the initial active selection object is absent."""
+
+
+@dataclass(frozen=True)
+class StartupInputs:
+    ticket: Ticket
+    manifest: Manifest | None
+    candidate: object
+    documents: object
+
+
+def read_bootstrap_inputs(root, ticket):
+    with Store(root, ticket.scope) as store:
+        candidate, documents = _candidate(store, ticket)
+        return StartupInputs(ticket, None, freeze(candidate), freeze(documents))
+
+
+def read_selected_inputs(root, scope, *, evaluators=None):
+    with Store(root, scope) as store:
+        return _active(store, scope, evaluators or {})
 
 
 def begin_bootstrap(root, scope, baseline, validated_inputs, recipes, *,
@@ -61,7 +85,7 @@ def begin_bootstrap(root, scope, baseline, validated_inputs, recipes, *,
 
 def read_candidate(root, ticket):
     with Store(root, ticket.scope) as store:
-        return _candidate(store, ticket)
+        return _candidate(store, ticket)[0]
 
 
 def _candidate(store, ticket):
@@ -70,21 +94,22 @@ def _candidate(store, ticket):
     candidate = store.read('initializing/candidate.json')
     if digest(candidate) != ticket.candidate or candidate['token'] != ticket.token or candidate['scope'] != ticket.scope:
         raise ValueError('candidate identity mismatch')
-    for artifact in candidate['artifacts'].values():
+    documents = {}
+    for participant, artifact in candidate['artifacts'].items():
         reference = Artifact(**artifact)
-        if digest(store.read('initializing/' + reference.name)) != reference.sha256:
+        document = store.read('initializing/' + reference.name)
+        if digest(document) != reference.sha256:
             raise ValueError('candidate artifact corrupted')
-    return candidate
+        documents[participant] = document
+    return candidate, documents
 
 
 def finish_bootstrap(root, ticket, observations, *, evaluators=None):
     """Record supplied observations; only complete identity-bound recipes promote."""
     with Store(root, ticket.scope) as store:
-        candidate = _candidate(store, ticket)
+        candidate, documents = _candidate(store, ticket)
         if store.exists('owner.json') or store.exists('active.json'):
             raise FileExistsError('scope became owned/active')
-        documents = {p: store.read('initializing/' + a['name'])
-                     for p, a in candidate['artifacts'].items()}
         accepted = verified(candidate, ticket, observations, evaluators or {}, documents)
         complete = len(accepted) == len(candidate['recipes'])
         receipt = dict(status='verified_startup' if complete else 'initialized_unverified',
@@ -106,27 +131,27 @@ def _manifest(candidate, ticket):
 
 
 def read_active(root, scope, *, evaluators=None):
-    with Store(root, scope) as store:
-        return _active(store, scope, evaluators or {})
+    return read_selected_inputs(root, scope, evaluators=evaluators).manifest
 
 
 def _active(store, scope, evaluators):
-    active = store.read('active.json')  # Missing/corrupt is never defaults.
+    try:
+        active = store.read('active.json')
+    except FileNotFoundError as error:
+        raise NoActiveSelection(scope) from error
     if set(active) != {'manifest', 'ticket', 'receipt'}:
         raise ValueError('invalid active selection')
     ticket = Ticket(**active['ticket'])
     if ticket.scope != scope:
         raise ValueError('wrong active scope')
-    candidate = _candidate(store, ticket)
+    candidate, documents = _candidate(store, ticket)
     if active['manifest'] != _manifest(candidate, ticket):
         raise ValueError('active selection mismatch')
     manifest = Manifest.read(active['manifest'])
     receipt = store.read('initializing/receipt.json')
-    documents = {p: store.read('initializing/' + a['name'])
-                 for p, a in candidate['artifacts'].items()}
     accepted = verified(candidate, ticket, receipt['observations'], evaluators or {}, documents)
     if (digest(receipt) != active['receipt'] or receipt['status'] != 'verified_startup'
             or receipt['ticket'] != asdict(ticket) or receipt['verified'] != accepted
             or set(accepted) != set(candidate['recipes'])):
         raise ValueError('invalid verified startup evidence')
-    return manifest
+    return StartupInputs(ticket, manifest, freeze(candidate), freeze(documents))
