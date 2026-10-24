@@ -65,17 +65,28 @@ fi
 # discovery still lists the topics. Detected again by each new shell and by
 # rviz2, so a changed adapter or address only needs the process restarted.
 # Off the boat subnet (simulation, home) the static profile applies unchanged.
+# Set ASTRO_DDS_ADDRESS to force an address.
 ros_net() {
   [[ -z "${__astro_generation:-}" ]] || return 0
-  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned
+  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat
   subnet="${ASTRO_DDS_SUBNET:-$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
-  # Each interface's primary address (SIOCGIFADDR), so secondaries such as a
-  # bridge's own are skipped; the image has no iproute2.
-  address="$(python3 -c '
+  # ASTRO_DDS_ADDRESS wins. Otherwise the kernel's source address toward the boat
+  # (a host with Wi-Fi and the boat link both on the subnet must use the route's
+  # one), else the first interface primary address (SIOCGIFADDR) in the subnet;
+  # secondaries such as a bridge's own are skipped; the image has no iproute2.
+  boat="$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_TRANSPORT_IP")"
+  address="${ASTRO_DDS_ADDRESS:-$(python3 -c '
 import fcntl, ipaddress, socket, struct, sys
 net = ipaddress.ip_network(sys.argv[1], strict=False)
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    s.connect((sys.argv[2], 9))
+    ip = ipaddress.ip_address(s.getsockname()[0])
+    if ip in net:
+        print(ip); sys.exit()
+except (OSError, ValueError):
+    pass
 for _, name in socket.if_nameindex():
     try:
         raw = fcntl.ioctl(s.fileno(), 0x8915, struct.pack("256s", name.encode()[:15]))
@@ -83,7 +94,7 @@ for _, name in socket.if_nameindex():
         continue
     ip = ipaddress.ip_address(socket.inet_ntoa(raw[20:24]))
     if ip in net:
-        print(ip); break' "$subnet" 2>/dev/null)"
+        print(ip); break' "$subnet" "${boat:-192.168.0.152}" 2>/dev/null)}"
   if [[ -n "$address" ]]; then
     pinned="${XDG_RUNTIME_DIR:-/tmp}/astro-fastdds-$address.xml"
     python3 - "$profile" "$pinned" "$address" <<'EOF' || return 1

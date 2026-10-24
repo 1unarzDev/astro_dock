@@ -35,6 +35,8 @@ jobs:
         run: python3 .github/scripts/test-ros-transport.py
       - name: Validate the clock stage
         run: .github/scripts/test-clock-stage.sh
+      - name: Validate the DDS address choice
+        run: .github/scripts/test-ros-net.sh
       - name: Validate the bag fetch fallback
         run: .github/scripts/test-fetch-bags.sh
       - name: Check the image installs the bag transfer tools
