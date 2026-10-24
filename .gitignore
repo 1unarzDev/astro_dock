@@ -17,3 +17,6 @@ src/rviz-plugin-zed-od/
 src/mhseals_hardware/
 src/mhseals_nav/
 src/mhseals_testing/
+.devcontainer/run-tooling/
+.devcontainer/run-generations/
+*.egg-info/

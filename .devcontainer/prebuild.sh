@@ -2,6 +2,11 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+selection="${ASTRO_RUN_CONFIG:-}"
+if (($#)); then
+    [[ $# == 2 && $1 == --config && -n $2 ]] || { echo 'Usage: prebuild.sh [--config FILE]' >&2; exit 2; }
+    selection="$2"
+fi
 os_type=linux
 
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -35,11 +40,17 @@ if [[ "$os_type" == jetson ]]; then
         echo 'Unsupported JetPack: expected L4T R35 or R36.' >&2; exit 1
     fi
 fi
-cp "$override_file" "${script_dir}/docker-compose.override.yml"
+if [[ -n "$selection" && "$os_type" != linux ]]; then
+    echo 'Selected YAML supports Linux static off-boat only.' >&2; exit 2
+fi
+# Stage every derivation; selected validation never damages the active adapter.
+work_file="$(mktemp "${script_dir}/.adapter.XXXXXX")"
+trap 'rm -f "$work_file" "$work_file.bak"' EXIT
+cp "$override_file" "$work_file"
 if [[ "$os_type" == jetson ]]; then
-    sed -i.bak "s/jetson-jp6-jazzy/${jetson_family}/g" "${script_dir}/docker-compose.override.yml"
+    sed -i.bak "s/jetson-jp6-jazzy/${jetson_family}/g" "$work_file"
     if [[ "$jetson_family" == jetson-jp5-foxy ]]; then
-        sed -i.bak 's/ASTRO_ROS_DOMAIN_ID:-42/ASTRO_ROS_DOMAIN_ID:-142/' "${script_dir}/docker-compose.override.yml"
+        sed -i.bak 's/ASTRO_ROS_DOMAIN_ID:-42/ASTRO_ROS_DOMAIN_ID:-142/' "$work_file"
     fi
 fi
 host_name="${ASTRO_HOSTNAME:-$(uname -n)}"
@@ -53,7 +64,7 @@ host_name="${host_name%%.*}"
 sed -i.bak -E "/^  (dev|lidar-relay):$/a\\
     hostname: ${host_name}\\
     extra_hosts: [\"${host_name}:127.0.1.1\"]
-" "${script_dir}/docker-compose.override.yml"
+" "$work_file"
 if command -v getent >/dev/null; then
     device_gids=()
     for group in dialout video render gpio; do
@@ -64,8 +75,17 @@ if command -v getent >/dev/null; then
         gid_list="$(IFS=,; echo "${device_gids[*]}")"
         sed -i.bak "/^  dev:$/a\\
     group_add: [${gid_list}]
-" "${script_dir}/docker-compose.override.yml"
+" "$work_file"
     fi
 fi
-rm -f "${script_dir}/docker-compose.override.yml.bak"
+if [[ -n "$selection" ]]; then
+    bash "$script_dir/install-run-tooling.sh"
+    "$script_dir/run-tooling/bin/astro-run-config" --config "$selection" \
+        --defaults "$script_dir/../config/run-defaults.yaml" --adapter "$work_file" \
+        --transport "$script_dir/../config/fastdds.xml" --platform "$os_type" \
+        --output "$script_dir/docker-compose.override.yml"
+else
+    echo 'Legacy unmanaged environment: no ASTRO_RUN_CONFIG/--config selection.'
+    mv "$work_file" "$script_dir/docker-compose.override.yml"
+fi
 echo "Selected ${os_type} adapter: $override_file"
