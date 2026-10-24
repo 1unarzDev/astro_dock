@@ -109,7 +109,7 @@ def render(defaults, selected, inherited, adapter, transport, output, platform):
                    'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp',
                    'FASTDDS_DEFAULT_PROFILES_FILE': container + '/fastdds.xml',
                    'FASTRTPS_DEFAULT_PROFILES_FILE': container + '/fastdds.xml',
-                   'ASTRO_RUN_GENERATION': container,
+                   'ASTRO_RUN_GENERATION': container, 'ASTRO_RUN_MANAGED': '1',
                    'BASH_ENV': WS + '/.devcontainer/dev.bashrc'}
     result['environment'] = environment
     result['adapter_derivations'] = {k: projection['services']['dev'].get(k)
@@ -164,6 +164,15 @@ def verify(generation, inherited=None):
             if key in inherited:
                 raise ValueError('conflicting managed environment: ' + key)
     return environment
+
+
+def catalog_bundle():
+    """Explicit installed DescriptorBundle provider; no discovery or mutation rights."""
+    from mhseals_config.catalog import DescriptorBundle
+    resources = Path(sys.prefix) / 'share/astro-run-config'
+    return DescriptorBundle.read_yaml((resources / 'run-catalog.yaml').read_text(),
+        {'run-defaults': (resources / 'run-defaults.yaml').read_bytes()},
+        {'astro.static-linux.compiler': compile_config}, {'astro.static-linux': '0.1.0'})
 
 
 def main():
