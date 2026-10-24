@@ -59,7 +59,7 @@ class BootstrapTests(unittest.TestCase):
             self.begin('corrupt')
 
     def test_fsync_failure_retains_reservation_and_artifact_corruption(self):
-        with patch('mhseals_config._bootstrap.os.fsync', side_effect=OSError('disk')):
+        with patch('mhseals_config._store.os.fsync', side_effect=OSError('disk')):
             with self.assertRaises(OSError):
                 self.begin()
         ticket = self.begin('other')
@@ -68,7 +68,7 @@ class BootstrapTests(unittest.TestCase):
             read_candidate(self.root, ticket)
 
     def test_write_fault_and_wrong_identity_never_promote(self):
-        with patch('mhseals_config._bootstrap._write', side_effect=OSError('disk')):
+        with patch('mhseals_config._store.Store.write', side_effect=OSError('disk')):
             with self.assertRaises(OSError):
                 self.begin()
         with self.assertRaises(FileExistsError):
@@ -136,3 +136,49 @@ class BootstrapTests(unittest.TestCase):
             active_path.write_text(json.dumps(active))
             with self.assertRaises(ValueError):
                 read_active(self.root, ticket.scope, evaluators=EVALUATORS)
+
+    def test_no_follow_scope_reservation_artifacts_and_broken_markers(self):
+        with tempfile.TemporaryDirectory() as outside:
+            root = Path(self.root)
+            (root / 'redirect').symlink_to(outside)
+            with self.assertRaises(OSError):
+                self.begin('redirect')
+            self.assertEqual(list(Path(outside).iterdir()), [])
+            for marker in ('active.json', 'owner.json'):
+                scope = marker.split('.')[0]
+                directory = root / scope
+                directory.mkdir()
+                (directory / marker).symlink_to(Path(outside) / 'missing')
+                with self.assertRaises(ValueError):
+                    self.begin(scope)
+            ticket = self.begin()
+            artifact = root / 's/initializing/nav.json'
+            copied = Path(outside) / 'nav.json'
+            copied.write_bytes(artifact.read_bytes())
+            artifact.unlink()
+            artifact.symlink_to(copied)
+            with self.assertRaises(OSError):
+                read_candidate(self.root, ticket)
+            (root / 'reservation').mkdir()
+            (root / 'reservation/initializing').symlink_to(outside)
+            with self.assertRaises(FileExistsError):
+                self.begin('reservation')
+            self.assertEqual([p.name for p in Path(outside).iterdir()], ['nav.json'])
+
+    def test_concurrent_bootstrap_reservation(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        barrier = Barrier(2)
+
+        def attempt():
+            barrier.wait()
+            try:
+                return self.begin()
+            except FileExistsError:
+                return 'refused'
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: attempt(), range(2)))
+        self.assertEqual(results.count('refused'), 1)
+        ticket = next(result for result in results if result != 'refused')
+        self.assertEqual(read_candidate(self.root, ticket)['scope'], 's')

@@ -4,34 +4,10 @@ Callers supply domain-validated JSON documents and explicit observation recipes.
 Reservations survive failure: recovery requires an owner, never silent fallback.
 """
 from dataclasses import dataclass, asdict
-from pathlib import Path
-import json
-import os
 import uuid
 from .model import Artifact, BaselineRevision, Manifest, SessionSelection, digest, _identity
 from ._evidence import Recipe, verified
-
-
-def _sync_dir(path):
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _write(path, data):
-    # New immutable objects only. No check-then-replace publication claim.
-    with open(path, 'x') as stream:
-        json.dump(data, stream, sort_keys=True, allow_nan=False)
-        stream.flush()
-        os.fsync(stream.fileno())
-    _sync_dir(path.parent)
-
-
-def _read(path):
-    with open(path) as stream:
-        return json.load(stream)
+from ._store import Store
 
 
 @dataclass(frozen=True)
@@ -39,11 +15,6 @@ class Ticket:
     scope: str
     token: str
     candidate: str
-
-
-def _scope(root, scope):
-    _identity(scope)
-    return Path(root) / scope
 
 
 def begin_bootstrap(root, scope, baseline, validated_inputs, recipes, *,
@@ -65,67 +36,66 @@ def begin_bootstrap(root, scope, baseline, validated_inputs, recipes, *,
         _identity(participant)
         if not isinstance(recipe_id, str) or not isinstance(evaluators.get(recipe_id), Recipe):
             raise ValueError('unregistered observation recipe')
-    path = _scope(root, scope)
-    path.mkdir(parents=True, exist_ok=True)
-    _sync_dir(path.parent)
-    active = path / 'active.json'
-    if active.exists():
-        read_active(root, scope, evaluators=evaluators)  # Corruption is an error, never first-run fallback.
-        raise FileExistsError('scope already has active selection')
-    if (path / 'owner.json').exists():
-        raise FileExistsError('scope owned/running')
-    reservation = path / 'initializing'
-    reservation.mkdir()  # Atomic exclusive reservation, retained on any failure.
-    _sync_dir(path)
-    token = uuid.uuid4().hex
-    artifacts = {}
-    for participant, document in validated_inputs.items():
-        name = participant + '.json'
-        _write(reservation / name, document)
-        artifacts[participant] = asdict(Artifact(name, digest(document)))
-    candidate = dict(schema=1, scope=scope, token=token, baseline=asdict(baseline),
-                     artifacts=artifacts, recipes=recipes, source=source_identity,
-                     participants=participant_identities, closure=closure)
-    _write(reservation / 'candidate.json', candidate)
-    ticket = Ticket(scope, token, digest(candidate))
-    _write(reservation / 'ticket.json', asdict(ticket))
-    _write(reservation / 'pending.json', dict(status='bootstrap_pending', ticket=asdict(ticket)))
-    return ticket
+    with Store(root, scope) as store:
+        if store.exists('active.json'):
+            _active(store, scope, evaluators)  # Corruption never triggers fallback.
+            raise FileExistsError('scope already has active selection')
+        if store.exists('owner.json'):
+            raise FileExistsError('scope owned/running')
+        store.mkdir('initializing')  # Exclusive reservation, retained on failure.
+        token = uuid.uuid4().hex
+        artifacts = {}
+        for participant, document in validated_inputs.items():
+            name = participant + '.json'
+            store.write('initializing/' + name, document)
+            artifacts[participant] = asdict(Artifact(name, digest(document)))
+        candidate = dict(schema=1, scope=scope, token=token, baseline=asdict(baseline),
+                         artifacts=artifacts, recipes=recipes, source=source_identity,
+                         participants=participant_identities, closure=closure)
+        store.write('initializing/candidate.json', candidate)
+        ticket = Ticket(scope, token, digest(candidate))
+        store.write('initializing/ticket.json', asdict(ticket))
+        store.write('initializing/pending.json', dict(status='bootstrap_pending', ticket=asdict(ticket)))
+        return ticket
 
 
 def read_candidate(root, ticket):
-    path = _scope(root, ticket.scope) / 'initializing'
-    if _read(path / 'ticket.json') != asdict(ticket):
+    with Store(root, ticket.scope) as store:
+        return _candidate(store, ticket)
+
+
+def _candidate(store, ticket):
+    if store.read('initializing/ticket.json') != asdict(ticket):
         raise ValueError('ticket identity mismatch')
-    candidate = _read(path / 'candidate.json')
+    candidate = store.read('initializing/candidate.json')
     if digest(candidate) != ticket.candidate or candidate['token'] != ticket.token or candidate['scope'] != ticket.scope:
         raise ValueError('candidate identity mismatch')
     for artifact in candidate['artifacts'].values():
         reference = Artifact(**artifact)
-        if digest(_read(path / reference.name)) != reference.sha256:
+        if digest(store.read('initializing/' + reference.name)) != reference.sha256:
             raise ValueError('candidate artifact corrupted')
     return candidate
 
 
 def finish_bootstrap(root, ticket, observations, *, evaluators=None):
     """Record supplied observations; only complete identity-bound recipes promote."""
-    candidate = read_candidate(root, ticket)
-    path = _scope(root, ticket.scope)
-    if (path / 'owner.json').exists() or (path / 'active.json').exists():
-        raise FileExistsError('scope became owned/active')
-    documents = {p: _read(path / 'initializing' / a['name'])
-                 for p, a in candidate['artifacts'].items()}
-    accepted = verified(candidate, ticket, observations, evaluators or {}, documents)
-    complete = len(accepted) == len(candidate['recipes'])
-    receipt = dict(status='verified_startup' if complete else 'initialized_unverified',
-                   ticket=asdict(ticket), observations=observations, verified=accepted)
-    _write(path / 'initializing' / 'receipt.json', receipt)
-    if complete:
-        manifest = _manifest(candidate, ticket)
-        Manifest.read(manifest)
-        _write(path / 'active.json', dict(manifest=manifest, ticket=asdict(ticket),
-                                         receipt=digest(receipt)))
-    return receipt
+    with Store(root, ticket.scope) as store:
+        candidate = _candidate(store, ticket)
+        if store.exists('owner.json') or store.exists('active.json'):
+            raise FileExistsError('scope became owned/active')
+        documents = {p: store.read('initializing/' + a['name'])
+                     for p, a in candidate['artifacts'].items()}
+        accepted = verified(candidate, ticket, observations, evaluators or {}, documents)
+        complete = len(accepted) == len(candidate['recipes'])
+        receipt = dict(status='verified_startup' if complete else 'initialized_unverified',
+                       ticket=asdict(ticket), observations=observations, verified=accepted)
+        store.write('initializing/receipt.json', receipt)
+        if complete:
+            manifest = _manifest(candidate, ticket)
+            Manifest.read(manifest)
+            store.write('active.json', dict(manifest=manifest, ticket=asdict(ticket),
+                                             receipt=digest(receipt)))
+        return receipt
 
 
 def _manifest(candidate, ticket):
@@ -136,19 +106,23 @@ def _manifest(candidate, ticket):
 
 
 def read_active(root, scope, *, evaluators=None):
-    path = _scope(root, scope)
-    active = _read(path / 'active.json')  # Missing/corrupt is never defaults.
+    with Store(root, scope) as store:
+        return _active(store, scope, evaluators or {})
+
+
+def _active(store, scope, evaluators):
+    active = store.read('active.json')  # Missing/corrupt is never defaults.
     if set(active) != {'manifest', 'ticket', 'receipt'}:
         raise ValueError('invalid active selection')
     ticket = Ticket(**active['ticket'])
     if ticket.scope != scope:
         raise ValueError('wrong active scope')
-    candidate = read_candidate(root, ticket)
+    candidate = _candidate(store, ticket)
     if active['manifest'] != _manifest(candidate, ticket):
         raise ValueError('active selection mismatch')
     manifest = Manifest.read(active['manifest'])
-    receipt = _read(path / 'initializing' / 'receipt.json')
-    documents = {p: _read(path / 'initializing' / a['name'])
+    receipt = store.read('initializing/receipt.json')
+    documents = {p: store.read('initializing/' + a['name'])
                  for p, a in candidate['artifacts'].items()}
     accepted = verified(candidate, ticket, receipt['observations'], evaluators or {}, documents)
     if (digest(receipt) != active['receipt'] or receipt['status'] != 'verified_startup'
