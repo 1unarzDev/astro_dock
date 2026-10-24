@@ -125,6 +125,59 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             read(raw=RAW + b'changed: true\n')
 
+    def test_array_pointer_indexes_and_mapping_keys(self):
+        invalid = ('-1', '+1', '01', '00', ' 1', '1 ', '-', '', '١', '2')
+        raw = b'values: [11, 29]\nkeys: {"-1": 41, "01": 43, "+1": 47}\n'
+        for api in ('read', 'read_yaml'):
+            for index, expected in [('0', 11), ('1', 29), *[(s, None) for s in invalid]]:
+                with self.subTest(api=api, index=index):
+                    data = fixture()
+                    data['leaves'] = data['leaves'][:1]
+                    sha = hashlib.sha256(raw).hexdigest()
+                    data['default_sources'][0]['sha256'] = sha
+                    data['leaves'][0]['default_ref'].update(
+                        yaml_pointer='/values/' + index, source_hash=sha)
+                    def invoke():
+                        argument = yaml.safe_dump(data) if api == 'read_yaml' else data
+                        return getattr(DescriptorBundle, api)(argument, {'defaults': raw},
+                                                              REGISTRY, {'fixture': 'build-1'})
+                    if expected is None:
+                        with self.assertRaises(ValueError):
+                            invoke()
+                    else:
+                        self.assertEqual(invoke().rows[0].default, expected)
+            for key, expected in [('-1', 41), ('01', 43), ('+1', 47)]:
+                data['leaves'][0]['default_ref']['yaml_pointer'] = '/keys/' + key
+                self.assertEqual(invoke().rows[0].default, expected)
+
+    def test_per_leaf_consumer_evidence_and_coverage(self):
+        data = fixture()
+        data['consumer_versions']['other'] = 'build-1'
+        versions = {'fixture': 'build-1', 'other': 'build-1'}
+        leaf = data['leaves'][0]
+        for section in ('evidence', 'coverage'):
+            leaf[section][0]['consumer'] = 'other'
+        row = read(data, versions=versions).rows[0]
+        for section in ('evidence', 'coverage'):
+            self.assertIn('dangling-' + section + '-consumer:other', row.blockers)
+            self.assertIn('missing-' + section + ':fixture', row.blockers)
+        # A second actual consumer needs its own recipe and trace, even if pinned.
+        other = copy.deepcopy(leaf['consumers'][0])
+        other['id'] = 'other'
+        leaf['consumers'].append(other)
+        row = read(data, versions=versions).rows[0]
+        self.assertIn('missing-evidence:fixture', row.blockers)
+        self.assertIn('missing-coverage:fixture', row.blockers)
+        for section in ('evidence', 'coverage'):
+            additional = copy.deepcopy(leaf[section][0])
+            additional['consumer'] = 'fixture'
+            leaf[section].append(additional)
+        self.assertEqual(read(data, versions=versions).rows[0].blockers,
+                         ('runtime-authority-not-provided',))
+        leaf['consumers'].append(copy.deepcopy(other))
+        with self.assertRaises(ValueError):
+            read(data, versions=versions)
+
     def test_strict_yaml_and_type_bool(self):
         for text in ('schema_version: 1\nschema_version: 1',
                      'schema_version: 1\n<<: {owner_package: fixture}'):

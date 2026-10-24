@@ -62,7 +62,13 @@ def _pointer(root, pointer):
             raise ValueError('invalid pointer escape')
         part = part.replace('~1', '/').replace('~0', '~')
         try:
-            value = value[int(part)] if isinstance(value, tuple) else value[part]
+            if isinstance(value, tuple):
+                if not part or any(c not in '0123456789' for c in part) or (
+                        len(part) > 1 and part[0] == '0'):
+                    raise ValueError('noncanonical array pointer index')
+                value = value[int(part)]
+            else:
+                value = value[part]
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise ValueError('dangling default pointer') from exc
     return value
@@ -221,6 +227,16 @@ class DescriptorBundle:
                             raise ValueError('invalid coverage status')
                         if entry.get('status') in ('discovered', 'unsupported'):
                             blockers.append('inventory-coverage:' + entry['status'])
+            consumer_ids = [entry['id'] for entry in leaf.get('consumers', ()) if 'id' in entry]
+            if len(set(consumer_ids)) != len(consumer_ids):
+                raise ValueError('duplicate leaf consumer ID')
+            for section in ('evidence', 'coverage'):
+                represented = {entry['consumer'] for entry in leaf.get(section, ())
+                               if 'consumer' in entry}
+                blockers.extend('dangling-' + section + '-consumer:' + cid
+                                for cid in sorted(represented - set(consumer_ids)))
+                blockers.extend('missing-' + section + ':' + cid
+                                for cid in sorted(set(consumer_ids) - represented))
             if 'type' in leaf.get('value', {}) and leaf['value']['type'] not in _TYPES:
                 raise ValueError('unknown catalog type')
             authoring = leaf.get('authoring', {})

@@ -47,6 +47,11 @@ descendant with its own type and consumer contract; `bundle.field(key)` performs
 exact canonical lookup. Cross-bundle identity checks and required missing-package
 reporting belong to the subsequent pure assembly slice.
 
+Each leaf consumer needs matching evidence and coverage rows. Unrelated consumer
+IDs create dangling-reference blockers; missing per-consumer rows create explicit
+blockers. Duplicate leaf consumer IDs refuse. Sequence pointers accept canonical
+nonnegative ASCII indexes only; mapping keys remain exact strings.
+
 Each row exposes `descriptor`, referenced `default`, `blockers`, and
 `writable == False`. Missing metadata, unresolved references and unknown versions
 are read-only inventory. Every row additionally carries
