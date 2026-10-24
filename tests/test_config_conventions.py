@@ -1,7 +1,7 @@
 """Lint of docs/config-conventions.md plus readback against its real consumers."""
 import re
-import unittest
 from collections.abc import Mapping
+import unittest
 from pathlib import Path
 
 from astro_run_config import compile_config
@@ -82,10 +82,19 @@ class ConventionDocTest(unittest.TestCase):
         meaning = tier_meanings()
         for name, words in [('reconfigure', ('lifecycle', 'RESET/configure/STARTUP')),
                             ('restart', ('process or launch group',)),
-                            ('rebuild', ('C++/interface dependency closure', 'versioned isolated prefix')),
+                            ('rebuild', ('C++/interface dependency closure',
+                                         'versioned isolated prefix')),
                             ('reboot', ('FCU', 'safe owner window'))]:
             for w in words:
                 self.assertIn(w, meaning[name])
+        legacy = dict(re.findall(
+            r'^\| (\w+) \| `[\w.]+` \| (not a tier|[\w-]+)', DOC, re.M))
+        self.assertEqual(legacy, {'reset': 'reconfigure', 'restart': 'restart',
+                                  'child': 'restart', 'next': 'next-use',
+                                  'disarmed': 'not a tier'})
+        names = {name for _, name in tier_table()}
+        for target in legacy.values():
+            self.assertTrue(target in names or target == 'not a tier')
         self.assertIn('never `supported` without an adapter and consumer evidence',
                       DOC.replace('\n', ' '))
 

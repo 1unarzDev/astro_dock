@@ -51,6 +51,10 @@ Operator overrides live at `${XDG_CONFIG_HOME:-~/.config}/mhseals/<surface>.yaml
 argument beats both.
 
 ## R7 One strict loader
+This is the target rule; known violations are tracked as A1/A7 (the hardware
+reload and mux still use `safe_load` plus a shallow merge, there is no public
+`load_strict` and no per-surface policy declaration yet). Today the strict
+parser is the one in `resolver.py`.
 All YAML is read through the core strict parser: located errors; duplicate keys,
 `<<` merge keys and recursive aliases are refused even when values match. Each
 surface declares a policy: `managed` (a refusal records a snapshot) or
@@ -76,6 +80,17 @@ Tier describes what applying a change costs (spec section 7):
 | 5 | reboot | hardware or FCU reboot, queued for an explicit safe owner window |
 | - | new-session | environment or Compose values; regenerated, every process restarted |
 | - | next-use | read at the next use, nothing running is changed |
+
+Legacy names in the derived views map as follows. After A6 the views must emit
+only the R9 names above; the legacy names are accepted until then.
+
+| legacy name | source | R9 name |
+|---|---|---|
+| reset | `nav2_params.CLASSES` | reconfigure (2) |
+| restart | `nav2_params.CLASSES` | restart (3) |
+| child | `reload.py` | restart (3) |
+| next | `reload.py` | next-use |
+| disarmed | `reload.py` | not a tier: a gating condition on applying |
 
 The tier is stored in the owner's catalog (`candidate_tier`). The core
 validator (`catalog.py`) currently accepts only an integer 1-5 or `unsupported`
