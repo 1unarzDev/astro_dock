@@ -24,6 +24,16 @@ class ShellTest(unittest.TestCase):
             generation = render(ROOT / 'config/run-defaults.yaml', selection, {}, adapter,
                                 ROOT / 'config/fastdds.xml', dev / 'override.yml', 'linux')
             expected = verify(generation)
+            self.assertEqual(expected['ROS_DOMAIN_ID'], '73')
+            self.assertEqual(expected['MHSEALS_DATA'], WS + '/bags/experiment')
+            self.assertEqual(expected['ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
+            composed = subprocess.run(['docker', 'compose', '-f',
+                str(ROOT / '.devcontainer/docker-compose.yml'), '-f', str(dev / 'override.yml'),
+                'config', '--format', 'json'], check=True, capture_output=True, text=True,
+                env={'PATH': '/usr/bin:/bin', 'HOME': str(root)})
+            compose_env = json.loads(composed.stdout)['services']['dev']['environment']
+            for key, value in expected.items():
+                self.assertEqual(compose_env[key], value)
             # Inert overlays deliberately clobber selected keys, then restoration wins.
             setup = root / 'setup.bash'
             setup.write_text('export ROS_DOMAIN_ID=3 RMW_IMPLEMENTATION=wrong MHSEALS_DATA=/tmp/wrong\n'
@@ -65,6 +75,10 @@ class ShellTest(unittest.TestCase):
             self.assertNotEqual(conflict.returncode, 0)
             self.assertNotIn('CHILD', conflict.stdout)
             self.assertEqual((root / 'overlay.log').read_bytes(), overlay_before)
+            empty = run(['bash', '--noprofile', '--norc', '-c', 'echo CHILD'],
+                        {'ASTRO_RUN_GENERATION': ''})
+            self.assertNotEqual(empty.returncode, 0)
+            self.assertNotIn('CHILD', empty.stdout)
             (generation / 'fastdds.xml').chmod(0o644)
             (generation / 'fastdds.xml').write_text('corrupt')
             for flags, command in [('-c', 'echo CHILD'), ('-ic', 'source "$BASH_ENV"; echo CHILD')]:

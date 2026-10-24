@@ -1,6 +1,6 @@
 # Selected startup must refuse before overlays or the requested child command.
 # Exit also when sourced: a failed BASH_ENV return alone would run bash -c.
-if [[ -n "${ASTRO_RUN_GENERATION:-}" ]]; then
+if [[ -n "${ASTRO_RUN_MANAGED:-}" || -v ASTRO_RUN_GENERATION ]]; then
   __astro_generation="$ASTRO_RUN_GENERATION"
   __astro_frozen="$(astro-run-config --verify "$__astro_generation")" || exit 2
   astro_restore() {

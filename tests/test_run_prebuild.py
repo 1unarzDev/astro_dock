@@ -53,3 +53,9 @@ class PrebuildTest(unittest.TestCase):
                                  env=env, capture_output=True)
             self.assertNotEqual(bad.returncode, 0)
             self.assertEqual(override.read_bytes(), previous)
+            # Unsupported adapters refuse before publishing too.
+            (stubs / 'uname').write_text('#!/bin/sh\necho Darwin\n')
+            bad_platform = subprocess.run(['bash', str(root / '.devcontainer/prebuild.sh')],
+                                          env=env, capture_output=True)
+            self.assertNotEqual(bad_platform.returncode, 0)
+            self.assertEqual(override.read_bytes(), previous)

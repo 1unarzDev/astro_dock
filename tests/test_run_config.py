@@ -24,7 +24,8 @@ class CompilerTest(unittest.TestCase):
 
     def test_strict_inputs(self):
         for text in ['ros: {domain_id: true}', 'ros: {domain_id: null}',
-                     'ros: {domain_id: 233}', 'bad: 1', 'ros: {domain_id: 1, domain_id: 2}',
+                     'ros: {domain_id: 233}', 'ros: {domain_id: .inf}', 'bad: 1',
+                     'ros: {domain_id: 3}\nros.domain_id: 4', 'ros: &r {domain_id: *r}', 'ros: {domain_id: 1, domain_id: 2}',
                      'ros: {<<: {domain_id: 3}}', 'data: {root: /tmp/bags}',
                      'data: {root: ' + WS + '/bags/../escape}', 'transport: {mode: cyclone}']:
             with self.subTest(text=text), self.assertRaises(ValueError):
