@@ -6,6 +6,10 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import sys
+import shlex
+import shutil
+import tempfile
+import yaml
 
 try:
     from mhseals_config.resolver import Assignment, Field, Origin, parse, resolve
@@ -70,16 +74,108 @@ def compile_config(defaults, selected, inherited):
             'session': {k: inherited[k] for k in ENV if k in inherited}, 'sources': sources}
 
 
+def encoded(value):
+    return (json.dumps(value, sort_keys=True, indent=2) + '\n').encode()
+
+
+def render(defaults, selected, inherited, adapter, transport, output, platform):
+    if platform != 'linux':
+        raise ValueError('selected YAML supports Linux static off-boat only')
+    result = compile_config(defaults, selected, inherited)
+    output = Path(output).resolve()
+    adapter, transport = Path(adapter), Path(transport)
+    inputs = {'defaults.yaml': Path(defaults).read_bytes(),
+              'selected.yaml': Path(selected).read_bytes(),
+              'adapter.yaml': adapter.read_bytes(), 'fastdds.xml': transport.read_bytes()}
+    projection = yaml.safe_load(inputs['adapter.yaml'])
+    if not isinstance(projection.get('services', {}).get('dev'), dict):
+        raise ValueError('adapter requires dev service')
+    parent = output.parent / 'run-generations'
+    parent.mkdir(exist_ok=True)
+    generation = Path(tempfile.mkdtemp(prefix='run-', dir=parent))
+    container = WS + '/.devcontainer/run-generations/' + generation.name
+    values = result['effective']
+    environment = {'ROS_DOMAIN_ID': str(values['ros.domain_id']),
+                   'ROS_AUTOMATIC_DISCOVERY_RANGE': values['ros.discovery_range'],
+                   'MHSEALS_DATA': values['data.root'], 'ROS_WS': WS,
+                   'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp',
+                   'FASTDDS_DEFAULT_PROFILES_FILE': container + '/fastdds.xml',
+                   'FASTRTPS_DEFAULT_PROFILES_FILE': container + '/fastdds.xml',
+                   'ASTRO_RUN_GENERATION': container,
+                   'BASH_ENV': WS + '/.devcontainer/dev.bashrc'}
+    result['environment'] = environment
+    result['inherited_adapter'] = {k: inherited[k] for k in
+                                  ('ASTRO_HOSTNAME', 'DISPLAY') if k in inherited}
+    dev = projection['services']['dev']
+    dev.setdefault('environment', {}).update({k: v.replace('$', '$$')
+                                             for k, v in environment.items()})
+    payloads = {'effective.json': encoded(result), 'fastdds.xml': inputs['fastdds.xml'],
+                'compose.yaml': yaml.safe_dump(projection, sort_keys=False).encode()}
+    payloads.update({'source-' + k: v for k, v in inputs.items()})
+    manifest = {'schema': 1, 'compiler': digest(Path(__file__).read_bytes()),
+                'artifacts': {k: digest(v) for k, v in payloads.items()},
+                'source_digests': {k: digest(v) for k, v in inputs.items()}}
+    try:
+        for name, data in {**payloads, 'manifest.json': encoded(manifest)}.items():
+            (generation / name).write_bytes(data)
+            (generation / name).chmod(0o444)
+        verify(generation)
+        temporary = output.with_suffix('.tmp')
+        temporary.write_bytes(payloads['compose.yaml'])
+        os.replace(temporary, output)
+    except BaseException:
+        shutil.rmtree(generation)
+        raise
+    return generation
+
+
+def verify(generation, inherited=None):
+    generation = Path(generation)
+    manifest = json.loads((generation / 'manifest.json').read_bytes())
+    if manifest['schema'] != 1 or manifest['compiler'] != digest(Path(__file__).read_bytes()):
+        raise ValueError('generation compiler identity mismatch')
+    expected = {'effective.json', 'fastdds.xml', 'compose.yaml', 'source-defaults.yaml',
+                'source-selected.yaml', 'source-adapter.yaml', 'source-fastdds.xml'}
+    if set(manifest['artifacts']) != expected:
+        raise ValueError('generation artifact inventory mismatch')
+    for name, sha in manifest['artifacts'].items():
+        if digest((generation / name).read_bytes()) != sha:
+            raise ValueError('generation artifact digest mismatch: ' + name)
+    for name, sha in manifest['source_digests'].items():
+        if digest((generation / ('source-' + name)).read_bytes()) != sha:
+            raise ValueError('generation source digest mismatch')
+    environment = json.loads((generation / 'effective.json').read_bytes())['environment']
+    if inherited is not None:
+        for key, value in environment.items():
+            if key in inherited and inherited[key] != value:
+                raise ValueError('conflicting managed environment: ' + key)
+        for key in (*FORBIDDEN[3:], 'ASTRO_ROS_DOMAIN_ID'):
+            if key in inherited:
+                raise ValueError('conflicting managed environment: ' + key)
+    return environment
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default=os.environ.get('ASTRO_RUN_CONFIG'))
-    parser.add_argument('--defaults', required=True)
+    parser.add_argument('--defaults')
+    parser.add_argument('--adapter')
+    parser.add_argument('--transport')
+    parser.add_argument('--output')
+    parser.add_argument('--platform', default='linux')
+    parser.add_argument('--verify')
+    parser.add_argument('--restore', action='store_true')
     args = parser.parse_args()
-    if not args.config:
-        parser.error('--config or ASTRO_RUN_CONFIG is required')
     try:
-        print(json.dumps(compile_config(args.defaults, args.config, dict(os.environ)), indent=2))
-    except (ValueError, OSError) as exc:
+        if args.verify:
+            environment = verify(args.verify, None if args.restore else dict(os.environ))
+            print('\n'.join('export ' + k + '=' + shlex.quote(v) for k, v in environment.items()))
+        elif args.config and args.defaults and args.output and args.adapter and args.transport:
+            print(render(args.defaults, args.config, dict(os.environ), args.adapter,
+                         args.transport, args.output, args.platform))
+        else:
+            parser.error('selection, defaults, adapter, transport and output required')
+    except (ValueError, OSError, KeyError, TypeError) as exc:
         parser.exit(2, str(exc) + '\n')
 
 
