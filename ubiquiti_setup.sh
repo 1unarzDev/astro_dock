@@ -183,16 +183,16 @@ apply() {
     # Save only a live, unchanged trial, and only after the timer is confirmed dead.
     local rc=0
     ssh_radio "$ip" "p=\$(cat $TRIAL_PID 2>/dev/null) && kill -0 \"\$p\" 2>/dev/null &&
-            diff /tmp/system.cfg /tmp/astro-new.cfg >/dev/null || exit 3
-        kill \"\$p\"; sleep 1; kill -0 \"\$p\" 2>/dev/null && exit 4
-        sort /tmp/system.cfg | tr -d '\r' >/tmp/running.cfg && cfgmtd -w -f /tmp/running.cfg -p /etc/ || exit 5
+            diff /tmp/system.cfg /tmp/astro-new.cfg >/dev/null || exit 13
+        kill \"\$p\"; sleep 1; kill -0 \"\$p\" 2>/dev/null && exit 14
+        sort /tmp/system.cfg | tr -d '\r' >/tmp/running.cfg && cfgmtd -w -f /tmp/running.cfg -p /etc/ || exit 15
         rm -f $TRIAL_PID /tmp/astro-new.cfg" </dev/null || rc=$?
     case $rc in
         0) ;;
-        3) die "Trial already reverted (timer gone or config changed); nothing was saved" ;;
-        4) die "Could not stop the timer; nothing was saved and $name reboots into its saved config" ;;
-        5) die "The flash write failed after the timer was stopped; $name runs the trial until its next reboot, which restores the saved config" ;;
-        *) die "Lost contact with $name; nothing confirmed saved, so expect it to reboot into its saved config" ;;
+        13) die "Trial already reverted (timer gone or config changed); nothing was saved" ;;
+        14) die "Could not stop the timer; nothing was saved and $name reboots into its saved config" ;;
+        15) die "The flash write failed after the timer was stopped; $name runs the trial until its next reboot, which restores the saved config" ;;
+        *) die "SSH to $name failed (exit $rc); nothing confirmed saved, so expect it to reboot into its saved config" ;;
     esac
     info "Saved to flash and timer cancelled. Previous config: $file"
 }
