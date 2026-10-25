@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('astro_help', ROOT / '.devcontainer' / 'astro-help.py')
@@ -39,6 +40,24 @@ class DiscoveryTest(unittest.TestCase):
         self.assertEqual(len(errors), 2)  # the unclosed list and the nameless package
         self.assertTrue(all(e.startswith('help: ') for e in errors))
 
+    def test_malformed_shapes_are_skipped(self):
+        bodies = ['package: p\ncommands: 5', 'package: p\ncommands: [{name: c, params: 5}]',
+                  'package: p\ncommands: [{name: c, examples: 5}]']
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp, f'{i}.yaml') for i in range(len(bodies))]
+            for path, body in zip(paths, bodies):
+                path.write_text(body)
+            packages, errors = astro_help.discover(paths + [astro_help.OWN])
+        self.assertEqual([p['package'] for p in packages], ['astro_dock'])
+        self.assertEqual(len(errors), 3)
+
+    def test_workspace_falls_back_like_dev_bashrc(self):
+        with mock.patch.dict(astro_help.os.environ, {'ROS_WS': '/ws'}):
+            self.assertEqual(astro_help.workspace(), '/ws')
+        with mock.patch.dict(astro_help.os.environ):
+            astro_help.os.environ.pop('ROS_WS', None)
+            self.assertEqual(astro_help.workspace(), str(ROOT.resolve()))
+
     def test_own_help_parses(self):
         package = astro_help.parse(astro_help.OWN)
         self.assertIn('astro-ros-install', [c['name'] for c in package['commands']])
@@ -73,6 +92,17 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(astro_help.missing(install, {'names': 'htop'}), [])
         task = command(name='task', run='ros2 launch p task.launch.py', params=[{'name': 'task', 'required': True}])
         self.assertEqual(astro_help.build(task, {}), 'ros2 launch p task.launch.py task:=<task>')
+
+    def test_switch_defaulting_on_turns_off(self):
+        check = command(name='c', params=[{'name': '--color', 'type': 'bool', 'default': True},
+                                          {'name': '--lint', 'type': 'bool'}])
+        self.assertEqual(astro_help.build(check, {'--color': True, '--lint': True}), 'c --lint')
+        self.assertEqual(astro_help.build(check, {'--color': False}), 'c --no-color')
+
+    def test_unbalanced_quote_is_reported(self):
+        install = command(name='i', params=[{'name': 'names', 'type': 'list'}])
+        with self.assertRaisesRegex(ValueError, 'unbalanced quote'):
+            astro_help.build(install, {'names': "a 'b"})
 
     def test_text_lists_and_details(self):
         packages = [astro_help.parse(astro_help.OWN)]

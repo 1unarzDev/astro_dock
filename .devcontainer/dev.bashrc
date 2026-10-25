@@ -1,6 +1,6 @@
 # This file's directory: the repository's .devcontainer, or /etc/astro in an image
 # started without the repository (whose ENV sets ROS_WS).
-ASTRO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ASTRO_DIR="${BASH_SOURCE[0]%/*}"
 export ROS_WS="${ROS_WS:-${ASTRO_DIR%/.devcontainer}}"
 
 # Load ROS, the image overlays and the built workspace. Later entries take

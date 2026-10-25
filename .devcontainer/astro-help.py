@@ -14,7 +14,8 @@ help.yaml schema (unknown keys are ignored):
         summary: one line
         notes: optional text (safety, which host)
         params:
-          - name: --window      # "-x": option ("--x value", a bare switch when type bool);
+          - name: --window      # "-x": option ("--x value", a bare switch when type bool;
+                                # a switch defaulting to true turns off as --no-x);
                                 # with "ros2 launch": "x:=value"; otherwise positional
             type: str           # str | int | float | bool | path | list (space-separated)
             default: 5.0
@@ -47,10 +48,15 @@ TRUE = ('true', 'on', 'yes', '1')
 
 # ---- data -------------------------------------------------------------------------------
 
+def workspace():
+    """$ROS_WS, else derived as dev.bashrc does: the directory holding this .devcontainer."""
+    return os.environ.get('ROS_WS') or str(OWN.parent).removesuffix('/.devcontainer')
+
+
 def candidates(ws=None, prefixes=None):
     """Yield help.yaml paths in priority order."""
     yield OWN
-    src = Path(ws or os.environ.get('ROS_WS', Path.home() / 'roboboat_ws')) / 'src'
+    src = Path(ws or workspace()) / 'src'
     for pattern in ('*/help.yaml', '*/*/help.yaml'):
         yield from sorted(src.glob(pattern))
     if prefixes is None:
@@ -91,8 +97,8 @@ def discover(paths=None):
     for path in candidates() if paths is None else paths:
         try:
             package = parse(path)
-        except (OSError, ValueError, yaml.YAMLError) as error:
-            errors.append(f'help: {path}: {str(error).splitlines()[0]}')
+        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError) as error:
+            errors.append(f'help: {path}: {(str(error) or type(error).__name__).splitlines()[0]}')
             continue
         if package['package'] not in seen:
             seen.add(package['package'])
@@ -131,11 +137,14 @@ def build(command, values):
                 words.append({'option': f'{name} {hole}', 'launch': f'{name}:={hole}'}.get(param['form'], hole))
             continue
         if param['form'] == 'switch':
-            if shown(value).lower() in TRUE:
-                words.append(name)
+            # Differs from the default: on adds the switch, off (default on) adds --no-NAME.
+            words.append(name if shown(value).lower() in TRUE else f'--no-{name.lstrip("-")}')
             continue
-        quoted = (' '.join(map(shlex.quote, shlex.split(str(value)))) if param['type'] == 'list'
-                  else shlex.quote(shown(value, param)))
+        try:
+            quoted = (' '.join(map(shlex.quote, shlex.split(str(value)))) if param['type'] == 'list'
+                      else shlex.quote(shown(value, param)))
+        except ValueError:
+            raise ValueError(f'{name}: unbalanced quote') from None
         if param['form'] == 'option':
             words.append(f'{name} {quoted}')
         elif param['form'] == 'launch':
@@ -205,7 +214,7 @@ class Browser:
     def __init__(self, screen, packages):
         self.screen, self.packages = screen, packages
         self.values, self.word, self.status, self.focus = {}, '', '', 'list'
-        self.row = self.param = self.top = 0
+        self.row = self.param = self.top = self.cmd_top = 0
         self.examples = False
         # Python coerces a C locale to UTF-8 itself, so ask the terminal's locale variables.
         lang = next((os.environ[v] for v in ('LC_ALL', 'LC_CTYPE', 'LANG') if os.environ.get(v)), '')
@@ -259,9 +268,13 @@ class Browser:
             return
         rows = self.rows()
         package, command = self.selected(rows)
-        # The built line is shown whole (wrapped), never truncated: it is what runs.
+        # The built line is wrapped, never truncated: it is what runs. Lines that do not fit
+        # scroll with PgUp/PgDn, and the separator shows which part is on screen.
         line = build(command, self.values_for(package, command)) if command else ''
-        shown_line = [('  ' if i else '$ ') + line[i:i + w - 6] for i in range(0, len(line), w - 6)][:h - 10]
+        parts = [('  ' if i else '$ ') + line[i:i + w - 6] for i in range(0, len(line), w - 6)]
+        room = h - 10
+        self.cmd_top = max(0, min(self.cmd_top, len(parts) - room))
+        shown_line = parts[self.cmd_top:self.cmd_top + room]
         left, bottom = min(38, w // 2 - 2), h - 4 - max(len(shown_line), 1)
         count, n = sum(len(p['commands']) for p in self.packages), len(self.packages)
         title = f'{g["h"]} help{g["sep"]}{n} package{"s" * (n != 1)}{g["sep"]}{count} commands'
@@ -274,6 +287,9 @@ class Browser:
                 self.put(y, left + 1, g['v'], self.style('dim'))
         self.put(bottom, 0, g['lt'] + g['h'] * left + g['bt'] + g['h'] * (w - left - 3) + g['rt'],
                  self.style('accent'))
+        if len(parts) > room:
+            where = f' lines {self.cmd_top + 1}-{self.cmd_top + room} of {len(parts)}, PgUp/PgDn '
+            self.put(bottom, w - len(where) - 2, where, self.style('note'))
         self.put(h - 2, 0, g['bl'] + g['h'] * (w - 2) + g['br'], self.style('accent'))
         self.draw_list(rows, command, left, bottom - 1)
         if command:
@@ -381,8 +397,14 @@ class Browser:
                                             if shown(current) in choices else 0]
         else:
             entered = self.ask(f'{param["name"]} = ', shown(current))
-            if entered is not None:
-                values[param['name']] = entered
+            if entered is None:
+                return
+            try:
+                build(command, dict(values, **{param['name']: entered}))
+            except ValueError as error:
+                self.status = f'{error}; not set.'  # e.g. "--only: unbalanced quote; not set."
+                return
+            values[param['name']] = entered
 
     def run(self):
         """Event loop; return the confirmed command line, or None."""
@@ -401,7 +423,9 @@ class Browser:
                     self.word = self.ask('/', self.word) or ''
                 continue
             params = command['params']
-            if key in (curses.KEY_UP, 'k'):
+            if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+                self.cmd_top += 1 if key == curses.KEY_NPAGE else -1  # draw() clamps it
+            elif key in (curses.KEY_UP, 'k'):
                 if self.focus == 'list':
                     self.row -= 1
                 else:
