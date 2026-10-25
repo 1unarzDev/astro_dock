@@ -319,15 +319,22 @@ stage_compose() {
 }
 
 stage_clock() {
-    local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service boat_server boat_subnet
+    local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service boat_server boat_subnet peers=""
     # "boat" names the boat time server and subnet from config/boat-network.env.
     read -r boat_server boat_subnet < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
     servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
-    [[ "${servers[*]}" == boat ]] && servers=("$boat_server")
+    # A client of the boat server also answers the boat subnet, so astro-clock.py sees every host.
+    [[ "${servers[*]}" == boat ]] && servers=("$boat_server") peers="$boat_subnet"
     [[ "$allow" == boat ]] && allow="$boat_subnet"
     heading "Automatic host time synchronization"
     echo "Points the host's existing NTP client (chrony or systemd-timesyncd) at: ${servers[*]}."
     echo "Containers share the host clock. Set ASTRO_NTP_SERVER only when a local time server is available."
+    if [[ -n "${ASTRO_NTP_SERVER:-}" ]]; then
+        echo "Prefers it and polls it every 4-16 s; public servers stay as the fallback away from it."
+    fi
+    if [[ ! -e /sys/class/rtc/rtc0 ]] || grep -qs Jetson /proc/device-tree/model; then
+        echo "No battery-backed clock here: it boots at the last saved time and steps on the first sync."
+    fi
     for server in "${servers[@]}"; do
         [[ "$server" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || { echo "Invalid NTP server: $server" >&2; exit 2; }
     done
@@ -341,14 +348,22 @@ stage_clock() {
         config=/etc/chrony.conf service=chronyd
         [[ -f /etc/chrony/chrony.conf ]] && config=/etc/chrony/chrony.conf service=chrony
         [[ -f "$config" ]] || { echo "Cannot locate the chrony configuration." >&2; exit 1; }
-        printf 'server %s iburst\n' "${servers[@]}" > "$file"
-        run sudo install -D -m 0644 "$file" /etc/chrony/astro-sources/boat.sources
-        if [[ -n "$allow" ]]; then
-            printf 'allow %s\nlocal stratum 10\n' "$allow" > "$file"
-            run sudo install -D -m 0644 "$file" /etc/chrony/astro-sources/boat-serve.conf
-            grep -Fxq 'confdir /etc/chrony/astro-sources' "$config" \
-                || run sudo sh -c "printf '\nconfdir /etc/chrony/astro-sources\n' >> '$config'"
+        if [[ -n "${ASTRO_NTP_SERVER:-}" ]]; then
+            printf 'server %s iburst prefer minpoll 2 maxpoll 4\n' "${servers[@]}" > "$file"
+            printf 'pool time.cloudflare.com iburst\n' >> "$file"
+        else
+            printf 'server %s iburst\n' "${servers[@]}" > "$file"
         fi
+        run sudo install -D -m 0644 "$file" /etc/chrony/astro-sources/boat.sources
+        # Step (not slew) the first 3 updates after a start, so a cold boot converges at once.
+        printf 'makestep 1 3\n' > "$file"
+        # The server keeps serving with no upstream; orphan lets equal-stratum servers agree.
+        [[ -z "$allow" ]] || printf 'allow %s\nlocal stratum 10 orphan\n' "$allow" >> "$file"
+        [[ -z "$peers" || "$peers" == "$allow" ]] || printf 'allow %s\n' "$peers" >> "$file"
+        run sudo install -D -m 0644 "$file" /etc/chrony/astro-sources/astro.conf
+        run sudo rm -f /etc/chrony/astro-sources/boat-serve.conf
+        grep -Fxq 'confdir /etc/chrony/astro-sources' "$config" \
+            || run sudo sh -c "printf '\nconfdir /etc/chrony/astro-sources\n' >> '$config'"
         grep -Fxq 'sourcedir /etc/chrony/astro-sources' "$config" \
             || run sudo sh -c "printf '\nsourcedir /etc/chrony/astro-sources\n' >> '$config'"
     elif [[ -n "$allow" ]]; then
@@ -376,6 +391,7 @@ stage_clock() {
         [[ "$(timedatectl show -p NTPSynchronized --value)" == yes ]] \
             || echo "NTP is not synchronized yet; check the network before installing packages." >&2
     fi
+    echo "Offsets of the LAN hosts: .devcontainer/astro-clock.py"
     COMPLETED+=(clock)
 }
 

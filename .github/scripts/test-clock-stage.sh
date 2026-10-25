@@ -27,6 +27,16 @@ grep -q '192.168.0.152' <<<"$out" || { echo "FAIL: server not used"; exit 1; }
 read -r server subnet < <(. "$root/config/boat-network.env"; echo "$BOAT_TIME_SERVER $BOAT_SUBNET")
 out="$(ASTRO_NTP_SERVER=boat clock)"
 grep -q "at: $server\.$" <<<"$out" || { echo "FAIL: boat server not resolved"; exit 1; }
+grep -q 'Prefers it' <<<"$out" || { echo "FAIL: local server not preferred"; exit 1; }
+python3 "$root/.devcontainer/astro-clock.py" --help >/dev/null
+python3 - "$root" <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('clock', sys.argv[1] + '/.devcontainer/astro-clock.py')
+clock = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(clock)
+hosts = clock.lan_hosts()
+assert hosts[0][0] == 'time server' and len(hosts) >= 2, hosts
+EOF
 out="$(ASTRO_NTP_ALLOW=boat clock)"
 grep -q "Serves time to $subnet " <<<"$out" || { echo "FAIL: boat subnet not resolved"; exit 1; }
 echo "clock stage ok"
