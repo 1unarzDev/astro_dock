@@ -438,17 +438,21 @@ build_apply_script() {
 }
 
 # Router-side lines, run before any change, that save the current value of every key the
-# transaction sets into a startup script. Five minutes after the next boot it restores them
-# and reboots, unless confirm_router has cleared astro_prev_rc_startup. It lives in NVRAM
-# because the apply reboots, and checks NVRAM rather than /tmp for the same reason.
+# transaction sets into a startup script (keys absent before are unset again). Five minutes
+# after the next boot it restores them and reboots, unless confirm_router has cleared
+# astro_prev_rc_startup. It lives in NVRAM because the apply reboots, and checks NVRAM
+# rather than /tmp for the same reason. An unconfirmed earlier apply exits 3 untouched.
 revert_lines() {
     local keys
     keys=$(sed -n 's/^nvram set \([A-Za-z0-9_]*\)=.*/\1/p' <<<"$1" | sort -u | tr '\n' ' ')
     sed "s/@KEYS@/$keys/" <<'EOF'
-[ -n "$(nvram get astro_prev_rc_startup)" ] || nvram set astro_prev_rc_startup="x$(nvram get rc_startup)"
+[ -z "$(nvram get astro_prev_rc_startup)" ] || exit 3
+s=$(nvram show 2>/dev/null || true); [ -n "$s" ]
+nvram set astro_prev_rc_startup="x$(nvram get rc_startup)"
 r='( sleep 300; [ -n "$(nvram get astro_prev_rc_startup)" ] || exit 0'
-for k in @KEYS@; do v=$(nvram get "$k" | sed "s/'/'\\\\''/g"); r="$r
-nvram set $k='$v'"; done
+for k in @KEYS@; do if printf '%s\n' "$s" | grep -q "^$k="; then v=$(nvram get "$k" | sed "s/'/'\\\\''/g"); r="$r
+nvram set $k='$v'"; else r="$r
+nvram unset $k"; fi; done
 r="$r
 p=\$(nvram get astro_prev_rc_startup); nvram set rc_startup=\"\${p#x}\"; nvram unset astro_prev_rc_startup; nvram commit; reboot ) &"
 nvram set rc_startup="$r"
@@ -457,8 +461,11 @@ EOF
 
 # Cancel the auto-revert armed by the apply transaction and restore the startup script.
 confirm_router() {
-    router_ssh 'p=$(nvram get astro_prev_rc_startup); nvram set rc_startup="${p#x}" && nvram unset astro_prev_rc_startup && nvram commit && [ -z "$(nvram get astro_prev_rc_startup)" ]' </dev/null \
-        || die "Could not cancel the auto-revert; the router restores its previous settings five minutes after boot"
+    local status=0
+    router_ssh 'p=$(nvram get astro_prev_rc_startup); [ -n "$p" ] || exit 3; nvram set rc_startup="${p#x}" && nvram unset astro_prev_rc_startup && nvram commit && [ -z "$(nvram get astro_prev_rc_startup)" ]' </dev/null \
+        || status=$?
+    ((status != 3)) || die "The auto-revert already ran or was never armed; rc_startup left unchanged"
+    ((status == 0)) || die "Could not cancel the auto-revert; the router restores its previous settings five minutes after boot"
     info "Verified; auto-revert cancelled."
 }
 
@@ -488,21 +495,24 @@ EOF
     [[ $ADMIN_PASSWORD == "$WIFI_PASSWORD" ]] && printf 'Shared passwords      : yes (values hidden)\n'
 }
 
+# Wait for a new boot ID so verify and confirm never run against the pre-reboot router. The
+# two-minute limit keeps confirmation well inside the five-minute auto-revert.
 wait_for_router() {
-    local attempt old_host=$HOST
+    local old_boot=$1 old_host=$HOST boot deadline=$((SECONDS + 120))
     HOST=$ROUTER_IP
+    AUTH_MODE=key
     ssh_base_options
     info "Waiting for DD-WRT to reboot at $HOST..."
-    for attempt in {1..30}; do
-        if ssh "${SSH_OPTIONS[@]}" -o BatchMode=yes "$SSH_USER@$HOST" true </dev/null 2>/dev/null; then
-            AUTH_MODE=key
+    while ((SECONDS < deadline)); do
+        boot=$(router_ssh 'cat /proc/sys/kernel/random/boot_id' </dev/null 2>/dev/null) || boot=""
+        if [[ -n $boot && $boot != "$old_boot" ]]; then
             info "Router is reachable after reboot."
             return
         fi
         sleep 4
     done
     HOST=$old_host
-    die "Router did not return within two minutes. Connect to the LAN and check $ROUTER_IP manually."
+    die "Router did not reboot and return within two minutes; it restores its previous settings five minutes after boot. Check $ROUTER_IP manually."
 }
 
 verify_router() {
@@ -532,7 +542,7 @@ verify_router() {
 }
 
 configure_router() {
-    local answer apply_script confirmation
+    local answer apply_script confirmation boot status=0
     edit_settings
     validate_settings
     initialize_state
@@ -554,10 +564,14 @@ configure_router() {
         read -r -p "Back up NVRAM and apply this configuration? Type $confirmation to continue: " answer
     fi
     [[ $answer == "$confirmation" ]] || { info "Cancelled without router changes."; return; }
+    boot=$(router_ssh 'cat /proc/sys/kernel/random/boot_id' </dev/null) && [[ -n $boot ]] \
+        || die "Could not read the router boot ID; nothing was changed"
     make_backup
     apply_script=$(build_apply_script)
     info "Applying one NVRAM transaction..."
-    if ! printf '%s\n' "$apply_script" | router_ssh 'sh -s'; then
+    printf '%s\n' "$apply_script" | router_ssh 'sh -s' || status=$?
+    ((status != 3)) || die "An earlier apply is still unconfirmed; its auto-revert restores the previous settings five minutes after boot. Let it run (reboot the router if needed), then rerun."
+    if ((status)); then
         if [[ -n $BACKUP_FILE ]]; then
             die "Apply failed; backup is at $BACKUP_FILE"
         else
@@ -567,8 +581,7 @@ configure_router() {
     info "Settings committed. Rebooting DD-WRT; it restores the previous settings five minutes"
     info "after boot unless the verification below passes."
     router_ssh 'reboot' </dev/null >/dev/null 2>&1 || true
-    AUTH_MODE=key
-    wait_for_router
+    wait_for_router "$boot"
     verify_router
     confirm_router
 }
