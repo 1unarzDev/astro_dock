@@ -1,8 +1,6 @@
 services:
   dev:
     image: ${ASTRO_IMAGE:-lunarzdev/astro:jetson-jp6-jazzy}
-    # Boat computers run headless; keep the container up across reboots.
-    restart: unless-stopped
     runtime: nvidia
     environment:
       ROS_DOMAIN_ID: ${ASTRO_ROS_DOMAIN_ID:-42}

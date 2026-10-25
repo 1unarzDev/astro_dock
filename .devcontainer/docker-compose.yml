@@ -5,6 +5,8 @@ services:
     # "always" would make Compose incorrectly pull that vsc-* image from a registry.
     pull_policy: ${ASTRO_PULL_POLICY:-missing}
     container_name: roboboat_dev
+    # Robot hosts run headless; the container comes back after reboots unless stopped by hand.
+    restart: unless-stopped
     hostname: roboboat
     extra_hosts:
       - roboboat:127.0.1.1
