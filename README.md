@@ -208,20 +208,29 @@ flowchart LR
 | .21 / .22 | Bullet AC / Rocket 5AC Lite management | set on each radio |
 | .100–.149 | DHCP pool | router |
 | .152 / .153 | Boat computer / Jetson | DHCP reservations (`STATIC_LEASES`) |
-| .201 | VLP16 lidar | static on the sensor |
+| .201 | VLP16 lidar (factory .1.201, re-addressed) | static on the sensor |
 
-- **Radio link.** The Rocket 5AC Lite is the access point and the Bullet AC (`B-DB-AC`) is the station, both on airOS 8.7.1 with SSID `blastoise`. The link bridges layer 2: boat hosts see the laptop's own MAC. Their addresses, MACs and roles are the `UBNT_*` values in `config/boat-network.env`; each also answers on an airOS link-local `169.254.x.y` address. [`ubiquiti_setup.sh`](ubiquiti_setup.sh) uses them:
+- **Radio link.** A point-to-point airMAX AC bridge on airOS 8.7.1. Both radios run network mode `bridge` with WDS (transparent bridging) on, so boat hosts see the laptop's own MAC.
+
+  | Setting | Rocket 5AC Lite (.22) | Bullet AC `B-DB-AC` (.21) |
+  | --- | --- | --- |
+  | Role | access point (PtP) | station |
+  | SSID / security | `blastoise`, WPA2-AES | `blastoise`, WPA2-AES |
+  | Frequency / width | 5165 MHz, 40 MHz | follows the AP |
+  | Management address | static on `br0`, link-local alias on | static on `br0`, link-local alias on |
+
+  The addresses, MACs, roles and SSID are the `UBNT_*` values in `config/boat-network.env`. [`ubiquiti_setup.sh`](ubiquiti_setup.sh) uses them:
   - `verify [--via tranquility]` is read-only. It pings the radios, router and boat computer, checks ARP against the MACs, and sends one UBNT discovery probe that prints each radio's model, firmware, SSID, mode and addresses.
-  - `snapshot bullet|rocket` saves the radio's `/tmp/system.cfg`.
-  - `apply bullet|rocket` snapshots, then changes only the airOS keys listed in `UBNT_<RADIO>_CFG`, after you type `APPLY`. A timer on the radio restores the snapshot and reboots after 300 s unless you type `KEEP`.
+  - `snapshot bullet|rocket` saves the radio's `/tmp/system.cfg` under `~/.local/state/astro_dock/ubiquiti/` (mode 600). It is also an airOS backup you can upload in the web UI (System → Configuration Management).
+  - `apply bullet|rocket` changes only the existing keys listed in `UBNT_<RADIO>_CFG`, after a snapshot and after you type `APPLY`. It runs the change as a RAM-only trial (`rc.softrestart test`) with a timer that reboots the radio into its saved config after 300 s. Typing `KEEP` writes the trial to flash and cancels the timer, so until then a reboot or power cycle also restores the saved config.
 
-  Run `snapshot` and `apply` from a boat-LAN host, and change the far radio (Rocket) before the near one, so a bad change reverts on its own. SSH prompts for the radio login. Logins and the WPA key are never in the repo: they live on the radios and in the snapshots under `~/.local/state/astro_dock/ubiquiti/` (mode 600), which are also airOS backups you can upload in the airOS web UI (System → Configuration Management).
-- **Radio recovery.** If a radio is unreachable at its LAN address, connect a host to the radio's PoE LAN port and browse to the link-local address that `verify` printed (give the host a `169.254.0.0/16` address). As a last resort, hold the reset button for about 10 s to restore factory defaults (`192.168.1.20`). Then upload the latest snapshot, or set the role, SSID, WPA key and address to match the table, and run `verify`.
+  `apply` handles one radio at a time and refuses while the other radio is unreachable or has a pending trial. It also refuses management-address keys and link-shared keys (SSID, security, WPA key, frequency, width, mode, WDS), because changing them on one radio drops the link. Change those in the airOS UI on both radios, the AP last. Run `snapshot` and `apply` from a boat-LAN host, or set `UBNT_JUMP`.
+- **Credentials** are never in the repo. Copy [`.env.example`](.env.example) to the ignored `.env` (or symlink it to a mode-600 file elsewhere); scripts read logins from it and SSH prompts when a value is empty.
+- **Radio recovery.** If a radio is unreachable at its LAN address, connect a host to the radio's PoE LAN port and browse to the link-local address that `verify` printed (give the host a `169.254.0.0/16` address). As a last resort, hold the reset button for about 10 s to restore factory defaults (`192.168.1.20`). Then upload the latest snapshot, or set the values in the table plus the WPA key, and run `verify`.
 - **To fill** (owner):
-  - Frequency, channel width and security mode of the link (`radio.1.freq`, `radio.1.chanbw` and the `wpa` keys in a snapshot).
-  - Radio login user (`UBNT_USER`, default `ubnt`) and where the team keeps the radio password and WPA key.
-  - Whether .21 and .22 are static on the radios; the router has no reservation for them.
-  - Physical placement and wiring: which end the router and each radio sit on, and what connects to `enp0s20f0u1`.
+  - Physical placement and wiring: which end the router and each radio sit on, and what connects to the laptop's `enp0s20f0u1`.
+  - Where the team keeps the radio and router passwords and the WPA key, outside `.env`.
+  - The Rocket's own default gateway is `192.168.1.1`, which is off this subnet; set it to the router in the airOS UI if the radio needs NTP or firmware checks.
 
 - **Router.** [`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH from those values: DHCP, DNS and WPA2 Wi-Fi, with router WAN/NAT disabled. Addresses, SSID and credentials are prompted. `--dry-run` inspects without changing anything; applying confirms, backs up NVRAM when supported, reboots and verifies. State lives in the ignored `router_setup_state/`.
 - **Reservations** sit above the DHCP pool. `./setup.linux.sh --components boat` on each boat computer drops any hand-set wired address so DHCP supplies it, the gateway and DNS, turns Wi-Fi off, and raises `net.core.rmem_max` to the 4 MiB that `config/fastdds.xml` requests.
