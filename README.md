@@ -298,6 +298,10 @@ docker compose \
 
 This builds `core`; Jetson images use their platform-specific Dockerfiles. On JetPack 6, Jazzy is built from source at the upstream release snapshot named by `ROS2_RELEASE` in [`Dockerfile.deps`](.devcontainer/Dockerfile.deps); bump it to the next `release-jazzy-*` tag of [ros2/ros2](https://github.com/ros2/ros2/tags) to update.
 
+#### Coding agents
+
+Claude Code ([`.claude/settings.json`](.claude/settings.json)) and Codex ([`.codex/hooks.json`](.codex/hooks.json)) run one stdlib dispatcher, [`.agents/hook.py`](.agents/hook.py), on session start and around every shell command. It converts each CLI's event into one neutral event and passes it to the hooks that workspace packages declare in an `agent_hooks.yaml` ([discovery](.agents/hooks.yaml)). A package hook can add a playbook at session start, deny a command with a reason, or record what ran. Without a package hook, nothing happens. [`AGENTS.md`](AGENTS.md) covers agents that don't run hooks. Codex runs project hooks only after you trust them (`/hooks`). Until then nothing is blocked before it runs, and only the robot's own safeguards apply. Errors go to `~/.local/state/astro/agents-hook.log` and never block a command. Run `python3 -m pytest tests/test_agents_hook.py` to test the dispatcher.
+
 #### Image publishing and deployment
 
 [The image workflow](.github/workflows/images.yml) builds `core` on native hosted AMD64 and ARM64 runners, smoke-tests both, and combines them into a multi-architecture tag. `cuda` and `sitl` use hosted AMD64 runners. JetPack 6 builds `deps` and the runtime candidate on hosted ARM64; its dependency content key skips an unchanged foundation, and registry caching preserves intermediate layers. `deps` is an internal build layer. Image compilation uses native runners rather than QEMU.
