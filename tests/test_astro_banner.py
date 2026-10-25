@@ -37,7 +37,7 @@ class BannerTest(unittest.TestCase):
         return astro_banner.render(self.env, cols, rows, dict(self.config, **config))
 
     def test_art_follows_terminal_size(self):
-        cases = {(140, 40): ('╚═╝', '███▓▓▓'), (90, 30): ('█▀█ ▄█', '▟███▙'), (60, 20): ('█▀█ ▄█', None),
+        cases = {(140, 40): ('╚█████╗', '⠸⠟⠅⠁'), (90, 30): ('█▀█ ▄▄█', '⢀⢀⢄⠔⢔'), (60, 20): ('✦ █▀█ ▄▄█', None),
                  (60, 8): ('✦ ASTRO DOCK', None)}
         for (cols, rows), (wordmark, art) in cases.items():
             text = plain(self.render(cols, rows))
@@ -45,7 +45,7 @@ class BannerTest(unittest.TestCase):
             if art:
                 self.assertIn(art, text)
             else:
-                self.assertNotIn('▟███▙', text)
+                self.assertFalse(re.search('[⠁-⣿]', text))
             lines = text.splitlines()
             self.assertLessEqual(max(len(line) for line in lines), cols)
             self.assertLessEqual(len(lines), rows - 2)
@@ -55,7 +55,7 @@ class BannerTest(unittest.TestCase):
 
     def test_stats_sit_beside_wide_art_and_below_narrow(self):
         wide = plain(self.render(140, 40)).splitlines()
-        self.assertTrue(any('▓' in line and '│ dds' in line for line in wide))
+        self.assertTrue(any(re.search('[⠁-⣿]', line) and '│ dds' in line for line in wide))
         narrow = plain(self.render(60, 20)).splitlines()
         first_stat = next(i for i, line in enumerate(narrow) if '│ ros' in line)
         self.assertGreater(first_stat, next(i for i, line in enumerate(narrow) if '█▀█' in line))

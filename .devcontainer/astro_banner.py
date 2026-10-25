@@ -14,13 +14,17 @@ sys.path.insert(0, str(HERE))  # python3 -I leaves the script's directory off th
 from astro_banner_stats import collect, read  # noqa: E402
 
 CONFIGS = (HERE.parent / 'config' / 'banner.yaml', Path.home() / '.config' / 'mhseals' / 'banner.yaml')
-STARS = '·✦⋆'
+# Star glyphs by brightness: near, mid and distant.
+STARS = {'✦': 'star', '⋆': 'faint', '+': 'faint', '·': 'dim', '.': 'dim'}
 # 16-colour code and soft truecolour per tone (cx: 16 ANSI colours, cyan accent).
 TONES = {'accent': (36, (125, 196, 228)), 'ok': (32, (166, 218, 149)), 'warn': (33, (238, 212, 159)),
-         'bad': (31, (237, 135, 150)), 'dim': (90, (110, 115, 141)), 'star': (37, (244, 219, 214))}
-# One-for-one so widths, and with them the layout, survive the ASCII fallback.
+         'bad': (31, (237, 135, 150)), 'dim': (90, (110, 115, 141)), 'star': (37, (244, 219, 214)),
+         'faint': (37, (183, 189, 222))}
+# One-for-one so widths, and with them the layout, survive the ASCII fallback;
+# braille shading becomes a density ramp by its dot count.
 ASCII = str.maketrans('█▓▒░▄▀▟▙▛▜▁▔─━═│║╭╮╰╯╗╔╝╚·✦⋆…↑✓✗±▰▱',
                       '##%:######_~--=||++++++++.*+~^+x~#-')
+ASCII.update({0x2800 + bits: ' .,:;+*#@'[bin(bits).count('1')] for bits in range(256)})
 
 
 # ---------------------------------------------------------------- config
@@ -71,9 +75,18 @@ def paint(lines, stops, width=None):
     height = max(len(lines), 1)
     out = []
     for y, line in enumerate(lines):
-        out.append([(ch, 'star' if ch in STARS else None if ch == ' ' else
-                     gradient(stops, 0.8 * x / max(width - 1, 1) + 0.2 * y / height)) for x, ch in enumerate(line)])
+        out.append([(ch, STARS.get(ch) or (None if ch == ' ' else
+                     shade(gradient(stops, 0.8 * x / max(width - 1, 1) + 0.2 * y / height), ch)))
+                    for x, ch in enumerate(line)])
     return out
+
+
+def shade(rgb, ch):
+    """Dim sparse braille cells so a dithered sphere reads lit limb to shadow."""
+    if not 0x2800 < ord(ch) <= 0x28ff:
+        return rgb
+    k = 0.45 + 0.55 * bin(ord(ch) - 0x2800).count('1') / 8.0
+    return tuple(int(v * k) for v in rgb)
 
 
 def width_of(line):
