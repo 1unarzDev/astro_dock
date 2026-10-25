@@ -19,3 +19,4 @@ src/mhseals_nav/
 src/mhseals_testing/
 .devcontainer/run-generations/
 *.egg-info/
+.env
