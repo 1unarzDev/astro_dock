@@ -1,5 +1,5 @@
 {
-  "description": "astro_dock agent hooks: .agents/hook.py runs the workspace packages' hooks (see .agents/hooks.yaml)",
+  "description": "astro_dock agent hooks: .agents/hook.py runs each workspace package's src/<repo>/<package>/agent_hook.py",
   "hooks": {
     "SessionStart": [
       {

@@ -1,6 +1,0 @@
-# Agent hooks: .claude/settings.json and .codex/hooks.json run .agents/hook.py, which runs the hook
-# of every workspace package that ships an agent_hooks.yaml (at its repo or package root):
-#   name: my_package
-#   script: my_package/agent_hook.py      # relative to that file; defines agent_event(event)
-discover: [src/*/agent_hooks.yaml, src/*/*/agent_hooks.yaml]
-disabled: []          # package names to skip

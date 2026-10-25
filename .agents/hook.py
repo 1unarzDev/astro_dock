@@ -4,9 +4,8 @@
     python3 -I .agents/hook.py claude|codex      # a hook: the agent CLI's event JSON on stdin
     python3 -I .agents/hook.py --playbook        # print the session-start playbooks as text
 
-Packages opt in with an ``agent_hooks.yaml`` (found by the ``discover`` globs of
-``.agents/hooks.yaml``) naming a ``script`` that defines ``agent_event(event)``. Each one gets
-the same neutral event, whichever CLI sent it:
+A package opts in with an ``agent_hook.py`` module at ``src/<repo>/<package>/agent_hook.py``
+that defines ``agent_event(event)``. Each one gets the same neutral event, whichever CLI sent it:
 
     {agent: claude|codex, event: start|pre|post, session_id, cwd, source,
      tool, tool_id, command, exit, duration_ms, failed}
@@ -34,26 +33,6 @@ EXIT = re.compile(r'^Exit code:?\s*(-?\d+)', re.M)
 BUDGET_S = 2.0      # all packages together; the CLIs' hook timeout is 5 s
 
 
-def parse_yaml(text):
-    """The flat YAML these files use: ``key: value`` with scalars and ``[a, b]`` lists."""
-    out = {}
-    for line in text.splitlines():
-        line = re.sub(r'(^|\s)#.*', '', line).rstrip()
-        if not line or line[0].isspace() or ':' not in line:
-            continue
-        key, value = (part.strip() for part in line.split(':', 1))
-        if value.startswith('[') and value.endswith(']'):
-            out[key] = [_scalar(v) for v in value[1:-1].split(',') if v.strip()]
-        else:
-            out[key] = _scalar(value)
-    return out
-
-
-def _scalar(value):
-    value = value.strip()
-    return value[1:-1] if len(value) > 1 and value[0] == value[-1] and value[0] in '\'"' else value
-
-
 def log(text):
     base = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local' / 'state') / 'astro'
     try:
@@ -65,26 +44,8 @@ def log(text):
 
 
 def packages(root=ROOT):
-    """``[(name, script path)]`` of every enabled package hook, in path order."""
-    try:
-        registry = parse_yaml((root / '.agents' / 'hooks.yaml').read_text())
-    except OSError:
-        return []
-    disabled = set(registry.get('disabled') or ())
-    found, seen = [], set()
-    for pattern in registry.get('discover') or ():
-        for path in sorted(root.glob(pattern)):
-            try:
-                spec = parse_yaml(path.read_text())
-            except OSError:
-                continue
-            name = spec.get('name') or path.parent.name
-            script = path.parent / str(spec.get('script', ''))
-            if name in seen or name in disabled or not spec.get('script'):
-                continue
-            seen.add(name)
-            found.append((name, script))
-    return found
+    """``[(package name, agent_hook.py path)]`` of every package hook, in path order."""
+    return [(path.parent.name, path) for path in sorted(root.glob('src/*/*/agent_hook.py'))]
 
 
 def _exit_of(response):

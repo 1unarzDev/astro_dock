@@ -47,11 +47,7 @@ class Dispatcher(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
         (self.root / '.agents').mkdir()
-        shutil.copy(ROOT / '.agents' / 'hooks.yaml', self.root / '.agents' / 'hooks.yaml')
-        package = self.root / 'src' / 'robot_tools'
-        (package / 'robot_tools').mkdir(parents=True)
-        (package / 'robot_tools' / 'agent_hook.py').write_text(PACKAGE_HOOK)
-        (package / 'agent_hooks.yaml').write_text('name: robot_tools   # x\nscript: robot_tools/agent_hook.py\n')
+        self.add_package('robot_tools', PACKAGE_HOOK)
         self.seen = self.root / 'seen.jsonl'
         os.environ['SEEN'] = str(self.seen)
         os.environ['XDG_STATE_HOME'] = str(self.root / 'state')
@@ -110,25 +106,20 @@ class Dispatcher(unittest.TestCase):
         self.assertIsNone(self.run_hook('claude', claude('Stop')))
         self.assertEqual(self.events(), [])
 
-    def test_a_missing_disabled_or_broken_package_is_a_no_op(self):
+    def test_a_missing_or_broken_package_is_a_no_op(self):
         payload = claude('PreToolUse', tool_input={'command': 'rm -rf /'})
-        registry = self.root / '.agents' / 'hooks.yaml'
-        shipped = registry.read_text()
-        registry.write_text('discover: [src/*/agent_hooks.yaml]\ndisabled: [robot_tools]\n')
-        self.assertIsNone(self.run_hook('claude', payload))
-        registry.write_text(shipped)
-        (self.root / 'src' / 'robot_tools' / 'robot_tools' / 'agent_hook.py').write_text('raise RuntimeError("bad")')
+        script = self.root / 'src' / 'robot_tools' / 'robot_tools' / 'agent_hook.py'
+        script.write_text('raise RuntimeError("bad")')
         self.assertIsNone(self.run_hook('claude', payload))
         self.assertIn('robot_tools pre', (self.root / 'state' / 'astro' / 'agents-hook.log').read_text())
-        (self.root / 'src' / 'robot_tools' / 'agent_hooks.yaml').unlink()
+        script.unlink()
         self.assertIsNone(self.run_hook('claude', payload))
         self.assertEqual(self.events(), [])
 
     def add_package(self, name, source):
-        package = self.root / 'src' / name
+        package = self.root / 'src' / name / name
         package.mkdir(parents=True)
-        (package / 'hook.py').write_text(source)
-        (package / 'agent_hooks.yaml').write_text('name: %s\nscript: hook.py\n' % name)
+        (package / 'agent_hook.py').write_text(source)
 
     def test_a_package_exit_skips_only_that_package(self):
         self.add_package('aa_exits', 'import sys\ndef agent_event(event):\n    sys.exit(2)\n')
