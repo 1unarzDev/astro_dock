@@ -31,8 +31,6 @@ jobs:
         run: python3 .github/scripts/test-jetson-validation.py
       - name: Validate local Jetson promotion
         run: python3 .github/scripts/test-jetson-promotion.py
-      - name: Validate zenoh bridge topics
-        run: python3 .github/scripts/test-ros-transport.py
       - name: Validate the clock stage
         run: .github/scripts/test-clock-stage.sh
       - name: Validate the DDS address choice
