@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 
 root = pathlib.Path(__file__).resolve().parents[2]
 devcontainer = root / ".devcontainer"
@@ -49,6 +50,14 @@ pyubx2 = re.search(r"^pyubx2==([0-9.]+)$", requirements, re.MULTILINE)
 require(pyubx2 and tuple(map(int, pyubx2.group(1).split("."))) >= (1, 3, 9),
         "requirements: pin pyubx2 at 1.3.9 or later for PARSE_META")
 require(re.search(r"^pyrtcm==[0-9.]+$", requirements, re.MULTILINE), "requirements: pin pyrtcm")
+
+# rmem_max only caps a request; Fast DDS must ask for the raised size or sockets stay at rmem_default.
+sysctl = re.search(r"rmem_max=(\d+)", read(root / "setup.linux.sh"))
+sizes = [e.text for d in ET.parse(root / "config" / "fastdds.xml").getroot().iter()
+         if d.tag.endswith("transport_descriptor") and d.findtext("{*}transport_id", "") == "mtu_udp"
+         for e in d if e.tag.endswith("receiveBufferSize")]
+require(sysctl and sizes == [sysctl.group(1)],
+        "dds: config/fastdds.xml receiveBufferSize must equal setup.linux.sh's rmem_max")
 
 # Dev Containers Compose: VS Code's local UID image must never be pulled.
 with tempfile.NamedTemporaryFile("w", suffix=".yml") as overlay:
