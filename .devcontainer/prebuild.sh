@@ -33,14 +33,8 @@ fi
 
 override_file="${script_dir}/docker-compose.override.${os_type}.yml"
 [[ -f "$override_file" ]] || { echo "Missing Compose adapter: $override_file" >&2; exit 1; }
-if [[ "$os_type" == jetson ]]; then
-    if grep -q '^# R35 ' /etc/nv_tegra_release; then
-        jetson_family=jetson-jp5-foxy
-    elif grep -q '^# R36 ' /etc/nv_tegra_release; then
-        jetson_family=jetson-jp6-jazzy
-    else
-        echo 'Unsupported JetPack: expected L4T R35 or R36.' >&2; exit 1
-    fi
+if [[ "$os_type" == jetson ]] && ! grep -q '^# R36 ' /etc/nv_tegra_release; then
+    echo 'Unsupported JetPack: expected JetPack 6 / L4T R36 (JetPack 5 is on legacy/jp5-foxy).' >&2; exit 1
 fi
 if [[ -n "$selection" && "$os_type" != linux ]]; then
     echo 'Selected YAML supports Linux static off-boat only.' >&2; exit 2
@@ -49,12 +43,6 @@ fi
 work_file="$(mktemp "${script_dir}/.adapter.XXXXXX")"
 trap 'rm -f "$work_file" "$work_file.bak" "$script_dir/docker-compose.override.yml.new"' EXIT
 cp "$override_file" "$work_file"
-if [[ "$os_type" == jetson ]]; then
-    sed -i.bak "s/jetson-jp6-jazzy/${jetson_family}/g" "$work_file"
-    if [[ "$jetson_family" == jetson-jp5-foxy ]]; then
-        sed -i.bak 's/ASTRO_ROS_DOMAIN_ID:-42/ASTRO_ROS_DOMAIN_ID:-142/' "$work_file"
-    fi
-fi
 host_name="${ASTRO_HOSTNAME:-$(uname -n)}"
 host_name="${host_name%%.*}"
 [[ "$host_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || {
@@ -92,3 +80,14 @@ else
     mv "$work_file" "$script_dir/docker-compose.override.yml"
 fi
 echo "Selected ${os_type} adapter: $override_file"
+# Warn when the running dev container is not built on the image its tag now names (after a
+# pull). Dev Containers adds a UID layer on top, so the tag's layers must prefix the container's.
+running="$(docker inspect --format '{{.Image}}' roboboat_dev 2>/dev/null || true)"
+if [[ -n "$running" ]]; then
+    expected="$(docker compose -f "$script_dir/docker-compose.yml" -f "$script_dir/docker-compose.override.yml" \
+        config --images dev 2>/dev/null || true)"
+    layers() { docker image inspect --format '{{json .RootFS.Layers}}' "$1" 2>/dev/null || true; }
+    tag_layers="$(layers "$expected")"
+    [[ -z "$tag_layers" || "$(layers "$running")" == "${tag_layers%]}"* ]] \
+        || echo "WARNING: roboboat_dev is not running the current $expected; recreate it with compose up -d dev." >&2
+fi
