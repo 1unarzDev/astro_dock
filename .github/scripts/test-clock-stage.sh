@@ -98,6 +98,7 @@ cat > "$stubs/systemctl" <<EOF
 #!/bin/sh
 echo "systemctl \$*" >> "$log"
 case "\$1:\$*" in
+    list-unit-files:*) echo systemd-timesyncd.service enabled ;;
     is-active:*|is-enabled:*) [ -e "$state/timesyncd" ] && exit 0; exit 3 ;;
     disable:*timesyncd*) rm -f "$state/timesyncd" ;;
 esac
@@ -120,13 +121,26 @@ operator >/dev/null || fail "second operator run failed"
 ! grep -Eq '^(pacman|apt-get|dnf)' "$log" || fail "second run touched the package manager"
 ! grep -Fq 'disable' "$log" || fail "second run disabled again"
 grep -Fq 'enable --now' "$log" || fail "chrony not enabled"
+# A boat client (the Orin) switches from timesyncd to chrony the same way; a public client does not.
+for mode in boat time.google.com; do
+    rm -f "$stubs/chronyd"; touch "$state/timesyncd"
+    : > "$log"
+    PATH="$stubs:$safe" ASTRO_NTP_SERVER=$mode ASTRO_CHRONY_CONF="$etc/chrony.conf" \
+        "$root/setup.linux.sh" --non-interactive --yes --dry-run --components clock >"$tmp/out.txt" 2>&1 || fail "$mode client run failed"
+    if [[ $mode == boat ]]; then
+        grep -Eq '^ +\$ sudo (pacman|apt-get|dnf)' "$tmp/out.txt" || fail "boat client: chrony not installed"
+        grep -Fq 'disable --now systemd-timesyncd' "$tmp/out.txt" || fail "boat client: timesyncd not disabled"
+    else
+        ! grep -Eq 'sudo (pacman|apt-get|dnf)|disable' "$tmp/out.txt" || fail "public client switched to chrony"
+    fi
+done
 rm -f "$stubs"/{pacman,apt-get,dnf}
 printf '#!/bin/sh\nexit 0\n' > "$stubs/chronyd"
 printf '#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 0\n' > "$stubs/systemctl"
 
 # Without chrony (timesyncd active) the chrony polling message is not printed.
 printf '#!/bin/sh\n[ "$1" = list-unit-files ] && echo systemd-timesyncd.service enabled\nexit 0\n' > "$stubs/systemctl"
-out="$(ASTRO_NTP_SERVER=boat clock --dry-run)"
+out="$(ASTRO_NTP_SERVER=time.google.com clock --dry-run)"
 ! grep -q 'Prefers' <<<"$out" || fail "polling message on the timesyncd path"
 grep -q 'timesyncd.conf.d/60-astro.conf' <<<"$out" || fail "timesyncd path not taken"
 
