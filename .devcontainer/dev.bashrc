@@ -84,6 +84,8 @@ for _, name in socket.if_nameindex():
     ip = ipaddress.ip_address(socket.inet_ntoa(raw[20:24]))
     if ip in net:
         print(ip); break' "$subnet" "${boat:-192.168.0.152}" 2>/dev/null)}"
+  # Loopback stays allowed so localhost-only discovery, whose peers are 127.0.0.1,
+  # still works; Fast DDS never announces loopback beside a whitelisted address.
   if [[ -n "$address" ]]; then
     pinned="${XDG_RUNTIME_DIR:-/tmp}/astro-fastdds-$address.xml"
     python3 - "$profile" "$pinned" "$address" <<'EOF' || return 1
@@ -93,8 +95,9 @@ ET.register_namespace('', ns)
 tree = ET.parse(sys.argv[1])
 for udp in tree.iter(f'{{{ns}}}transport_descriptor'):
     if udp.findtext(f'{{{ns}}}type') == 'UDPv4':
-        allow = ET.SubElement(ET.SubElement(udp, f'{{{ns}}}interfaceWhiteList'), f'{{{ns}}}address')
-        allow.text = sys.argv[3]
+        allow = ET.SubElement(udp, f'{{{ns}}}interfaceWhiteList')
+        for address in (sys.argv[3], '127.0.0.1'):
+            ET.SubElement(allow, f'{{{ns}}}address').text = address
 tree.write(sys.argv[2], xml_declaration=True, encoding='UTF-8')
 EOF
     profile="$pinned"
