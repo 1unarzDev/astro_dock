@@ -152,6 +152,22 @@ architecture="$(docker image inspect --format '{{.Architecture}}' "$image")"
     exit 1
 }
 
+# Reuse the compose stack's ZED volumes (docker-compose.override.jetson.yml) so
+# the camera check finds the optimized neural depth engine instead of spending
+# minutes rebuilding it. Prefer the project that runs roboboat_dev.
+zed_volumes=()
+compose_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' roboboat_dev 2>/dev/null || true)"
+for mount in zed_resources:/usr/local/zed/resources zed_settings:/usr/local/zed/settings; do
+    filters=(--filter "label=com.docker.compose.volume=${mount%%:*}")
+    [[ -n "$compose_project" ]] && filters+=(--filter "label=com.docker.compose.project=$compose_project")
+    mapfile -t names < <(docker volume ls -q "${filters[@]}")
+    [[ ${#names[@]} -eq 1 ]] || {
+        echo "Expected one compose ${mount%%:*} volume, found ${#names[@]}; start roboboat_dev first." >&2
+        exit 1
+    }
+    zed_volumes+=(-v "${names[0]}:${mount#*:}")
+done
+
 step "Starting privileged hardware validation container"
 docker run -d --name "$container" \
     --hostname "$(uname -n)" \
@@ -160,6 +176,7 @@ docker run -d --name "$container" \
     -e ROS_DOMAIN_ID=223 -e ROS_LOCALHOST_ONLY=1 \
     -v /dev:/dev \
     -v /tmp/argus_socket:/tmp/argus_socket \
+    "${zed_volumes[@]}" \
     "$image" sleep infinity >/dev/null
 
 step "Checking identity, ROS, CUDA, and ZED installations"
@@ -169,7 +186,7 @@ inside 'source /opt/astro-setup.bash && ros2 pkg prefix topic_tools'
 inside 'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver'
 inside 'source /opt/astro-setup.bash && ros2 pkg prefix vision_msgs'
 inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
-inside "source /opt/ros/${distro}/setup.bash && source /opt/zed_ros2/setup.bash && ros2 pkg prefix zed_wrapper && ros2 pkg prefix compressed_image_transport && ros2 pkg prefix rosbridge_server"
+inside "source /opt/ros/${distro}/setup.bash && source /opt/zed_ros2/setup.bash && ros2 pkg prefix zed_wrapper && ros2 pkg prefix compressed_image_transport"
 inside 'test -d /usr/local/zed && test -f /opt/zed_ros2/setup.bash'
 step "Checking non-root CUDA and live camera data"
 validate_runtime "$container"

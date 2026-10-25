@@ -45,6 +45,13 @@ with open(os.environ['MOCK_LOG'], 'a') as stream:
 if args[:2] == ['image', 'inspect']:
     print('arm64' if 'Architecture' in args[3]
           else os.environ['MOCK_JETPACK'])
+if args[0] == 'inspect' and args[-1] == 'roboboat_dev':
+    print('astro_dock_devcontainer')
+if args[:2] == ['volume', 'ls']:
+    filters = ' '.join(args)
+    for name in ('zed_resources', 'zed_settings'):
+        if ('volume=' + name) in filters and 'project=astro_dock_devcontainer' in filters:
+            print('astro_dock_devcontainer_' + name)
 if args[0] == 'exec' and '-i' in args:
     sys.stdin.read()
     if os.environ['MOCK_FAIL_CAMERA'] == '1' and 'bash' in args:
@@ -79,6 +86,15 @@ echo "retention $*" >> "$MOCK_LOG"
         self.assertIn('pkg prefix topic_tools', commands)
         self.assertIn('test -x /usr/local/zed/tools/ZED_Diagnostic', commands)
         self.assertIn('rm -f astro_boat_validate_', commands)
+
+    def test_camera_reuses_compose_zed_volumes_and_skips_rosbridge(self):
+        result = self.run_validation()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        commands = self.log.read_text()
+        run = next(line for line in commands.splitlines() if line.startswith('run -d'))
+        self.assertIn('-v astro_dock_devcontainer_zed_resources:/usr/local/zed/resources', run)
+        self.assertIn('-v astro_dock_devcontainer_zed_settings:/usr/local/zed/settings', run)
+        self.assertNotIn('rosbridge', commands)
 
     def test_mismatched_image_never_starts_a_container(self):
         self.env['MOCK_JETPACK'] = '5'
