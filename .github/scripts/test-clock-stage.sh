@@ -41,6 +41,21 @@ grep -Fxq 'local stratum 10' "$sources/astro.conf" || fail "local stratum missin
 grep -Fxq "confdir $sources" "$etc/chrony.conf" || fail "confdir not added"
 grep -Fxq "sourcedir $sources" "$etc/chrony.conf" || fail "sourcedir not added"
 
+# The boat server also follows the operator laptops, listed first and never preferred.
+read -r -a operators < <(. "$root/config/boat-network.env"; echo "$BOAT_OPERATOR_TIME_SERVERS")
+((${#operators[@]})) || fail "no operator time servers in boat-network.env"
+for op in "${operators[@]}"; do
+    grep -Fxq "server $op iburst" "$sources/boat.sources" || fail "operator $op not a source"
+done
+[[ "$(head -1 "$sources/boat.sources")" == "server ${operators[0]} iburst" ]] || fail "operator not listed first"
+
+# An operator laptop serves the subnet only while synchronized: no local stratum.
+out="$(ASTRO_NTP_ALLOW=operator clock)"
+grep -q "Serves time to $subnet (chrony allow) while" <<<"$out" || fail "operator serve message"
+grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "operator allow missing"
+! grep -q 'local stratum' "$sources/astro.conf" || fail "operator serves at local stratum"
+! grep -q "server ${operators[0]} " "$sources/boat.sources" || fail "operator follows itself"
+
 # A boat client: prefers the boat server, polls it fast, keeps the public fallback.
 out="$(ASTRO_NTP_SERVER=boat clock)"
 grep -q "at: $server\.$" <<<"$out" || fail "boat server not resolved"

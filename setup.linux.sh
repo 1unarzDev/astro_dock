@@ -320,19 +320,25 @@ stage_compose() {
 
 stage_clock() {
     local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service boat_server boat_subnet peers=""
-    local chrony=false boat=false local_servers=() sources=/etc/chrony/astro-sources
+    local chrony=false boat=false local_servers=() sources=/etc/chrony/astro-sources operators=() stratum=true
     # "boat" names the boat time server and subnet from config/boat-network.env.
     read -r boat_server boat_subnet < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
+    read -r -a operators < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s\n' "${BOAT_OPERATOR_TIME_SERVERS:-}")
     servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
     # A client of the boat server also answers the boat subnet, so astro-clock.py sees every host.
     [[ "${servers[*]}" == boat ]] && servers=("$boat_server") peers="$boat_subnet" boat=true
+    # The boat server also follows an operator laptop that has internet time; "operator" serves the
+    # subnet from such a laptop, only while it is itself synchronized (no local stratum).
     [[ "$allow" == boat ]] && allow="$boat_subnet"
+    [[ "$allow" == operator ]] && allow="$boat_subnet" stratum=false
     # Only a time server on the boat (or another private address) is preferred and polled fast.
     for server in "${servers[@]}"; do
         if $boat || [[ "$server" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]]; then
             local_servers+=("$server")
         fi
     done
+    # Listed after the loop: an operator laptop is a source, never preferred over the internet.
+    [[ "${ASTRO_NTP_ALLOW:-}" == boat ]] && servers=("${operators[@]}" "${servers[@]}")
     command -v chronyd >/dev/null && ! systemctl is-active --quiet systemd-timesyncd && chrony=true
     heading "Automatic host time synchronization"
     echo "Points the host's existing NTP client (chrony or systemd-timesyncd) at: ${servers[*]}."
@@ -348,7 +354,11 @@ stage_clock() {
     done
     if [[ -n "$allow" ]]; then
         [[ "$allow" =~ ^[0-9a-fA-F.:/]+$ ]] || { echo "Invalid ASTRO_NTP_ALLOW: $allow" >&2; exit 2; }
-        echo "Serves time to $allow (chrony allow) and keeps serving at local stratum 10 when the internet is gone."
+        if $stratum; then
+            echo "Serves time to $allow (chrony allow) and keeps serving at local stratum 10 when the internet is gone."
+        else
+            echo "Serves time to $allow (chrony allow) while this host is synchronized."
+        fi
     fi
     approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
     file="$(mktemp)"
@@ -372,7 +382,8 @@ stage_clock() {
         printf 'makestep 1 3\n' > "$file"
         # The single boat server keeps serving with no upstream. Not orphan: it can hold off
         # serving for about 300 s after boot while it looks for orphan peers.
-        [[ -z "$allow" ]] || printf 'allow %s\nlocal stratum 10\n' "$allow" >> "$file"
+        [[ -z "$allow" ]] || printf 'allow %s\n' "$allow" >> "$file"
+        [[ -z "$allow" ]] || ! $stratum || printf 'local stratum 10\n' >> "$file"
         [[ -z "$peers" || "$peers" == "$allow" ]] || printf 'allow %s\n' "$peers" >> "$file"
         run sudo install -D -m 0644 "$file" "$sources/astro.conf"
         run sudo rm -f "$sources/boat-serve.conf"
