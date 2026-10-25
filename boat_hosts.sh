@@ -5,21 +5,27 @@
 #                                   origin/main, prune stale symlink-install links, build in roboboat_dev.
 #                                   --image recreates roboboat_dev on REF through prebuild.sh and Compose
 #                                   (named volumes kept) after committing the old one as a rollback image.
+#   keys [HOST...]                  create the operator key ~/.config/mhseals/ssh/id_ed25519 if missing,
+#                                   install it in each other host's authorized_keys (your own ssh, which
+#                                   may ask once) and record its host key where the TUI checks it. Idempotent.
 # BOAT_REPOS (space separated) and BOAT_DEVICES (a devices.yaml) override the defaults.
 # Logs go to ~/.local/state/astro_dock/boat_hosts/ on this computer.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSH=${BOAT_HOSTS_SSH:-ssh}
+SSH_COPY_ID=${BOAT_HOSTS_SSH_COPY_ID:-ssh-copy-id}
 BOAT_REPOS=${BOAT_REPOS:-mhseals_hardware mhseals_nav mhseals_testing}
 BOAT_DEVICES=${BOAT_DEVICES:-$SCRIPT_DIR/config/devices.yaml}
+BOAT_ENV=${BOAT_ENV:-$SCRIPT_DIR/config/boat-network.env}
+MHSEALS_CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/mhseals
 
 stamp=$(date +%Y%m%d-%H%M%S)
 state=${XDG_STATE_HOME:-$HOME/.local/state}/astro_dock/boat_hosts
 mkdir -p "$state"
 LOG=$state/${1:-usage}-$stamp.log
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 # Runs on the host: one line per repository, OK / BACKUP / FAIL.
 fast_forward() {
@@ -107,7 +113,73 @@ deploy() {
     log "deploy rc=$rc log=$LOG"; return $rc
 }
 
+# "name user@address jump|-" per ssh host the TUI reaches, never this machine (its name, or the
+# operator file's self:). Addresses as mhseals_testing's registry finds them: a literal, a $KEY of
+# boat-network.env, the host's STATIC_LEASES reservation, else name.local.
+key_hosts() {
+    python3 - "$BOAT_DEVICES" "$BOAT_ENV" "$MHSEALS_CONFIG/devices.yaml" "$(uname -n)" <<'PY'
+import os, shlex, sys, yaml
+devices, env_file, operator, me = sys.argv[1:]
+env = {}
+if os.path.exists(env_file):
+    for line in open(env_file):
+        key, sep, value = line.strip().partition('=')
+        if sep and not key.startswith('#'):
+            env[key] = ' '.join(shlex.split(value))
+leases = dict(entry.split('=')[1:] for entry in env.get('STATIC_LEASES', '').split() if entry.count('=') == 2)
+data = yaml.safe_load(open(devices)) or {}
+mine = {me.split('.')[0]}
+if os.path.exists(operator):
+    mine.add((yaml.safe_load(open(operator)) or {}).get('self'))
+defaults, hosts = data.get('defaults') or {}, data.get('hosts') or {}
+
+def target(name):
+    spec = {**defaults, **(hosts.get(name) or {})}
+    address = spec.get('address') or ''
+    address = env.get(address[1:], '') if address.startswith('$') else address
+    address = address or leases.get(name) or f'{name}.local'
+    return f"{spec['user']}@{address}" if spec.get('user') else address
+
+for name, spec in hosts.items():
+    spec = spec or {}
+    if spec.get('ssh', defaults.get('ssh', True)) and name not in mine:
+        print(name, target(name), target(spec['via']) if spec.get('via') else '-')
+PY
+}
+
+keys() {
+    local dir=$MHSEALS_CONFIG/ssh rc=0 name target jump wanted=" $* "
+    local key=$dir/id_ed25519
+    mkdir -p "$dir" && chmod 700 "$dir" || return 1
+    if [[ ! -f $key ]]; then
+        ssh-keygen -q -t ed25519 -N '' -C "mhseals-operator@$(uname -n)" -f "$key" || return 1
+        log "created $key"
+    fi
+    # The TUI's own options (mhseals_testing harness/remote.py): this key, its known_hosts, no prompts.
+    local tui=(-i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
+               -o "UserKnownHostsFile=$dir/known_hosts")
+    while read -r name target jump; do
+        [[ $wanted == "  " || $wanted == *" $name "* ]] || continue
+        local via=() mine=()
+        [[ $jump == - ]] || via=(-o "ProxyJump=$jump")
+        [[ $jump == - ]] || mine=(-o "ProxyCommand=ssh ${tui[*]} -W %h:%p $jump")
+        if $SSH "${tui[@]}" "${mine[@]}" -o StrictHostKeyChecking=yes "$target" true </dev/null; then
+            log "OK $name: the TUI reaches $target"; continue
+        fi
+        log "== $name: installing the operator key for $target"
+        # Your own ssh and known_hosts verify the host (and may ask once); then its key is recorded
+        # for the TUI on the connection that just verified it.
+        if ! $SSH_COPY_ID -i "$key.pub" "${via[@]}" "$target" </dev/null 2>&1 | tee -a "$LOG" \
+            || ! $SSH "${tui[@]}" "${mine[@]}" -o StrictHostKeyChecking=accept-new "$target" true </dev/null; then
+            log "FAIL $name: the TUI cannot reach $target with $key"; rc=1; continue
+        fi
+        log "OK $name: key installed, host key in $dir/known_hosts"
+    done < <(key_hosts)
+    log "keys rc=$rc log=$LOG"; return $rc
+}
+
 case ${1:-} in
     deploy) shift; deploy "$@" ;;
+    keys) shift; keys "$@" ;;
     *) usage ;;
 esac

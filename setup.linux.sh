@@ -24,7 +24,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway,boat,jetson
+  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway,boat,jetson,operator-key
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -316,6 +316,15 @@ stage_compose() {
     approve "Select the Compose adapter now?" || { SKIPPED+=(compose); return; }
     run bash "$SCRIPT_DIR/.devcontainer/prebuild.sh"
     COMPLETED+=(compose)
+}
+
+stage_operator_key() {
+    heading "Operator ssh key"
+    echo "The TUI starts and reads parts on the other boat hosts over ssh with ~/.config/mhseals/ssh/id_ed25519."
+    echo "Creates it if missing and installs it on each config/devices.yaml host the TUI cannot reach yet."
+    approve "Provision the operator key on the boat hosts?" || { SKIPPED+=(operator-key); return; }
+    run "$SCRIPT_DIR/boat_hosts.sh" keys || { echo "Some hosts were not reached; rerun when they are up." >&2; SKIPPED+=(operator-key); return; }
+    COMPLETED+=(operator-key)
 }
 
 stage_clock() {
@@ -637,6 +646,7 @@ main() {
     has_component gateway && stage_gateway
     has_component boat && stage_boat
     has_component jetson && stage_jetson
+    has_component operator-key && stage_operator_key
 
     heading "Summary"
     $DRY_RUN && printf 'Planned:   %s\n' "${COMPLETED[*]:-none}" || printf 'Completed: %s\n' "${COMPLETED[*]:-none}"
