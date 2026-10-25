@@ -102,7 +102,8 @@ ssh_radio() {
     # airOS 8 dropbear only offers ssh-rsa and drops clients whose host-key list is long.
     local cmd=(ssh -o ConnectTimeout=8 -o UserKnownHostsFile="$STATE_DIR/known_hosts" -o StrictHostKeyChecking=accept-new
         -o HostKeyAlgorithms=ssh-rsa -o LogLevel=ERROR)
-    [[ -z ${UBNT_JUMP:-} ]] || cmd+=(-J "$UBNT_JUMP")
+    # A ProxyCommand in batch mode keeps the radio password from ever answering the jump host.
+    [[ -z ${UBNT_JUMP:-} ]] || cmd+=(-o "ProxyCommand=ssh -o BatchMode=yes -W %h:%p $UBNT_JUMP")
     cmd+=("${UBNT_USER:-ubnt}@$ip" "$@")
     [[ -n ${UBNT_PASSWORD:-} ]] || { "${cmd[@]}"; return; }
     # The password travels in the environment, never on a command line.
@@ -111,8 +112,10 @@ ssh_radio() {
         return
     fi
     askpass=$(mktemp) && printf '#!/bin/sh\nprintf "%%s\\n" "$UBNT_PASSWORD"\n' >"$askpass" && chmod 700 "$askpass"
-    UBNT_PASSWORD=$UBNT_PASSWORD SSH_ASKPASS=$askpass SSH_ASKPASS_REQUIRE=force "${cmd[@]}" || { rm -f -- "$askpass"; return 1; }
+    local rc=0
+    UBNT_PASSWORD=$UBNT_PASSWORD SSH_ASKPASS=$askpass SSH_ASKPASS_REQUIRE=force "${cmd[@]}" || rc=$?
     rm -f -- "$askpass"
+    return "$rc"
 }
 
 snapshot() {
@@ -128,7 +131,7 @@ snapshot() {
 }
 
 # Keys that move the management address or must change on both radios at once.
-REFUSED_KEYS='^(netconf|bridge|route|vlan|dhcpc|aaa|wpasupplicant)\.|\.(ip|netmask)$|^wireless\.1\.(ssid|security|wds)|^radio\.1\.(mode|freq|chanbw|ieee_mode)'
+REFUSED_KEYS='^(netconf|bridge|route|vlan|dhcpc|aaa|wpasupplicant)\.|\.(ip|netmask)$|^wireless\.1\.(ssid|security|wds|scan_list)|^radio\.1\.(mode|freq|chanbw|chanshift|ieee_mode|dfs\.)|^radio[0-9.]*\.countrycode'
 TRIAL_PID=/tmp/astro-trial.pid
 TRIAL_ALIVE='p=$(cat '$TRIAL_PID' 2>/dev/null) && kill -0 "$p" 2>/dev/null'
 
@@ -151,7 +154,11 @@ apply() {
         [[ ! $key =~ $REFUSED_KEYS ]] || die "$key is a management-address or link-shared key; change it in the airOS UI on both radios"
         awk -F= -v k="$key" '$1 == k { f = 1 } END { exit !f }' "$new" || die "$key is not in the radio's config; only existing keys are changed"
         awk -F= -v k="$key" -v v="$value" '$1 == k { sub(/^[^=]*=/, ""); f = ($0 == v) } END { exit !f }' "$new" && continue
-        printf '  %s: %s -> %s\n' "$key" "$(awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$new")" "$value"
+        if [[ $key =~ pass|psk|community|secret ]]; then
+            printf '  %s: (hidden) -> (hidden)\n' "$key"
+        else
+            printf '  %s: %s -> %s\n' "$key" "$(awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$new")" "$value"
+        fi
         awk -F= -v k="$key" -v v="$value" '$1 == k { print k "=" v; next } { print }' "$new" >"$new.tmp" && mv -- "$new.tmp" "$new"
         changed=1
     done
@@ -173,9 +180,20 @@ apply() {
     fi
     read -r -p "Type KEEP to save the trial to flash; anything else lets it revert: " answer
     [[ $answer == KEEP ]] || { info "Not kept; $name reboots into its saved config when the timer ends"; return; }
-    ssh_radio "$ip" "sort /tmp/system.cfg | tr -d '\r' >/tmp/running.cfg && cfgmtd -w -f /tmp/running.cfg -p /etc/ || exit 1
-        kill \"\$(cat $TRIAL_PID)\" 2>/dev/null; rm -f $TRIAL_PID /tmp/astro-new.cfg" </dev/null \
-        || die "Saving failed or the radio was unreachable; unless the save reached flash, $name reboots into its previous config when the timer ends"
+    # Save only a live, unchanged trial, and only after the timer is confirmed dead.
+    local rc=0
+    ssh_radio "$ip" "p=\$(cat $TRIAL_PID 2>/dev/null) && kill -0 \"\$p\" 2>/dev/null &&
+            diff /tmp/system.cfg /tmp/astro-new.cfg >/dev/null || exit 3
+        kill \"\$p\"; sleep 1; kill -0 \"\$p\" 2>/dev/null && exit 4
+        sort /tmp/system.cfg | tr -d '\r' >/tmp/running.cfg && cfgmtd -w -f /tmp/running.cfg -p /etc/ || exit 5
+        rm -f $TRIAL_PID /tmp/astro-new.cfg" </dev/null || rc=$?
+    case $rc in
+        0) ;;
+        3) die "Trial already reverted (timer gone or config changed); nothing was saved" ;;
+        4) die "Could not stop the timer; nothing was saved and $name reboots into its saved config" ;;
+        5) die "The flash write failed after the timer was stopped; $name runs the trial until its next reboot, which restores the saved config" ;;
+        *) die "Lost contact with $name; nothing confirmed saved, so expect it to reboot into its saved config" ;;
+    esac
     info "Saved to flash and timer cancelled. Previous config: $file"
 }
 
