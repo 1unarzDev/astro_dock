@@ -1,0 +1,83 @@
+# Commands astro_dock itself provides, read by astro-help.py. Packages in the workspace
+# ship their own help.yaml (package root or share/<package>/); the schema is in astro-help.py.
+package: astro_dock
+summary: ROS 2 container workspace helpers, available in every image shell.
+commands:
+  - name: help
+    run: astro-help
+    summary: Browse every workspace package's commands, fill in parameters, and run them.
+    params:
+      - name: --list
+        type: bool
+        description: Print the commands as plain text instead of opening the browser.
+      - name: word
+        required: false
+        description: With --list, show full details of the commands matching this word.
+    examples:
+      - astro-help --list
+      - astro-help --list install
+
+  - name: astro-ros-install
+    run: astro-ros-install
+    summary: Install a ROS or apt package into this running container by distro-independent name.
+    notes: >-
+      ROS names resolve to ros-$ROS_DISTRO-* debs, else build from source into /opt/astro-extra.
+      The shell reloads after it. Installs last until the container is recreated: add the
+      name to .devcontainer/packages.txt (jetson-packages.txt on Jetson) to keep it.
+    params:
+      - name: --source
+        type: bool
+        description: Build ROS packages from source even when a deb exists.
+      - name: names
+        type: list
+        description: Package names, e.g. nav2_bringup or htop.
+    examples:
+      - astro-ros-install nav2_bringup
+      - astro-ros-install --source examples_rclcpp_minimal_publisher
+
+  - name: colcon build
+    run: colcon build
+    summary: Build the workspace; the shell reloads the new install/ when it succeeds.
+    params:
+      - name: --packages-up-to
+        type: list
+        description: Build these packages and their dependencies only.
+      - name: --packages-select
+        type: list
+        description: Build exactly these packages.
+      - name: --symlink-install
+        type: bool
+        description: Symlink Python and data files so edits apply without a rebuild.
+    examples:
+      - colcon build --packages-up-to my_package
+
+  - name: ros_env
+    run: ros_env
+    summary: Reload ROS, the image overlays and the workspace install/ in this shell.
+
+  - name: ros_net
+    run: ros_net
+    summary: Re-detect this host's robot-subnet address and pin DDS to it (each new shell does this).
+    notes: Set ASTRO_DDS_ADDRESS to force an address; off the robot subnet DDS uses all interfaces.
+
+  - name: rviz2
+    run: rviz2
+    summary: RViz with the workspace dark theme, pinned to the robot network interface.
+
+  - name: setup.linux.sh
+    run: ./setup.linux.sh
+    summary: Prepare a Linux host for the containers, stage by stage (run on the host, not in a container).
+    notes: Each stage explains itself and asks first; reruns are safe.
+    params:
+      - name: --components
+        type: list
+        default: clock,docker,gpu,devices,devtools,compose
+        description: Comma-separated stages to run, e.g. clock,docker.
+      - name: --dry-run
+        type: bool
+        description: Print the commands without running them.
+      - name: --yes
+        type: bool
+        description: Approve the plan and every stage.
+    examples:
+      - ./setup.linux.sh --components clock --dry-run
