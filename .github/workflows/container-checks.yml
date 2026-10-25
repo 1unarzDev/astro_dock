@@ -33,6 +33,8 @@ jobs:
         run: python3 .github/scripts/test-jetson-promotion.py
       - name: Validate the clock stage
         run: .github/scripts/test-clock-stage.sh
+      - name: Validate the linger setup
+        run: .github/scripts/test-linger-stage.sh
       - name: Validate the DDS address choice
         run: .github/scripts/test-ros-net.sh
       - name: Validate the bag fetch fallback

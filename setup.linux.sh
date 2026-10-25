@@ -549,6 +549,14 @@ stage_boat() {
     COMPLETED+=(boat)
 }
 
+# Without linger, logind's RemoveIPC deletes this user's /dev/shm (the Fast DDS segments of an
+# ipc=host container) when the last login session closes.
+ensure_linger() {
+    [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" == yes ]] && return
+    echo "Enabling linger for $USER so closing the last SSH session keeps /dev/shm."
+    run sudo loginctl enable-linger "$USER"
+}
+
 stage_jetson() {
     local mode swap=/swapfile size=16G
     heading "Jetson host"
@@ -576,6 +584,7 @@ stage_jetson() {
     fi
     grep -q "^$swap " /etc/fstab || run sudo sh -c "printf '%s none swap sw 0 0\n' '$swap' >> /etc/fstab"
     run sudo systemctl set-default multi-user.target
+    ensure_linger
     $DRY_RUN || nvpmodel -q 2>/dev/null | head -1
     COMPLETED+=(jetson)
 }
