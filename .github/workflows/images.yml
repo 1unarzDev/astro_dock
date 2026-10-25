@@ -65,6 +65,14 @@ jobs:
           docker run --rm \
             "${REGISTRY_IMAGE}:core-${{ matrix.arch }}" \
             bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && source /opt/ros/jazzy/setup.bash && ros2 pkg prefix ros_gz_bridge && /usr/bin/python3 -c "import importlib.metadata; tuple(importlib.metadata.distributions())" && sudo -n true'
+      - name: Check boat runtime dependencies are baked in
+        run: |
+          docker run --rm "${REGISTRY_IMAGE}:core-${{ matrix.arch }}" bash -lc '
+            set -e; source /opt/ros/jazzy/setup.bash
+            for pkg in py_trees rosbridge_server rosapi spatio_temporal_voxel_layer mavros_extras; do
+              ros2 pkg prefix "$pkg"
+            done
+            /workspace/venv/bin/python3 -c "import rich, gpiod, py_trees, pyubx2, pyrtcm, importlib.metadata as m; print(m.version(\"pyubx2\"), m.version(\"pyrtcm\"))"'
 
   core-manifest:
     needs: core
@@ -85,6 +93,7 @@ jobs:
             --tag "${REGISTRY_IMAGE}:core-next" \
             "${REGISTRY_IMAGE}:core-amd64" \
             "${REGISTRY_IMAGE}:core-arm64"
+          if [ "$GITHUB_REF" != refs/heads/main ]; then exit 0; fi
           .github/scripts/registry-retention.py --repository "$REGISTRY_IMAGE" \
             rotate core core-next
 
@@ -132,6 +141,7 @@ jobs:
               bash -lc 'test -x ./build/sitl/bin/ardurover && sudo -n true'
           fi
       - name: Rotate validated image
+        if: github.ref == 'refs/heads/main'
         env:
           TAG: ${{ matrix.tag }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
