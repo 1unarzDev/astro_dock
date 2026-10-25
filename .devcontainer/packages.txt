@@ -20,7 +20,7 @@ image_transport_plugins
 joint_state_publisher
 joint_state_publisher_gui
 mavros
-mavros_extras
+mavros_extras  # gps_rtk plugin: RTK corrections over ROS
 nav2_bringup
 nav2_core
 nav2_mppi_controller
@@ -33,7 +33,8 @@ robot_localization
 ros2_control
 ros2_controllers
 ros_gz
-rosbridge_server
+rosbridge_server  # mhseals_nav exec_depend; Foxglove bridge
+rosapi
 rqt_graph
 rqt_tf_tree
 rtabmap_ros

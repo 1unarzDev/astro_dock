@@ -39,12 +39,16 @@ for path in ("packages.txt", "jetson-packages.txt"):
 
 # The dev image carries the tools boat_test needs to send bags off the boat.
 packages = read(devcontainer / "packages.txt")
-for pkg in ("rsync", "openssh-client"):
+# The boat stack's runtime dependencies are baked in, never installed by hand into a container.
+for pkg in ("rsync", "openssh-client", "python3-rich", "python3-libgpiod", "py_trees", "rosbridge_server",
+            "rosapi", "spatio_temporal_voxel_layer", "mavros_extras"):
     require(re.search(rf"^{pkg}( |$)", packages, re.MULTILINE), f"packages: {pkg} missing from packages.txt")
-# The RTCM forwarding needs a pyubx2 with PARSE_META (1.3.9).
-pyubx2 = re.search(r"^pyubx2>=([0-9.]+)", read(devcontainer / "requirements.txt"), re.MULTILINE)
+# The RTCM forwarding needs a pyubx2 with PARSE_META (1.3.9); GNSS parsers are pinned.
+requirements = read(devcontainer / "requirements.txt")
+pyubx2 = re.search(r"^pyubx2==([0-9.]+)$", requirements, re.MULTILINE)
 require(pyubx2 and tuple(map(int, pyubx2.group(1).split("."))) >= (1, 3, 9),
-        "requirements: pyubx2 needs a minimum of 1.3.9 for PARSE_META")
+        "requirements: pin pyubx2 at 1.3.9 or later for PARSE_META")
+require(re.search(r"^pyrtcm==[0-9.]+$", requirements, re.MULTILINE), "requirements: pin pyrtcm")
 
 # Dev Containers Compose: VS Code's local UID image must never be pulled.
 with tempfile.NamedTemporaryFile("w", suffix=".yml") as overlay:
