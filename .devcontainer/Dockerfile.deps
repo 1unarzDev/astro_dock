@@ -113,7 +113,10 @@ COPY jetson-packages.txt /tmp/jetson-packages.txt
 RUN chmod +x /usr/local/bin/astro-ros-install \
     && OpenVDB_ROOT=/opt/astro-extra/opt/openvdb_vendor \
         /usr/local/bin/astro-ros-install --file /tmp/jetson-packages.txt \
+    && echo /opt/astro-extra/opt/openvdb_vendor/lib > /etc/ld.so.conf.d/astro-openvdb.conf \
+    && ldconfig \
     && source /opt/astro-setup.bash \
-    && stvl="$(ros2 pkg prefix spatio_temporal_voxel_layer)" \
-    && ldd "$stvl"/lib/*.so | grep -q 'openvdb_vendor/lib/libopenvdb' \
-    && ! ldd "$stvl"/lib/*.so | grep 'not found'
+    && ldd /opt/astro-extra/lib/libspatio_temporal_voxel*.so > /tmp/stvl.ldd \
+    && { grep -q 'openvdb_vendor/lib/libopenvdb' /tmp/stvl.ldd && ! grep -q 'not found' /tmp/stvl.ldd \
+         || { cat /tmp/stvl.ldd; exit 1; }; } \
+    && rm /tmp/stvl.ldd
