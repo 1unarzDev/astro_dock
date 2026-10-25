@@ -22,7 +22,10 @@
       <!-- Over the boat radio (RTT 65-80 ms, loss bursts) a peer is dropped only after 60 s
            without an announcement (default 20 s), so a dropout never removes its nodes and
            re-discovery is not needed; 5 s announcements keep 12 chances per lease. A crashed
-           process's names now linger up to 60 s. ros_net adds the boat hosts as static peers
+           process's names now linger up to 60 s; no safety check waits on that: the TUI holds
+           on a watchdog's ~/status beat silent 2 s or its computer's process report, and what
+           does read the graph (command_mux's duplicate publisher, a part's stray nodes) holds
+           or refuses meanwhile. ros_net adds the boat hosts as static peers
            (ROS_STATIC_PEERS); multicast discovery stays on. -->
       <builtin>
         <discovery_config>
