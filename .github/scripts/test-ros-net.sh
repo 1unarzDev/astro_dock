@@ -35,4 +35,14 @@ check "no route falls back to scan" "$(ros_net FAKE_SRC=192.168.0.2 FAKE_NO_ROUT
 twice="$(env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" FAKE_PEER="$tmp/peer" \
   FAKE_SRC=10.0.0.5 bash -c 'ros2() { :; }; . "$1"; ros_net; export FAKE_SRC=192.168.0.2; ros_net; echo "$ASTRO_DDS_ADDRESS"' _ "$tmp/ros_net.sh")"
 check "inherited auto-detected address is re-detected" "$twice" 192.168.0.2
+peers() {
+  env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" \
+    FAKE_PEER="$tmp/peer" "$@" bash -c 'ros2() { :; }; . "$1"; ros_net; echo "${ROS_STATIC_PEERS-unset}"' _ "$tmp/ros_net.sh"
+}
+check "boat hosts but this one are static peers" "$(peers FAKE_SRC=192.168.0.2)" "192.168.0.152;192.168.0.153"
+check "a user's static peers win" "$(peers FAKE_SRC=192.168.0.2 ROS_STATIC_PEERS=10.1.1.1)" 10.1.1.1
+off="$(env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" FAKE_PEER="$tmp/peer" \
+  FAKE_SRC=192.168.0.2 bash -c 'ros2() { :; }; . "$1"; ros_net; ASTRO_DDS_SUBNET=10.9.0.0/16; ros_net; echo "${ROS_STATIC_PEERS-unset}"' _ "$tmp/ros_net.sh")"
+check "off the boat subnet the derived peers are dropped" "$off" unset
+grep -q '<leaseDuration><sec>60</sec>' "$root/config/fastdds.xml" || { echo "FAIL: fastdds.xml lease"; exit 1; }
 echo "ros_net ok"

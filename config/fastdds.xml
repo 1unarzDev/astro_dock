@@ -19,6 +19,17 @@
   </transport_descriptors>
   <participant profile_name="boat_default" is_default_profile="true">
     <rtps>
+      <!-- Over the boat radio (RTT 65-80 ms, loss bursts) a peer is dropped only after 60 s
+           without an announcement (default 20 s), so a dropout never removes its nodes and
+           re-discovery is not needed; 5 s announcements keep 12 chances per lease. A crashed
+           process's names now linger up to 60 s. ros_net adds the boat hosts as static peers
+           (ROS_STATIC_PEERS); multicast discovery stays on. -->
+      <builtin>
+        <discovery_config>
+          <leaseDuration><sec>60</sec></leaseDuration>
+          <leaseAnnouncement><sec>5</sec></leaseAnnouncement>
+        </discovery_config>
+      </builtin>
       <userTransports><transport_id>mtu_udp</transport_id><transport_id>local_shm</transport_id></userTransports>
       <useBuiltinTransports>false</useBuiltinTransports>
     </rtps>

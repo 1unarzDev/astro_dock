@@ -56,7 +56,7 @@ fi
 # Set ASTRO_DDS_ADDRESS to force an address.
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
-  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override
+  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override peers
   subnet="${ASTRO_DDS_SUBNET:-$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
   # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported
@@ -105,15 +105,26 @@ tree.write(sys.argv[2], xml_declaration=True, encoding='UTF-8')
 EOF
     profile="$pinned"
     export CYCLONEDDS_URI="<CycloneDDS><Domain><General><Interfaces><NetworkInterface address=\"$address\"/></Interfaces></General></Domain></CycloneDDS>"
+    # The boat hosts (the gateway and every reserved address) are static peers: discovery
+    # reaches them by unicast even when the radio drops multicast. Multicast stays on, so
+    # other hosts still find each other. A user-set ROS_STATIC_PEERS wins, as for the address.
+    peers="$( . "$ROS_WS/config/boat-network.env" 2>/dev/null
+      for host in "$GATEWAY_IP" ${STATIC_LEASES:-}; do
+        host="${host##*=}"; [[ -z "$host" || "$host" == "$address" ]] || printf '%s;' "$host"
+      done)"
+    if [[ -z "${ROS_STATIC_PEERS:-}" || "$ROS_STATIC_PEERS" == "${__ASTRO_DDS_PEERS:-}" ]]; then
+      export ROS_STATIC_PEERS="${peers%;}" __ASTRO_DDS_PEERS="${peers%;}"
+    fi
   else
     unset CYCLONEDDS_URI
+    [[ "${ROS_STATIC_PEERS:-}" != "${__ASTRO_DDS_PEERS:-}" ]] || unset ROS_STATIC_PEERS __ASTRO_DDS_PEERS
   fi
   # The ros2 CLI daemon is shared by every shell and keeps the transport it
-  # started with: restart it when the address differs from the last one seen.
+  # started with: restart it when the address or the peers differ from the last seen.
   local state="${XDG_RUNTIME_DIR:-/tmp}/astro-dds-address-$(id -u)"
-  if [[ "$(cat "$state" 2>/dev/null)" != "$address" ]]; then
+  if [[ "$(cat "$state" 2>/dev/null)" != "$address ${ROS_STATIC_PEERS:-}" ]]; then
     ros2 daemon stop >/dev/null 2>&1 || true
-    printf '%s' "$address" > "$state" 2>/dev/null || true
+    printf '%s' "$address ${ROS_STATIC_PEERS:-}" > "$state" 2>/dev/null || true
   fi
   export ASTRO_DDS_ADDRESS="$address"
   [[ -n "$override" ]] || export __ASTRO_DDS_AUTO="$address"
