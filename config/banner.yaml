@@ -15,8 +15,8 @@ stats: [ros, dds, workspace, repos, nodes, time, disk, hw, host, system, lan]
 # art and wordmark name blocks in .devcontainer/astro_banner_art.txt.
 layouts:
   - {min_cols: 120, min_rows: 26, art: planet, wordmark: shadow, stats: beside}
-  - {min_cols: 80, min_rows: 18, art: rocket, wordmark: block, stats: beside}
-  - {min_cols: 50, min_rows: 14, wordmark: block, stats: below}
+  - {min_cols: 80, min_rows: 18, art: planet_medium, wordmark: block, stats: beside}
+  - {min_cols: 50, min_rows: 14, wordmark: block_stars, stats: below}
   - {min_cols: 50, min_rows: 6, wordmark: line, stats: below}
 
 # Art gradient stops, left to right.
