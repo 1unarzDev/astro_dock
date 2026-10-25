@@ -1,7 +1,7 @@
 name: Build legacy JetPack 5 Foxy image
 on:
   push:
-    branches: [main]
+    branches: [legacy/jp5-foxy]
     paths:
       - '.devcontainer/Dockerfile.jetson-jp5'
       - '.devcontainer/jetson-packages.txt'
