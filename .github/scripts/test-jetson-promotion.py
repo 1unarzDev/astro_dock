@@ -41,7 +41,7 @@ if args[:2] == ['run', 'list']:
         print(123)
 elif args[0] == 'api':
     print(json.dumps(dict(path='.github/workflows/jetson-jp5.yml',
-        head_branch=os.environ.get('MOCK_BRANCH', 'main'),
+        head_branch=os.environ.get('MOCK_BRANCH', 'legacy/jp5-foxy'),
         conclusion='success', head_sha='abc123')))
 elif args[:2] == ['run', 'download']:
     destination = Path(args[args.index('--dir') + 1]) / 'candidate.json'

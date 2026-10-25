@@ -3,8 +3,8 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
-    jp5) family=jetson-jp5-foxy; host="${2:-roboboat@squirtle-jetson.local}" ;;
-    jp6) family=jetson-jp6-jazzy; host="${2:-}" ;;
+    jp5) family=jetson-jp5-foxy; host="${2:-roboboat@squirtle-jetson.local}"; ref=legacy/jp5-foxy ;;
+    jp6) family=jetson-jp6-jazzy; host="${2:-}"; ref=main ;;
     *) echo 'Usage: ./promote_jetson.sh jp5|jp6 [USER@HOST] [BUILD_RUN_ID]' >&2; exit 2 ;;
 esac
 gateway="${ASTRO_JETSON_GATEWAY-tranquility}"
@@ -45,12 +45,12 @@ echo "Validating $image on $host"
 remote "bash $remote_dir/boat-validate.sh $image" | tee "$directory/validation.log"
 validation="$(printf 'Host: %s\n' "$host"; grep '^PASS:' "$directory/validation.log")"
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-gh workflow run promote-jetson.yml --ref main \
+gh workflow run promote-jetson.yml --ref "$ref" \
     -f family="$family" -f run_id="$build_run" -f digest="$digest" \
     -f validation="$validation"
 promotion_run=""
 for attempt in {1..15}; do
-    promotion_run="$(gh run list --workflow promote-jetson.yml --branch main \
+    promotion_run="$(gh run list --workflow promote-jetson.yml --branch "$ref" \
         --event workflow_dispatch --limit 20 --json databaseId,displayTitle,createdAt \
         | jq -r --arg title "$family promotion $digest" --arg start "$started" \
             '[.[] | select(.displayTitle == $title and .createdAt >= $start)] | max_by(.databaseId).databaseId // empty')"
