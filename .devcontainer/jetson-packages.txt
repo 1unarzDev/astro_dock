@@ -1,8 +1,13 @@
-# Jetson JetPack 6 Jazzy image, installed by astro-ros-install.
-# Python dependencies of the camera-side detector/entry points.
+# Jetson JetPack 6 Jazzy image, installed by astro-ros-install. Jazzy has no
+# Jammy debs, so ROS names here are source-built into /opt/astro-extra.
+# Camera-side detector, object tracker and perception costmap.
 python3-opencv
-python3-websocket
 compressed_image_transport
-rosbridge_server
+map_msgs
+nav2_costmap_2d
+nav2_lifecycle_manager
+robot_localization
+spatio_temporal_voxel_layer
+tf2_geometry_msgs
 topic_tools
 vision_msgs
