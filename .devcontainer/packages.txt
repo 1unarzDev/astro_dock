@@ -5,6 +5,7 @@
 geographiclib-tools
 rsync  # boat_test sends bags to tranquility, fetch_bags.sh pulls them
 openssh-client
+iperf3  # link_measure.sh throughput between the operator laptop and the boat
 python3-scipy
 python3-rich
 python3-libgpiod
