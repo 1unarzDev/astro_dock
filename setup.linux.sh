@@ -267,9 +267,35 @@ stage_devices() {
     COMPLETED+=(devices)
 }
 
+# Avahi, so NAME.local resolves; a boat host advertises only its IPv4 boat address (the boat
+# LAN has no routable IPv6, and link-local AAAA answers hang clients), a dev host resolves.
+ensure_mdns() {
+    local role="$1" conf=/etc/avahi/avahi-daemon.conf
+    if ! command -v avahi-daemon >/dev/null 2>&1 \
+        || [[ -z "$(find /lib* /usr/lib* -maxdepth 2 -name libnss_mdns4_minimal.so.2 -print -quit 2>/dev/null)" ]]; then
+        if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+            run sudo pacman -S --needed --noconfirm avahi nss-mdns
+        elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
+            run sudo apt-get install -y avahi-daemon libnss-mdns
+        else
+            run sudo dnf -y install avahi nss-mdns
+        fi
+    fi
+    run sudo systemctl enable --now avahi-daemon
+    if [[ "$role" == boat ]] && ! grep -qx 'use-ipv6=no' "$conf"; then
+        run sudo sed -i 's/^#\?use-ipv6=.*/use-ipv6=no/' "$conf"
+        run sudo systemctl restart avahi-daemon
+    fi
+    if ! grep -Eq '^hosts:.*\bmdns' /etc/nsswitch.conf; then
+        run sudo cp -n /etc/nsswitch.conf /etc/nsswitch.conf.astro-bak
+        run sudo sed -i 's/^\(hosts:.*\bfiles\)/\1 mdns4_minimal [NOTFOUND=return]/' /etc/nsswitch.conf
+    fi
+}
+
 stage_devtools() {
     heading "Developer command-line tools"
-    echo "This installs Git, curl, jq, Python, and basic USB/device diagnostics. It does not install VS Code, Node, or clone repositories."
+    echo "This installs Git, curl, jq, Python, basic USB/device diagnostics, and mDNS (.local) resolution."
+    echo "It does not install VS Code, Node, or clone repositories."
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(devtools); return; }
     approve "Install host developer tools?" || { SKIPPED+=(devtools); return; }
     if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
@@ -280,6 +306,7 @@ stage_devtools() {
     else
         run sudo dnf -y install ca-certificates curl git jq lsof python3 usbutils
     fi
+    ensure_mdns dev
     COMPLETED+=(devtools)
 }
 
@@ -422,7 +449,8 @@ stage_boat() {
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
     echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"
-    echo "on Wi-Fi, and raises net.core.rmem_max to the 4 MiB that config/fastdds.xml requests."
+    echo "on Wi-Fi, advertises NAME.local over IPv4 only, and raises net.core.rmem_max to the 4 MiB"
+    echo "that config/fastdds.xml requests."
     approve "Configure this host as a boat LAN computer?" || { SKIPPED+=(boat); return; }
     if command -v nmcli >/dev/null 2>&1 && [[ "$(nmcli -g RUNNING general 2>/dev/null)" == running ]]; then
         while IFS=: read -r candidate type; do
@@ -479,6 +507,7 @@ stage_boat() {
         # NetworkManager persists the radio state across reboots.
         run sudo nmcli radio wifi off
     fi
+    ensure_mdns boat
     if $DRY_RUN; then
         quote_command sudo tee /etc/sysctl.d/90-astro-dds.conf
     else
