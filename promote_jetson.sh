@@ -2,20 +2,18 @@
 # On-demand hardware validation over SSH, followed by hosted CI promotion.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-case "${1:-}" in
-    jp5) family=jetson-jp5-foxy; host="${2:-roboboat@squirtle-jetson.local}" ;;
-    jp6) family=jetson-jp6-jazzy; host="${2:-}" ;;
-    *) echo 'Usage: ./promote_jetson.sh jp5|jp6 [USER@HOST] [BUILD_RUN_ID]' >&2; exit 2 ;;
-esac
+family=jetson-jp6-jazzy
+host="${1:-}"
+[[ $# -le 2 ]] || { echo 'Usage: ./promote_jetson.sh USER@HOST [BUILD_RUN_ID]' >&2; exit 2; }
 gateway="${ASTRO_JETSON_GATEWAY-tranquility}"
 for destination in "$host" ${gateway:+"$gateway"}; do
     [[ "$destination" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$ ]] || {
-        echo 'Specify an SSH host (JP6 requires a compatible Jetson).' >&2; exit 2;
+        echo 'Usage: ./promote_jetson.sh USER@HOST [BUILD_RUN_ID] (an L4T R36 Jetson)' >&2; exit 2;
     }
 done
 cd "$root"
 export GH_REPO="${GH_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
-candidate="$(bash "$root/.github/scripts/jetson-candidate.sh" "$family" "${3:-}")"
+candidate="$(bash "$root/.github/scripts/jetson-candidate.sh" "$family" "${2:-}")"
 digest="$(jq -r .digest <<<"$candidate")"
 build_run="$(jq -r .run_id <<<"$candidate")"
 image="lunarzdev/astro@$digest"

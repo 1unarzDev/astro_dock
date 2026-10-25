@@ -4,7 +4,6 @@ set -euo pipefail
 family="${1:?Specify a Jetson image family}"
 run_id="${2:-}"
 case "$family" in
-    jetson-jp5-foxy) workflow=jetson-jp5.yml ;;
     jetson-jp6-jazzy) workflow=images.yml ;;
     *) echo 'Unknown Jetson image family.' >&2; exit 2 ;;
 esac

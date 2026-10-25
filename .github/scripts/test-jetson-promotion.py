@@ -32,7 +32,7 @@ import sys
 args = sys.argv[1:]
 with open(os.environ['MOCK_LOG'], 'a') as stream:
     stream.write('gh ' + json.dumps(args) + '\\n')
-family = 'jetson-jp5-foxy'
+family = 'jetson-jp6-jazzy'
 if args[:2] == ['run', 'list']:
     if 'promote-jetson.yml' in args:
         print(json.dumps([dict(databaseId=456, createdAt='9999-01-01',
@@ -40,7 +40,7 @@ if args[:2] == ['run', 'list']:
     else:
         print(123)
 elif args[0] == 'api':
-    print(json.dumps(dict(path='.github/workflows/jetson-jp5.yml',
+    print(json.dumps(dict(path='.github/workflows/images.yml',
         head_branch=os.environ.get('MOCK_BRANCH', 'main'),
         conclusion='success', head_sha='abc123')))
 elif args[:2] == ['run', 'download']:
@@ -97,7 +97,7 @@ elif command.startswith('docker pull '):
         return self.log.read_text() if self.log.exists() else ''
 
     def test_success_validates_then_promotes_then_pulls_and_cleans(self):
-        result = self.promote('jp5')
+        result = self.promote('roboboat@jetson.local')
         self.assertEqual(result.returncode, 0, result.stdout)
         commands = self.commands()
         self.assertLess(commands.index('boat-validate.sh lunarzdev/astro@'),
@@ -105,25 +105,25 @@ elif command.startswith('docker pull '):
         self.assertLess(commands.index('"run", "watch"'),
                         commands.index('docker pull'))
         self.assertIn('tranquility', commands)
-        self.assertIn('roboboat@squirtle-jetson.local', commands)
+        self.assertIn('roboboat@jetson.local', commands)
         self.assertIn('rm -rf -- /tmp/astro-jetson.ABC123', commands)
 
     def test_failed_camera_never_dispatches_and_cleans(self):
         self.env['MOCK_CAMERA_FAIL'] = '1'
-        result = self.promote('jp5')
+        result = self.promote('user@jetson')
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('"workflow", "run"', self.commands())
         self.assertIn('rm -rf -- /tmp/astro-jetson.ABC123', self.commands())
 
     def test_failed_hosted_promotion_never_pulls_release(self):
         self.env['MOCK_CI_FAIL'] = '1'
-        result = self.promote('jp5')
+        result = self.promote('user@jetson')
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('docker pull', self.commands())
 
     def test_mismatched_pull_is_reported_as_failure(self):
         self.env['MOCK_PULLED_DIGEST'] = 'sha256:' + 'b' * 64
-        self.assertNotEqual(self.promote('jp5').returncode, 0)
+        self.assertNotEqual(self.promote('user@jetson').returncode, 0)
 
     def test_invalid_provenance_never_contacts_hardware(self):
         for variable, value in [('MOCK_BRANCH', 'feature'),
@@ -132,19 +132,19 @@ elif command.startswith('docker pull '):
             with self.subTest(variable=variable):
                 self.env[variable] = value
                 self.log.write_text('')
-                self.assertNotEqual(self.promote('jp5').returncode, 0)
+                self.assertNotEqual(self.promote('user@jetson').returncode, 0)
                 self.assertNotIn('ssh ', self.commands())
                 del self.env[variable]
         self.env['MOCK_DIGEST'] = DIGEST
 
-    def test_jp6_requires_host_and_rejects_shell_metacharacters(self):
-        for arguments in [('jp6',), ('jp5', 'user@host;false')]:
+    def test_requires_host_and_rejects_shell_metacharacters(self):
+        for arguments in [(), ('user@host;false',), ('a@b', '1', 'extra')]:
             self.assertNotEqual(self.promote(*arguments).returncode, 0)
             self.assertEqual(self.commands(), '')
 
     def test_direct_ssh_and_explicit_build(self):
         self.env['ASTRO_JETSON_GATEWAY'] = ''
-        result = self.promote('jp5', 'user@jetson', '123')
+        result = self.promote('user@jetson', '123')
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn('tranquility', self.commands())
         self.assertIn('user@jetson', self.commands())

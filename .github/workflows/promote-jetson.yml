@@ -6,7 +6,7 @@ on:
       family:
         type: choice
         required: true
-        options: [jetson-jp5-foxy, jetson-jp6-jazzy]
+        options: [jetson-jp6-jazzy]
       run_id:
         description: 'Successful main-branch build run'
         required: true
@@ -48,11 +48,8 @@ jobs:
           test "$(jq -r .digest <<<"$candidate")" = "$DIGEST"
           test -n "$VALIDATION"
           revision="$(jq -r .revision <<<"$candidate")"
-          case "$FAMILY" in
-            jetson-jp5-foxy) expected=5 ;;
-            jetson-jp6-jazzy) expected=6 ;;
-            *) exit 2 ;;
-          esac
+          test "$FAMILY" = jetson-jp6-jazzy
+          expected=6
           image="lunarzdev/astro@${DIGEST}"
           labels="$(docker buildx imagetools inspect --format '{{json .Image.Config.Labels}}' "$image")"
           jq -e --arg expected "$expected" --arg revision "$revision" \

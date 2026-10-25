@@ -24,8 +24,8 @@ class JetsonValidationTest(unittest.TestCase):
         self.script.parent.mkdir()
         shutil.copyfile(ROOT / '.devcontainer/boat-validate.sh', self.script)
         self.log = root / 'commands'
-        self.env = dict(os.environ, MOCK_LOG=str(self.log), MOCK_L4T='35',
-                        MOCK_JETPACK='5', MOCK_FAIL_CAMERA='0')
+        self.env = dict(os.environ, MOCK_LOG=str(self.log), MOCK_L4T='36',
+                        MOCK_JETPACK='6', MOCK_FAIL_CAMERA='0')
         binaries = root / 'bin'
         binaries.mkdir()
         self.env['PATH'] = str(binaries) + os.pathsep + self.env['PATH']
@@ -69,27 +69,19 @@ echo "retention $*" >> "$MOCK_LOG"
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, timeout=10)
 
-    def test_both_generations_validate_and_rotate_their_own_family(self):
-        for release, jetpack, distro in [('35', '5', 'foxy'),
-                                         ('36', '6', 'jazzy')]:
-            with self.subTest(jetpack=jetpack):
-                self.env.update(MOCK_L4T=release, MOCK_JETPACK=jetpack)
-                self.log.write_text('')
-                result = self.run_validation('--promote')
-                self.assertEqual(result.returncode, 0, result.stdout)
-                commands = self.log.read_text()
-                self.assertIn('source /opt/ros/' + distro, commands)
-                self.assertIn('ROS_DOMAIN_ID=223', commands)
-                self.assertIn('rotate jetson-jp' + jetpack + '-' + distro,
-                              commands)
-                self.assertEqual('pkg prefix topic_tools' in commands,
-                                 jetpack == '6')
-                self.assertEqual('test -x /usr/local/zed/tools/ZED_Diagnostic'
-                                 in commands, jetpack == '6')
-                self.assertIn('rm -f astro_boat_validate_', commands)
+    def test_jp6_validates_and_rotates_its_family(self):
+        result = self.run_validation('--promote')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        commands = self.log.read_text()
+        self.assertIn('source /opt/ros/jazzy', commands)
+        self.assertIn('ROS_DOMAIN_ID=223', commands)
+        self.assertIn('rotate jetson-jp6-jazzy', commands)
+        self.assertIn('pkg prefix topic_tools', commands)
+        self.assertIn('test -x /usr/local/zed/tools/ZED_Diagnostic', commands)
+        self.assertIn('rm -f astro_boat_validate_', commands)
 
     def test_mismatched_image_never_starts_a_container(self):
-        self.env['MOCK_JETPACK'] = '6'
+        self.env['MOCK_JETPACK'] = '5'
         result = self.run_validation('--promote')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('does not match host', result.stdout)
@@ -106,7 +98,7 @@ echo "retention $*" >> "$MOCK_LOG"
         self.assertIn('rm -f astro_boat_validate_', commands)
 
     def test_non_jetson_host_is_rejected_before_pull(self):
-        self.env['MOCK_L4T'] = '34'
+        self.env['MOCK_L4T'] = '35'
         result = self.run_validation()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.log.exists())

@@ -6,8 +6,8 @@ usage() {
 Usage: boat-validate.sh [--promote [TAG]] REPOSITORY@sha256:DIGEST
        boat-validate.sh --container NAME
 
-Pull and validate an immutable Jetson candidate digest on the boat. With
---promote, rotate the matching JetPack 5 or 6 release ring.
+Pull and validate an immutable JetPack 6 candidate digest on the boat. With
+--promote, rotate the jetson-jp6-jazzy release ring.
 An explicit TAG bypasses the release ring. Docker credentials must already be
 available to Docker for promotion. --container checks non-root CUDA and live
 camera images in an already running container, such as roboboat_dev.
@@ -104,9 +104,8 @@ image="${1:-}"
 container="astro_boat_validate_$$"
 repository="${image%@*}"
 case "$(head -1 /etc/nv_tegra_release)" in
-    '# R35 '*) family=jetson-jp5-foxy; distro=foxy; jetpack=5 ;;
     '# R36 '*) family=jetson-jp6-jazzy; distro=jazzy; jetpack=6 ;;
-    *) echo 'Validation requires JetPack 5 / L4T R35 or 6 / R36.' >&2; exit 1 ;;
+    *) echo 'Validation requires JetPack 6 / L4T R36.' >&2; exit 1 ;;
 esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 lease_active=false
@@ -166,15 +165,12 @@ docker run -d --name "$container" \
 step "Checking identity, ROS, CUDA, and ZED installations"
 inside 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && sudo -n true'
 inside "source /opt/ros/${distro}/setup.bash && ros2 doctor --report"
-if [[ "$jetpack" == 6 ]]; then
-    inside 'source /opt/astro-setup.bash && ros2 pkg prefix topic_tools'
-    inside 'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver'
-    inside 'source /opt/astro-setup.bash && ros2 pkg prefix vision_msgs'
-    inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
-fi
+inside 'source /opt/astro-setup.bash && ros2 pkg prefix topic_tools'
+inside 'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver'
+inside 'source /opt/astro-setup.bash && ros2 pkg prefix vision_msgs'
+inside 'test -x /usr/local/zed/tools/ZED_Diagnostic'
 inside "source /opt/ros/${distro}/setup.bash && source /opt/zed_ros2/setup.bash && ros2 pkg prefix zed_wrapper && ros2 pkg prefix compressed_image_transport && ros2 pkg prefix rosbridge_server"
 inside 'test -d /usr/local/zed && test -f /opt/zed_ros2/setup.bash'
-# The headless JP5 SDK omits GUI tools; CUDA and live frames are checked below.
 step "Checking non-root CUDA and live camera data"
 validate_runtime "$container"
 
