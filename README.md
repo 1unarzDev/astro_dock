@@ -184,6 +184,45 @@ sudo reboot
 
 Everything boat-specific is here; the rest of this README is project-agnostic. The boat LAN is defined once in [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range, reservations and DNS.
 
+The operator laptop (tranquility) is the gateway and reaches the boat over a bridged Ubiquiti link, so every device below is on one flat layer-2 LAN, `192.168.0.0/24`:
+
+```mermaid
+flowchart LR
+  net((Internet / WARP)) --- T
+  subgraph Operator
+    T["tranquility .2<br/>gateway, enp0s20f0u1"] --- B["Bullet AC .21<br/>station"]
+  end
+  B -. "airMAX 5 GHz<br/>SSID blastoise" .- R
+  subgraph Boat
+    R["Rocket 5AC Lite .22<br/>AP"] --- D["DD-WRT router .1<br/>DHCP, Wi-Fi"]
+    D --- O["blastoise-odroid .152"]
+    D --- J["blastoise-jetson .153"]
+    D --- L["VLP16 lidar .201"]
+  end
+```
+
+| Address | Device | Source |
+| --- | --- | --- |
+| .1 | DD-WRT router: DHCP, DNS, Wi-Fi | static, `router_setup.sh` |
+| .2 | Gateway laptop | static on its LAN profile |
+| .21 / .22 | Bullet AC / Rocket 5AC Lite management | set on each radio |
+| .100–.149 | DHCP pool | router |
+| .152 / .153 | Boat computer / Jetson | DHCP reservations (`STATIC_LEASES`) |
+| .201 | VLP16 lidar | static on the sensor |
+
+- **Radio link.** The Rocket 5AC Lite is the access point and the Bullet AC (`B-DB-AC`) is the station, both on airOS 8.7.1 with SSID `blastoise`. The link bridges layer 2: boat hosts see the laptop's own MAC. Their addresses, MACs and roles are the `UBNT_*` values in `config/boat-network.env`; each also answers on an airOS link-local `169.254.x.y` address. [`ubiquiti_setup.sh`](ubiquiti_setup.sh) uses them:
+  - `verify [--via tranquility]` is read-only. It pings the radios, router and boat computer, checks ARP against the MACs, and sends one UBNT discovery probe that prints each radio's model, firmware, SSID, mode and addresses.
+  - `snapshot bullet|rocket` saves the radio's `/tmp/system.cfg`.
+  - `apply bullet|rocket` snapshots, then changes only the airOS keys listed in `UBNT_<RADIO>_CFG`, after you type `APPLY`. A timer on the radio restores the snapshot and reboots after 300 s unless you type `KEEP`.
+
+  Run `snapshot` and `apply` from a boat-LAN host, and change the far radio (Rocket) before the near one, so a bad change reverts on its own. SSH prompts for the radio login. Logins and the WPA key are never in the repo: they live on the radios and in the snapshots under `~/.local/state/astro_dock/ubiquiti/` (mode 600), which are also airOS backups you can upload in the airOS web UI (System → Configuration Management).
+- **Radio recovery.** If a radio is unreachable at its LAN address, connect a host to the radio's PoE LAN port and browse to the link-local address that `verify` printed (give the host a `169.254.0.0/16` address). As a last resort, hold the reset button for about 10 s to restore factory defaults (`192.168.1.20`). Then upload the latest snapshot, or set the role, SSID, WPA key and address to match the table, and run `verify`.
+- **To fill** (owner):
+  - Frequency, channel width and security mode of the link (`radio.1.freq`, `radio.1.chanbw` and the `wpa` keys in a snapshot).
+  - Radio login user (`UBNT_USER`, default `ubnt`) and where the team keeps the radio password and WPA key.
+  - Whether .21 and .22 are static on the radios; the router has no reservation for them.
+  - Physical placement and wiring: which end the router and each radio sit on, and what connects to `enp0s20f0u1`.
+
 - **Router.** [`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH from those values: DHCP, DNS and WPA2 Wi-Fi, with router WAN/NAT disabled. Addresses, SSID and credentials are prompted. `--dry-run` inspects without changing anything; applying confirms, backs up NVRAM when supported, reboots and verifies. State lives in the ignored `router_setup_state/`.
 - **Reservations** sit above the DHCP pool. `./setup.linux.sh --components boat` on each boat computer drops any hand-set wired address so DHCP supplies it, the gateway and DNS, turns Wi-Fi off, and raises `net.core.rmem_max` to the 4 MiB that `config/fastdds.xml` requests.
 
