@@ -104,7 +104,7 @@ RUN apt-get update \
     && curl -fsSL -o /tmp/zed_sdk.run "${ZED_SDK_URL}" \
     && echo "${ZED_SDK_SHA256}  /tmp/zed_sdk.run" | sha256sum -c - \
     && size="$(sed -n 's/^filesizes="\([0-9]*\)"$/\1/p' /tmp/zed_sdk.run | head -1)" \
-    && tail -c "${size}" /tmp/zed_sdk.run | zstd -dc | tar -x -C /usr/local/zed ./tools \
+    && tail -c "${size}" /tmp/zed_sdk.run | zstd -dc | tar -x --no-same-owner -C /usr/local/zed ./tools \
     && test -x /usr/local/zed/tools/ZED_Diagnostic \
     && ! ldd /usr/local/zed/tools/ZED_Diagnostic /usr/local/zed/tools/ZED_Explorer | grep 'libQt.*not found' \
     && rm -rf /tmp/zed_sdk.run /var/lib/apt/lists/*
