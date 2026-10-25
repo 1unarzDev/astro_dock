@@ -17,8 +17,7 @@ COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permission
 COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
 COPY image-smoke.sh /usr/local/bin/astro-smoke
 COPY image-user.sh /usr/local/sbin/image-user
-COPY dev.bashrc /etc/astro/dev.bashrc
-COPY dev.helper.txt /home/roboboat/.helper.txt
+COPY dev.bashrc astro-help.py astro-help.yaml /etc/astro/
 
 # This final layer deliberately contains no apt, rosdep, or compilation. The
 # native ARM64 dependency image owns those expensive and platform-sensitive

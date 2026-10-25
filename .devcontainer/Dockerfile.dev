@@ -16,7 +16,7 @@ COPY pip.conf /etc/pip.conf
 COPY normalize-python-permissions.sh /usr/local/sbin/normalize-python-permissions
 COPY configure-zed-access.sh /usr/local/sbin/configure-zed-access
 COPY image-user.sh /usr/local/sbin/image-user
-COPY dev.bashrc /etc/astro/dev.bashrc
+COPY dev.bashrc astro-help.py astro-help.yaml /etc/astro/
 COPY image-smoke.sh /usr/local/bin/astro-smoke
 
 RUN apt-get update \
@@ -55,8 +55,6 @@ RUN set -e; if [ -d /usr/local/zed ]; then \
       /usr/local/sbin/normalize-python-permissions; \
       rm -rf /tmp/zed_ws /var/lib/apt/lists/*; \
     fi
-
-COPY --chown=${USER_UID}:${USER_GID} dev.helper.txt /home/${USERNAME}/.helper.txt
 
 USER ${USERNAME}
 WORKDIR ${ROS_WS}

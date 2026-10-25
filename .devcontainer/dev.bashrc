@@ -1,4 +1,7 @@
-export ROS_WS="${ROS_WS:-$HOME/roboboat_ws}"
+# This file's directory: the repository's .devcontainer, or /etc/astro in an image
+# started without the repository (whose ENV sets ROS_WS).
+ASTRO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ROS_WS="${ROS_WS:-${ASTRO_DIR%/.devcontainer}}"
 
 # Load ROS, the image overlays and the built workspace. Later entries take
 # precedence: each overlay was built on the ones before it, and the workspace
@@ -140,7 +143,18 @@ rviz2() {
 }
 alias rqt_tf_tree="ros2 run rqt_tf_tree rqt_tf_tree"
 
+# Browse the commands every workspace package describes in its help.yaml. A command
+# confirmed there runs in this shell, with its functions, and lands in the history.
 help() {
-  cat "$HOME/.helper.txt"
+  local out line
+  out="$(mktemp)" || return
+  ASTRO_HELP_OUT="$out" python3 -I "$ASTRO_DIR/astro-help.py" "$@"
+  line="$(<"$out")"
+  rm -f "$out"
+  [[ -n "$line" ]] || return 0
+  history -s "$line"
+  eval "$line"
 }
+
+[[ ! -f "$ASTRO_DIR/astro-banner.sh" ]] || source "$ASTRO_DIR/astro-banner.sh"
 
