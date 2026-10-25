@@ -9,6 +9,14 @@ REVERT_SECONDS=300
 # --via ships the env ahead of this script, so it is already defined there.
 # shellcheck source=config/boat-network.env
 [[ -n ${BOAT_SUBNET:-} ]] || source "$SCRIPT_DIR/config/boat-network.env"
+# Credentials come from the ignored .env (see .env.example); set variables win.
+if [[ -r $SCRIPT_DIR/.env ]]; then
+    while IFS='=' read -r key value; do
+        [[ $key =~ ^[A-Z][A-Z0-9_]*$ && -z ${!key:-} ]] || continue
+        value=${value%\"} value=${value#\"}
+        printf -v "$key" '%s' "$value"
+    done <"$SCRIPT_DIR/.env"
+fi
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
@@ -25,9 +33,10 @@ verify    Read-only: ping each radio, show ARP entries, and send one UBNT
           --via runs it on HOST over SSH (e.g. the gateway laptop).
 snapshot  Copy the radio's /tmp/system.cfg to $STATE_DIR.
 apply     Snapshot, then set only the UBNT_<RADIO>_CFG keys from
-          config/boat-network.env. A timer on the radio restores the snapshot
-          and reboots after ${REVERT_SECONDS}s unless you type KEEP.
-Run snapshot/apply from a host on the boat LAN. SSH asks for the radio password.
+          config/boat-network.env as a RAM-only trial. The radio reboots into
+          its saved config after ${REVERT_SECONDS}s unless you type KEEP.
+Run snapshot/apply from a host on the boat LAN, or set UBNT_JUMP to one.
+UBNT_USER and UBNT_PASSWORD come from .env; without a password SSH prompts.
 EOF
 }
 
@@ -45,8 +54,8 @@ verify() {
     for ip in "$ROUTER_IP" "$BOAT_TRANSPORT_IP"; do
         ping -c 1 -W 1 "$ip" >/dev/null 2>&1 && info "$ip reachable across the link" || warn "$ip unreachable"
     done
-    src=$(ip -4 route get "$ROUTER_IP" | sed -n 's/.* src \([0-9.]*\).*/\1/p')
-    [[ -n $src ]] || die "No route to the boat LAN from this host"
+    src=$(ip -4 route get "$ROUTER_IP" 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p') || true
+    [[ -n $src ]] || die "No route to $ROUTER_IP; run verify on a boat-LAN host or with --via"
     command -v python3 >/dev/null || die "python3 is required for the discovery probe"
     info "Expected: SSID ${UBNT_SSID:-?}, rocket ${UBNT_ROCKET_ROLE:-?}, bullet ${UBNT_BULLET_ROLE:-?}"
     info "UBNT discovery from $src (one probe, 3 s):"
@@ -89,17 +98,28 @@ PY
 }
 
 ssh_radio() {
-    local ip=$1; shift
-    mkdir -p -m 700 "$STATE_DIR"
-    ssh -o ConnectTimeout=8 -o UserKnownHostsFile="$STATE_DIR/known_hosts" -o StrictHostKeyChecking=accept-new \
-        -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa \
-        "${UBNT_USER:-ubnt}@$ip" "$@"
+    local ip=$1 askpass; shift
+    # airOS 8 dropbear only offers ssh-rsa and drops clients whose host-key list is long.
+    local cmd=(ssh -o ConnectTimeout=8 -o UserKnownHostsFile="$STATE_DIR/known_hosts" -o StrictHostKeyChecking=accept-new
+        -o HostKeyAlgorithms=ssh-rsa -o LogLevel=ERROR)
+    [[ -z ${UBNT_JUMP:-} ]] || cmd+=(-J "$UBNT_JUMP")
+    cmd+=("${UBNT_USER:-ubnt}@$ip" "$@")
+    [[ -n ${UBNT_PASSWORD:-} ]] || { "${cmd[@]}"; return; }
+    # The password travels in the environment, never on a command line.
+    if command -v sshpass >/dev/null; then
+        SSHPASS=$UBNT_PASSWORD sshpass -e "${cmd[@]}"
+        return
+    fi
+    askpass=$(mktemp) && printf '#!/bin/sh\nprintf "%%s\\n" "$UBNT_PASSWORD"\n' >"$askpass" && chmod 700 "$askpass"
+    UBNT_PASSWORD=$UBNT_PASSWORD SSH_ASKPASS=$askpass SSH_ASKPASS_REQUIRE=force "${cmd[@]}" || { rm -f -- "$askpass"; return 1; }
+    rm -f -- "$askpass"
 }
 
 snapshot() {
     local name=$1 ip file
     ip=$(radio_var "$name" IP)
     [[ -n $ip ]] || die "UBNT_${name^^}_IP is unset"
+    mkdir -p -m 700 "$STATE_DIR"
     file="$STATE_DIR/$name-$(date +%Y%m%d-%H%M%S).cfg"
     (umask 077; ssh_radio "$ip" 'cat /tmp/system.cfg' </dev/null >"$file") || { rm -f -- "$file"; die "Snapshot failed"; }
     grep -q '^wireless\.' "$file" || die "$file does not look like an airOS system.cfg"
@@ -107,38 +127,56 @@ snapshot() {
     printf '%s\n' "$file"
 }
 
+# Keys that move the management address or must change on both radios at once.
+REFUSED_KEYS='^(netconf|bridge|route|vlan|dhcpc|aaa|wpasupplicant)\.|\.(ip|netmask)$|^wireless\.1\.(ssid|security|wds)|^radio\.1\.(mode|freq|chanbw|ieee_mode)'
+TRIAL_PID=/tmp/astro-trial.pid
+TRIAL_ALIVE='p=$(cat '$TRIAL_PID' 2>/dev/null) && kill -0 "$p" 2>/dev/null'
+
 apply() {
-    local name=$1 ip pairs pair key value file new answer changed=0
+    local name=$1 peer ip pairs pair key value file new answer changed=0
+    [[ $name == rocket ]] && peer=bullet || peer=rocket
     ip=$(radio_var "$name" IP) pairs=$(radio_var "$name" CFG)
     [[ -n $pairs ]] || die "UBNT_${name^^}_CFG lists no keys; nothing to apply"
+    umask 077
+    ssh_radio "$(radio_var "$peer" IP)" "! { $TRIAL_ALIVE; }" </dev/null \
+        || die "The $peer radio is unreachable or has a pending trial; apply one radio at a time"
+    ssh_radio "$ip" "! { $TRIAL_ALIVE; }" </dev/null || die "$name is unreachable or already has a pending trial"
     file=$(snapshot "$name")
-    new=$(mktemp) && trap 'rm -f -- "$new"' EXIT
+    new=$(mktemp) && trap "rm -f -- '$new' '$new.tmp'" EXIT
     cp -- "$file" "$new"
+    set -f
     for pair in $pairs; do
         key=${pair%%=*} value=${pair#*=}
         [[ $key =~ ^[A-Za-z0-9_.]+$ && $pair == *=* ]] || die "Bad UBNT_${name^^}_CFG entry: $pair"
-        grep -q "^$key=" "$new" || die "$key is not in the radio's config; only existing keys are changed"
-        grep -qx "$key=$value" "$new" && continue
-        printf '  %s: %s -> %s\n' "$key" "$(sed -n "s/^$key=//p" "$new")" "$value"
-        awk -v k="$key" -v v="$value" -F= '$1 == k { print k "=" v; next } { print }' "$new" >"$new.tmp" && mv -- "$new.tmp" "$new"
+        [[ ! $key =~ $REFUSED_KEYS ]] || die "$key is a management-address or link-shared key; change it in the airOS UI on both radios"
+        awk -F= -v k="$key" '$1 == k { f = 1 } END { exit !f }' "$new" || die "$key is not in the radio's config; only existing keys are changed"
+        awk -F= -v k="$key" -v v="$value" '$1 == k { sub(/^[^=]*=/, ""); f = ($0 == v) } END { exit !f }' "$new" && continue
+        printf '  %s: %s -> %s\n' "$key" "$(awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$new")" "$value"
+        awk -F= -v k="$key" -v v="$value" '$1 == k { print k "=" v; next } { print }' "$new" >"$new.tmp" && mv -- "$new.tmp" "$new"
         changed=1
     done
+    set +f
     ((changed)) || { info "$name already matches; nothing to apply"; return; }
-    read -r -p "Apply to $name at $ip with a ${REVERT_SECONDS}s auto-revert? Type APPLY: " answer
+    read -r -p "Trial $name at $ip in RAM, rebooting to its saved config after ${REVERT_SECONDS}s? Type APPLY: " answer
     [[ $answer == APPLY ]] || { info "Cancelled; nothing changed"; return; }
-    # The revert job restores the snapshot to RAM and flash, then reboots.
+    # Flash is untouched until KEEP, so the timer, a reboot or a power cycle all restore the saved config.
     ssh_radio "$ip" "cat >/tmp/astro-new.cfg || exit 1
-        cp /tmp/system.cfg /tmp/astro-revert.cfg || exit 1
-        sh -c 'trap \"\" HUP; sleep $REVERT_SECONDS; cp /tmp/astro-revert.cfg /tmp/system.cfg; cfgmtd -w -p /etc/; reboot' </dev/null >/dev/null 2>&1 &
-        echo \$! >/tmp/astro-revert.pid
-        cp /tmp/astro-new.cfg /tmp/system.cfg && /usr/etc/rc.d/rc.softrestart save" <"$new" >/dev/null \
-        || warn "The session dropped during apply; the radio reverts on its own in ${REVERT_SECONDS}s"
-    info "Applied. Check the link now (another terminal: $PROGRAM verify)."
-    read -r -p "Type KEEP within ${REVERT_SECONDS}s to keep it; anything else lets it revert: " answer
-    [[ $answer == KEEP ]] || { info "Leaving the timer to restore $file"; return; }
-    ssh_radio "$ip" 'kill "$(cat /tmp/astro-revert.pid)" && cfgmtd -w -p /etc/ && rm -f /tmp/astro-revert.*' </dev/null \
-        || die "Could not cancel the revert; the radio will restore $file"
-    info "Kept and saved to flash."
+        sh -c 'trap \"\" HUP; sleep $REVERT_SECONDS; reboot' </dev/null >/dev/null 2>&1 &
+        echo \$! >$TRIAL_PID
+        cp /tmp/astro-new.cfg /tmp/system.cfg && /usr/etc/rc.d/rc.softrestart test" <"$new" >/dev/null \
+        || warn "The session dropped during apply; checking the radio"
+    if ssh_radio "$ip" "$TRIAL_ALIVE && ps w | grep -F 'sleep $REVERT_SECONDS' | grep -v grep" </dev/null; then
+        info "Trial running and revert timer alive. Check the link now (another terminal: $PROGRAM verify)."
+    else
+        warn "!!! Could not confirm the revert timer on $name. Its flash still holds the saved config:"
+        warn "!!! reboot or power-cycle the radio to restore it if the link misbehaves."
+    fi
+    read -r -p "Type KEEP to save the trial to flash; anything else lets it revert: " answer
+    [[ $answer == KEEP ]] || { info "Not kept; $name reboots into its saved config when the timer ends"; return; }
+    ssh_radio "$ip" "sort /tmp/system.cfg | tr -d '\r' >/tmp/running.cfg && cfgmtd -w -f /tmp/running.cfg -p /etc/ || exit 1
+        kill \"\$(cat $TRIAL_PID)\" 2>/dev/null; rm -f $TRIAL_PID /tmp/astro-new.cfg" </dev/null \
+        || die "Saving failed or the radio was unreachable; unless the save reached flash, $name reboots into its previous config when the timer ends"
+    info "Saved to flash and timer cancelled. Previous config: $file"
 }
 
 case ${1:-} in
