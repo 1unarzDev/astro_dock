@@ -178,7 +178,7 @@ ASTRO_NTP_SERVER=boat ./setup.linux.sh --non-interactive --yes \
 sudo reboot
 ```
 
-`jetson` sets the persistent MAXN_SUPER power mode, a 16 GB `/swapfile` and the headless multi-user target; `docker` and `gpu` keep JetPack's Docker and toolkit and add the user to `docker`. After the reboot, start the container as in [Image publishing and deployment](#image-publishing-and-deployment). The ZED SDK downloads the camera's factory calibration by serial number on first use (through the gateway) and keeps it in the `zed_settings` volume.
+`jetson` sets the persistent MAXN_SUPER power mode, a 16 GB `/swapfile` and the headless multi-user target; `docker` and `gpu` keep JetPack's Docker and toolkit and add the user to `docker`. After the reboot, start the container as in [Image publishing and deployment](#image-publishing-and-deployment), then run `./clone_optional.sh --profile jetson`: it clones the repositories [`optional_repos.yaml`](optional_repos.yaml) marks for the Jetson (mhseals_hardware, mhseals_nav, mhseals_testing; the image bakes none of them) and builds them inside `roboboat_dev`. The ZED SDK downloads the camera's factory calibration by serial number on first use (through the gateway) and keeps it in the `zed_settings` volume.
 
 #### Boat network
 

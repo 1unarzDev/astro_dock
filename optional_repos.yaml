@@ -13,17 +13,23 @@
   url: https://github.com/mhseals/rviz-plugin-zed-od.git
   branch: main
   
+# profiles: the hosts that need the repository; ./clone_optional.sh --profile NAME clones and
+# builds those without asking. The Jetson runs mhseals_nav's camera parts and, from
+# mhseals_testing, the unit CLI that starts them and host_diagnostic.
 - name: mhseals_hardware
   path: src/mhseals_hardware
   url: https://github.com/MHSeals/mhseals_hardware.git
   branch: main
+  profiles: [jetson]
 
 - name: mhseals_nav
   path: src/mhseals_nav
   url: https://github.com/MHSeals/mhseals_nav.git
   branch: main
+  profiles: [jetson]
 
 - name: mhseals_testing
   path: src/mhseals_testing
   url: https://github.com/MHSeals/mhseals_testing.git
   branch: main
+  profiles: [jetson]
