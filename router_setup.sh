@@ -6,19 +6,26 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
 STATE_DIR="$SCRIPT_DIR/router_setup_state"
 IDENTITY=""
 DRY_RUN=0
-SSH_USER=root
 SSH_PORT=22
 
 # shellcheck source=config/boat-network.env
 source "$SCRIPT_DIR/config/boat-network.env"
+# Credentials live only in the ignored .env (see .env.example); the environment wins.
+if [[ -r $SCRIPT_DIR/.env ]]; then
+    while IFS='=' read -r key value; do
+        [[ $key =~ ^(ROUTER_(USER|PASSWORD|ADMIN_PASSWORD)|BOAT_WIFI_PASSWORD)$ && -z ${!key:-} ]] \
+            && printf -v "$key" '%s' "$value"
+    done <"$SCRIPT_DIR/.env"
+fi
+SSH_USER=${ROUTER_USER:-root}
 HOST=$ROUTER_IP
 LAPTOP_IP=$GATEWAY_IP
 SETUP_NAME=mhseals
 ROUTER_NAME=mhseals
 SSID=mhseals
 ADMIN_USER=mhseals
-ADMIN_PASSWORD=roboboat
-WIFI_PASSWORD=roboboat
+ADMIN_PASSWORD=${ROUTER_ADMIN_PASSWORD:-}
+WIFI_PASSWORD=${BOAT_WIFI_PASSWORD:-}
 
 KNOWN_HOSTS=""
 KEY_DIR=""
@@ -166,9 +173,7 @@ validate_settings() {
     (( ${#WIFI_PASSWORD} >= 8 && ${#WIFI_PASSWORD} <= 63 )) || die "WPA2 password must contain 8-63 characters"
     [[ $ROUTER_NAME != *$'\n'* && $SSID != *$'\n'* && $ADMIN_USER != *$'\n'* ]] || die "Names cannot contain newlines"
     [[ $ADMIN_PASSWORD != *$'\n'* && $WIFI_PASSWORD != *$'\n'* ]] || die "Passwords cannot contain newlines"
-    if [[ $ADMIN_PASSWORD == roboboat || $WIFI_PASSWORD == roboboat ]]; then
-        warn "The requested shared password 'roboboat' is weak. WAN administration remains disabled."
-    fi
+    [[ -n $ADMIN_PASSWORD ]] || die "Set ROUTER_ADMIN_PASSWORD in .env or enter a web-admin password"
 }
 
 initialize_state() {
@@ -258,8 +263,12 @@ authenticate() {
     fi
 
     if command -v sshpass >/dev/null 2>&1; then
-        read -r -s -p "Existing DD-WRT SSH password (leave blank for key-only setup): " CURRENT_PASSWORD
-        printf '\n'
+        if [[ -n ${ROUTER_PASSWORD:-} ]]; then
+            CURRENT_PASSWORD=$ROUTER_PASSWORD
+        else
+            read -r -s -p "Existing DD-WRT SSH password (leave blank for key-only setup): " CURRENT_PASSWORD
+            printf '\n'
+        fi
         if [[ -n $CURRENT_PASSWORD ]] && SSHPASS=$CURRENT_PASSWORD sshpass -e ssh \
             "${SSH_OPTIONS[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no \
             "$SSH_USER@$HOST" true </dev/null 2>/dev/null; then
