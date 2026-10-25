@@ -18,5 +18,6 @@ src/mhseals_hardware/
 src/mhseals_nav/
 src/mhseals_testing/
 .devcontainer/run-generations/
+.devcontainer/installed.local.txt
 *.egg-info/
 .env
