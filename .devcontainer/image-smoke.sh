@@ -38,6 +38,12 @@ if [[ "$mode" == jetson ]]; then
         'source /opt/astro-setup.bash && ros2 pkg prefix velodyne_driver >/dev/null'
     check "source-built vision_msgs" bash -lc \
         'source /opt/ros/jazzy/setup.bash && ros2 pkg prefix vision_msgs >/dev/null'
+    check "source-built tracker and perception costmap" bash -lc '
+        source /opt/astro-setup.bash
+        for pkg in map_msgs nav2_costmap_2d nav2_lifecycle_manager robot_localization \
+            spatio_temporal_voxel_layer tf2_geometry_msgs; do
+            ros2 pkg prefix "$pkg" >/dev/null
+        done'
 else
     check "ROS run and bag commands" bash -lc \
         'source /opt/ros/jazzy/setup.bash && ros2 run --help >/dev/null && ros2 bag --help >/dev/null'

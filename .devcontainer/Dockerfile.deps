@@ -88,23 +88,32 @@ RUN printf '%s\n' \
 
 CMD ["bash"]
 
-COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
-COPY jetson-packages.txt /tmp/jetson-packages.txt
-RUN chmod +x /usr/local/bin/astro-ros-install \
-    && /usr/local/bin/astro-ros-install --file /tmp/jetson-packages.txt
-
 # Stereolabs' L4T image installs the SDK with skip_tools; validation needs
-# ZED_Diagnostic. Copy only tools/ and its Qt runtime from the same pinned
-# installer, as the installer's tools step does, without reinstalling the SDK.
+# ZED_Diagnostic. Copy only that tool and its Qt runtime from the same pinned
+# installer, without reinstalling the SDK. CUDA and Tegra libraries come from the
+# Jetson host at run time, so the link check covers only Qt.
 ARG ZED_SDK_URL=https://download.stereolabs.com/zedsdk/5.4.1/l4t36.4/jetsons
 ARG ZED_SDK_SHA256=680ffc85e1999eb953703d76f570fe8492fa7c67719575f88c83caefd854dfcc
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl zstd libopengl0 libqt5network5 libqt5opengl5 \
-        libqt5sql5 libqt5svg5 libqt5widgets5 libqt5xml5 \
+    && apt-get install -y --no-install-recommends curl zstd libqt5network5 libqt5sql5 \
+        libqt5svg5 libqt5widgets5 libqt5xml5 \
     && curl -fsSL -o /tmp/zed_sdk.run "${ZED_SDK_URL}" \
     && echo "${ZED_SDK_SHA256}  /tmp/zed_sdk.run" | sha256sum -c - \
     && size="$(sed -n 's/^filesizes="\([0-9]*\)"$/\1/p' /tmp/zed_sdk.run | head -1)" \
-    && tail -c "${size}" /tmp/zed_sdk.run | zstd -dc | tar -x --no-same-owner -C /usr/local/zed ./tools \
+    && tail -c "${size}" /tmp/zed_sdk.run | zstd -dc \
+        | tar -x --no-same-owner -C /usr/local/zed ./tools/ZED_Diagnostic \
     && test -x /usr/local/zed/tools/ZED_Diagnostic \
-    && ! ldd /usr/local/zed/tools/ZED_Diagnostic /usr/local/zed/tools/ZED_Explorer | grep 'libQt.*not found' \
+    && ! ldd /usr/local/zed/tools/ZED_Diagnostic | grep 'libQt.*not found' \
     && rm -rf /tmp/zed_sdk.run /var/lib/apt/lists/*
+
+COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
+COPY jetson-packages.txt /tmp/jetson-packages.txt
+# Jammy's OpenVDB 8.1 headers do not build with its oneTBB; point the voxel
+# layer at the OpenVDB 10 that openvdb_vendor builds, ahead of /usr.
+RUN chmod +x /usr/local/bin/astro-ros-install \
+    && OpenVDB_ROOT=/opt/astro-extra/opt/openvdb_vendor \
+        /usr/local/bin/astro-ros-install --file /tmp/jetson-packages.txt \
+    && source /opt/astro-setup.bash \
+    && stvl="$(ros2 pkg prefix spatio_temporal_voxel_layer)" \
+    && ldd "$stvl"/lib/*.so | grep -q 'openvdb_vendor/lib/libopenvdb' \
+    && ! ldd "$stvl"/lib/*.so | grep 'not found'

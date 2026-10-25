@@ -37,6 +37,8 @@ jobs:
         run: .github/scripts/test-ros-net.sh
       - name: Validate the bag fetch fallback
         run: .github/scripts/test-fetch-bags.sh
+      - name: Validate the boat revert
+        run: if [ -f tests/test_boat_revert.sh ]; then bash tests/test_boat_revert.sh; fi
       - name: Check dependency locks, Compose and Jetson image policy
         run: .github/scripts/check-containers.py
       - name: Validate Compose adapters

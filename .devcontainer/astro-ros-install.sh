@@ -16,7 +16,7 @@ if [[ "$1" == --source ]]; then force_source=true; shift; fi
 if [[ "$1" == --file ]]; then
     names=()
     while read -r name _; do
-        [[ -n "$name" ]] && names+=("$name")
+        [[ -z "$name" ]] || names+=("$name")
     done < <(sed 's/#.*//' "${2:?--file needs a path}")
 else
     names=("$@")
