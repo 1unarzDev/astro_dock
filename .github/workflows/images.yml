@@ -69,7 +69,7 @@ jobs:
         run: |
           docker run --rm "${REGISTRY_IMAGE}:core-${{ matrix.arch }}" bash -lc '
             set -e; source /opt/ros/jazzy/setup.bash
-            for pkg in py_trees rosbridge_server rosapi spatio_temporal_voxel_layer mavros_extras; do
+            for pkg in py_trees spatio_temporal_voxel_layer mavros_extras; do
               ros2 pkg prefix "$pkg"
             done
             /workspace/venv/bin/python3 -c "import rich, gpiod, py_trees, pyubx2, pyrtcm, importlib.metadata as m; print(m.version(\"pyubx2\"), m.version(\"pyrtcm\"))"'
