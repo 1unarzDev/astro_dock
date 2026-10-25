@@ -124,6 +124,26 @@ class Dispatcher(unittest.TestCase):
         self.assertIsNone(self.run_hook('claude', payload))
         self.assertEqual(self.events(), [])
 
+    def add_package(self, name, source):
+        package = self.root / 'src' / name
+        package.mkdir(parents=True)
+        (package / 'hook.py').write_text(source)
+        (package / 'agent_hooks.yaml').write_text('name: %s\nscript: hook.py\n' % name)
+
+    def test_a_package_exit_skips_only_that_package(self):
+        self.add_package('aa_exits', 'import sys\ndef agent_event(event):\n    sys.exit(2)\n')
+        out = self.run_hook('claude', claude('PreToolUse', tool_input={'command': 'rm -rf /'}))
+        self.assertEqual(out['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertIn('aa_exits pre: SystemExit(2)', (self.root / 'state' / 'astro' / 'agents-hook.log').read_text())
+
+    def test_a_spent_budget_skips_the_rest_but_keeps_a_deny(self):
+        self.add_package('zz_slow', 'def agent_event(event):\n    raise AssertionError("ran past the budget")\n')
+        ticks = iter([0.0, 0.1, 5.0])          # start, before robot_tools, before zz_slow
+        deny, _ = hook.dispatch(hook.normalize('claude', claude('PreToolUse', tool_input={'command': 'rm -rf /'})),
+                                self.root, budget_s=2.0, clock=lambda: next(ticks))
+        self.assertEqual(deny, 'use the trash verb')
+        self.assertIn('zz_slow pre: skipped', (self.root / 'state' / 'astro' / 'agents-hook.log').read_text())
+
     def test_runs_isolated_fast_and_always_exits_0(self):
         env = {'PATH': os.environ['PATH'], 'SEEN': str(self.seen), 'XDG_STATE_HOME': str(self.root / 'state'),
                'HOME': str(self.root)}

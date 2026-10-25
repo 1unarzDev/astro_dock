@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EVENTS = {'SessionStart': 'start', 'PreToolUse': 'pre', 'PostToolUse': 'post', 'PostToolUseFailure': 'post'}
 SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports Bash; older builds the rest
 EXIT = re.compile(r'^Exit code:?\s*(-?\d+)', re.M)
+BUDGET_S = 2.0      # all packages together; the CLIs' hook timeout is 5 s
 
 
 def parse_yaml(text):
@@ -139,13 +140,22 @@ def _load(name, script):
     return module.agent_event
 
 
-def dispatch(event, root=ROOT):
-    """Every package's answer to ``event``: ``(deny reason or None, [contexts])``."""
+def dispatch(event, root=ROOT, budget_s=BUDGET_S, clock=time.monotonic):
+    """Every package's answer to ``event``: ``(deny reason or None, [contexts])``.
+
+    Packages run in order until ``budget_s`` is spent; the rest are skipped (and logged), and a
+    deny already collected still stands. A package's error, even ``sys.exit``, skips only it.
+    """
     deny, contexts = None, []
+    ends = clock() + budget_s
     for name, script in packages(root):
+        if clock() > ends:
+            log('%s %s: skipped, the %.1f s budget is spent' % (name, event['event'], budget_s))
+            continue
         try:
             answer = _load(name, script)(dict(event)) or {}
-        except Exception as error:      # a package hook never breaks the agent's tool call
+            answer = answer if isinstance(answer, dict) else {}
+        except BaseException as error:      # a package hook never breaks the agent's tool call
             log('%s %s: %r' % (name, event['event'], error))
             continue
         if answer.get('deny') and deny is None and event['event'] == 'pre':
@@ -183,7 +193,7 @@ def main(argv=None):
             out = '\n\n'.join(dispatch(start)[1])
         else:
             out = run(args[0] if args else '', sys.stdin.read())
-    except Exception as error:
+    except BaseException as error:
         log('dispatch: %r' % (error,))
         out = ''
     if out:
