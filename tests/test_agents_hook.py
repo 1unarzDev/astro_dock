@@ -1,0 +1,159 @@
+"""The agent hook dispatcher (.agents/hook.py) on sample Claude Code and Codex payloads."""
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location('agents_hook', ROOT / '.agents' / 'hook.py')
+hook = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(hook)
+
+# A package hook: denies `rm -rf /`, gives a playbook, records every event it sees.
+PACKAGE_HOOK = r'''
+import json, os
+def agent_event(event):
+    with open(os.environ['SEEN'], 'a') as out:
+        out.write(json.dumps(event) + '\n')
+    if event['event'] == 'start':
+        return {'context': 'playbook for ' + event['agent']}
+    if event['event'] == 'pre' and 'rm -rf /' in event['command']:
+        return {'deny': 'use the trash verb'}
+'''
+SID = '3f2a9c1e-0000-4000-8000-000000000000'
+
+
+def claude(name, **fields):
+    return dict({'session_id': SID, 'transcript_path': '/t.jsonl', 'cwd': '/ws', 'permission_mode': 'default',
+                 'hook_event_name': name, 'tool_name': 'Bash', 'tool_use_id': 'toolu_01',
+                 'tool_input': {'command': 'ros2 node list', 'description': 'List nodes'}}, **fields)
+
+
+def codex(name, **fields):
+    return dict({'session_id': SID, 'turn_id': 'turn-1', 'transcript_path': None, 'cwd': '/ws', 'model': 'gpt-5',
+                 'hook_event_name': name, 'tool_name': 'Bash', 'tool_use_id': 'call_1',
+                 'tool_input': {'command': 'ros2 node list'}}, **fields)
+
+
+class Dispatcher(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        (self.root / '.agents').mkdir()
+        shutil.copy(ROOT / '.agents' / 'hooks.yaml', self.root / '.agents' / 'hooks.yaml')
+        package = self.root / 'src' / 'robot_tools'
+        (package / 'robot_tools').mkdir(parents=True)
+        (package / 'robot_tools' / 'agent_hook.py').write_text(PACKAGE_HOOK)
+        (package / 'agent_hooks.yaml').write_text('name: robot_tools   # x\nscript: robot_tools/agent_hook.py\n')
+        self.seen = self.root / 'seen.jsonl'
+        os.environ['SEEN'] = str(self.seen)
+        os.environ['XDG_STATE_HOME'] = str(self.root / 'state')
+
+    def run_hook(self, agent, payload):
+        out = hook.run(agent, json.dumps(payload), self.root)
+        return json.loads(out) if out else None
+
+    def events(self):
+        return [json.loads(line) for line in self.seen.read_text().splitlines()] if self.seen.exists() else []
+
+    def test_deny_is_the_same_json_for_claude_and_codex(self):
+        for agent, make in (('claude', claude), ('codex', codex)):
+            out = self.run_hook(agent, make('PreToolUse', tool_input={'command': 'ssh robot rm -rf /'}))
+            self.assertEqual(out, {'hookSpecificOutput': {
+                'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                'permissionDecisionReason': 'use the trash verb'}})
+
+    def test_start_returns_the_playbook_as_additional_context(self):
+        out = self.run_hook('claude', {'session_id': SID, 'hook_event_name': 'SessionStart', 'source': 'startup'})
+        self.assertEqual(out['hookSpecificOutput'], {'hookEventName': 'SessionStart',
+                                                      'additionalContext': 'playbook for claude'})
+        self.assertEqual(self.events()[0]['source'], 'startup')
+
+    def test_allowed_commands_are_silent_and_reach_the_package_as_neutral_events(self):
+        self.assertIsNone(self.run_hook('claude', claude('PreToolUse')))
+        self.assertIsNone(self.run_hook('claude', claude('PostToolUse', duration_ms=2100,
+                                                         tool_response={'stdout': '', 'interrupted': False})))
+        self.assertIsNone(self.run_hook('codex', codex('PostToolUse', tool_response=json.dumps(
+            {'output': 'x', 'metadata': {'exit_code': 0, 'duration_seconds': 0.4}}))))
+        pre, post, codex_post = self.events()
+        self.assertEqual((pre['agent'], pre['event'], pre['tool_id'], pre['command'], pre['exit']),
+                         ('claude', 'pre', 'toolu_01', 'ros2 node list', None))
+        self.assertEqual((post['event'], post['exit'], post['duration_ms'], post['failed']), ('post', 0, 2100, False))
+        self.assertEqual((codex_post['agent'], codex_post['exit'], codex_post['tool_id']), ('codex', 0, 'call_1'))
+
+    def test_failures_carry_the_exit_code(self):
+        self.run_hook('claude', claude('PostToolUseFailure', error='Exit code 3\nboom', is_interrupt=False,
+                                       duration_ms=4187))
+        self.run_hook('claude', claude('PostToolUseFailure', error='spawn failed', is_interrupt=True))
+        self.run_hook('codex', codex('PostToolUse', tool_response='Exit code: 2\nWall time: 0.1 seconds\n'))
+        self.run_hook('codex', codex('PostToolUse', tool_response={'exit_code': 1}))
+        self.run_hook('codex', codex('PostToolUse', tool_response={'stdout': 'no code'}))
+        self.assertEqual([(e['exit'], e['failed']) for e in self.events()],
+                         [(3, True), (None, True), (2, True), (1, True), (None, False)])
+        self.assertEqual(self.events()[0]['duration_ms'], 4187)
+
+    def test_agent_is_detected_when_not_named_and_argv_commands_are_joined(self):
+        self.run_hook('', codex('PreToolUse', tool_input={'command': ['bash', '-lc', 'ros2 topic list']}))
+        self.assertEqual(self.events()[0]['agent'], 'codex')
+        self.assertEqual(self.events()[0]['command'], "bash -lc 'ros2 topic list'")
+
+    def test_other_tools_and_events_are_ignored(self):
+        edit = claude('PreToolUse', tool_name='Edit', tool_input={'file_path': 'x'})
+        self.assertIsNone(self.run_hook('claude', edit))
+        self.assertIsNone(self.run_hook('claude', claude('Stop')))
+        self.assertEqual(self.events(), [])
+
+    def test_a_missing_disabled_or_broken_package_is_a_no_op(self):
+        payload = claude('PreToolUse', tool_input={'command': 'rm -rf /'})
+        registry = self.root / '.agents' / 'hooks.yaml'
+        shipped = registry.read_text()
+        registry.write_text('discover: [src/*/agent_hooks.yaml]\ndisabled: [robot_tools]\n')
+        self.assertIsNone(self.run_hook('claude', payload))
+        registry.write_text(shipped)
+        (self.root / 'src' / 'robot_tools' / 'robot_tools' / 'agent_hook.py').write_text('raise RuntimeError("bad")')
+        self.assertIsNone(self.run_hook('claude', payload))
+        self.assertIn('robot_tools pre', (self.root / 'state' / 'astro' / 'agents-hook.log').read_text())
+        (self.root / 'src' / 'robot_tools' / 'agent_hooks.yaml').unlink()
+        self.assertIsNone(self.run_hook('claude', payload))
+        self.assertEqual(self.events(), [])
+
+    def test_runs_isolated_fast_and_always_exits_0(self):
+        env = {'PATH': os.environ['PATH'], 'SEEN': str(self.seen), 'XDG_STATE_HOME': str(self.root / 'state'),
+               'HOME': str(self.root)}
+        script = self.root / '.agents' / 'hook.py'
+        shutil.copy(ROOT / '.agents' / 'hook.py', script)
+        cases = [(json.dumps(claude('PreToolUse', tool_input={'command': 'rm -rf /'})), 'deny'),
+                 (json.dumps(claude('PreToolUse')), ''), ('not json', '')]
+        for text, expect in cases:
+            began = time.monotonic()
+            done = subprocess.run([sys.executable, '-I', str(script), 'claude'], input=text, capture_output=True,
+                                  text=True, env=env, cwd=str(self.root), timeout=10)
+            self.assertEqual(done.returncode, 0)
+            self.assertLess(time.monotonic() - began, 1.0)
+            self.assertEqual(expect in done.stdout, True) if expect else self.assertEqual(done.stdout, '')
+        playbook = subprocess.run([sys.executable, '-I', str(script), '--playbook'], capture_output=True,
+                                  text=True, env=env, timeout=10)
+        self.assertEqual(playbook.stdout.strip(), 'playbook for agent')
+
+    def test_shipped_configs_point_every_cli_at_the_dispatcher(self):
+        claude_hooks = json.loads((ROOT / '.claude' / 'settings.json').read_text())['hooks']
+        codex_hooks = json.loads((ROOT / '.codex' / 'hooks.json').read_text())['hooks']
+        self.assertEqual(set(claude_hooks), {'SessionStart', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'})
+        self.assertEqual(set(codex_hooks), {'SessionStart', 'PreToolUse', 'PostToolUse'})
+        for hooks, agent in ((claude_hooks, 'claude'), (codex_hooks, 'codex')):
+            for groups in hooks.values():
+                for handler in (h for g in groups for h in g['hooks']):
+                    self.assertIn('.agents/hook.py', handler['command'])
+                    self.assertIn('-I', handler['command'])
+                    self.assertTrue(handler['command'].split('exit 0')[0].rstrip('; ').endswith(agent))
+
+
+if __name__ == '__main__':
+    unittest.main()
