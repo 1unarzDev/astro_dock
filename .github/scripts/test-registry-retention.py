@@ -21,9 +21,9 @@ class RetentionPolicyTest(unittest.TestCase):
     @mock.patch.object(module, 'inventory')
     def test_repeated_promotion_preserves_rollbacks(self, inventory, resolve, retag):
         inventory.return_value = [module.Tag(
-            'jetson-jp5-foxy', 'sha256:current',
+            'jetson-jp6-jazzy', 'sha256:current',
             dt.datetime.now(dt.timezone.utc), 1)]
-        module.rotate('example/astro', 'jetson-jp5-foxy', 'candidate', 3)
+        module.rotate('example/astro', 'jetson-jp6-jazzy', 'candidate', 3)
         retag.assert_not_called()
 
     @mock.patch.object(module, 'delete_unreferenced')
@@ -31,7 +31,7 @@ class RetentionPolicyTest(unittest.TestCase):
     @mock.patch.object(module, 'resolve_digest', return_value='sha256:new')
     @mock.patch.object(module, 'inventory', return_value=[])
     def test_jetpack_candidate_names_do_not_collide(self, inventory, resolve, retag, delete):
-        for family in ('jetson-jp5-foxy', 'jetson-jp6-jazzy'):
+        for family in ('jetson', 'jetson-jp6-jazzy'):
             slot, _ = module.candidate_slot('example/astro', 'candidate', 5, family)
             self.assertEqual(slot, family + '-c1')
             self.assertIn(slot, module.FIXED_TAGS)

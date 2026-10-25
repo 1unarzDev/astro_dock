@@ -1,10 +1,8 @@
-# Jetson images (JetPack 5 Foxy and 6 Jazzy), installed by astro-ros-install.
-# Python dependencies of the camera-side mhseals_nav detector/entry points.
+# Jetson JetPack 6 Jazzy image, installed by astro-ros-install.
+# Python dependencies of the camera-side detector/entry points.
 python3-opencv
 python3-websocket
 compressed_image_transport
 rosbridge_server
-# ROS 2 topic_tools needs generic pub/sub, which Foxy lacks; the Foxy camera host
-# runs no relays (mhseals_nav's relays run on the Jazzy hosts).
-topic_tools !foxy
+topic_tools
 vision_msgs

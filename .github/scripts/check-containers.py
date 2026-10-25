@@ -76,7 +76,7 @@ general = read(devcontainer / "Dockerfile.dev")
 boat_validate = read(devcontainer / "boat-validate.sh")
 dockerfiles = "".join(read(path) for path in devcontainer.glob("Dockerfile*"))
 jetson_code = "\n".join(line for line in jetson.splitlines() if not line.lstrip().startswith("#"))
-for name in ("Dockerfile.dev", "Dockerfile.jetson", "Dockerfile.jetson-jp5"):
+for name in ("Dockerfile.dev", "Dockerfile.jetson"):
     require("/usr/local/sbin/image-user" in read(devcontainer / name),
             f"architecture: {name} must create its user with image-user.sh")
 for ok, message in [
