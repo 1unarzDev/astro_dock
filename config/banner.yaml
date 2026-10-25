@@ -1,0 +1,35 @@
+# Shell-opening banner (.devcontainer/astro_banner.py), shown once per interactive
+# terminal. ~/.config/mhseals/banner.yaml overrides any top-level key here.
+# Opt out per shell with ASTRO_BANNER=0.
+
+# auto follows COLORTERM/TERM and NO_COLOR; or truecolor | 256 | 16 | none.
+color: auto
+# auto uses Unicode when the output encoding is UTF-8; or unicode | ascii.
+charset: auto
+
+# Shown top to bottom, and trimmed from the bottom when the terminal is short.
+# Available: ros dds host hw workspace repos nodes time disk system lan
+stats: [ros, dds, workspace, repos, nodes, time, disk, hw, host, system, lan]
+
+# The first layout the terminal fits wins; below every minimum nothing is shown.
+# art and wordmark name blocks in .devcontainer/astro_banner_art.txt.
+layouts:
+  - {min_cols: 120, min_rows: 26, art: planet, wordmark: shadow, stats: beside}
+  - {min_cols: 80, min_rows: 18, art: rocket, wordmark: block, stats: beside}
+  - {min_cols: 50, min_rows: 14, wordmark: block, stats: below}
+  - {min_cols: 50, min_rows: 6, wordmark: line, stats: below}
+
+# Art gradient stops, left to right.
+gradient: ['#c6a0f6', '#8aadf4', '#7dc4e4']
+
+# Seconds before a background probe refreshes; the banner shows the cached value
+# meanwhile and never waits on git, the ROS graph or the network.
+ttl: {repos: 60, nodes: 30, lan: 30}
+
+# Disk to watch for free space; empty means $MHSEALS_DATA (run.yaml data.root),
+# else the workspace.
+disk: ''
+
+# LAN hosts to probe by TCP, as name: host[:port] (port 22 by default).
+# The stat is hidden while this is empty, e.g. {router: '192.168.0.1:80'}.
+lan: {}
