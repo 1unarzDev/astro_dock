@@ -340,7 +340,13 @@ stage_clock() {
     # Listed after the loop: an operator laptop is a source, never preferred over the internet.
     [[ "${ASTRO_NTP_ALLOW:-}" == boat ]] && servers=("${operators[@]}" "${servers[@]}")
     command -v chronyd >/dev/null && ! systemctl is-active --quiet systemd-timesyncd && chrony=true
+    # Serving time needs chrony: install it if missing and replace systemd-timesyncd with it.
+    local switch=false
+    if [[ -n "$allow" ]] && ! $IMMUTABLE; then
+        switch=true chrony=true
+    fi
     heading "Automatic host time synchronization"
+    $switch && echo "Installs chrony if missing and disables systemd-timesyncd, which cannot serve time."
     echo "Points the host's existing NTP client (chrony or systemd-timesyncd) at: ${servers[*]}."
     echo "Containers share the host clock. Set ASTRO_NTP_SERVER only when a local time server is available."
     if $chrony && ((${#local_servers[@]})); then
@@ -361,13 +367,28 @@ stage_clock() {
         fi
     fi
     approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
+    if $switch; then
+        if ! command -v chronyd >/dev/null && [[ ! -x /usr/sbin/chronyd ]]; then
+            if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+                run sudo pacman -S --needed --noconfirm chrony
+            elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
+                run sudo apt-get update
+                run sudo apt-get install -y chrony
+            else
+                run sudo dnf -y install chrony
+            fi
+        fi
+        if systemctl is-enabled --quiet systemd-timesyncd 2>/dev/null || systemctl is-active --quiet systemd-timesyncd; then
+            run sudo systemctl disable --now systemd-timesyncd
+        fi
+    fi
     file="$(mktemp)"
     if $chrony; then
         config=/etc/chrony.conf service=chronyd
         [[ -f /etc/chrony/chrony.conf ]] && config=/etc/chrony/chrony.conf service=chrony
         # Tests point the stage at a scratch configuration; its directory holds astro-sources.
         [[ -z "${ASTRO_CHRONY_CONF:-}" ]] || config="$ASTRO_CHRONY_CONF" sources="${ASTRO_CHRONY_CONF%/*}/astro-sources"
-        [[ -f "$config" ]] || { echo "Cannot locate the chrony configuration." >&2; exit 1; }
+        [[ -f "$config" ]] || $DRY_RUN || { echo "Cannot locate the chrony configuration." >&2; exit 1; }
         : > "$file"
         for server in "${servers[@]}"; do
             if [[ " ${local_servers[*]} " == *" $server "* ]]; then

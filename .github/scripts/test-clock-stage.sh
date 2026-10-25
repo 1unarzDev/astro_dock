@@ -82,6 +82,48 @@ out="$(ASTRO_NTP_SERVER=10.1.2.3 clock --dry-run)"
 grep -q 'Prefers' <<<"$out" || fail "dry run polling message missing"
 [[ ! -e "$sources/boat.sources" && -e "$sources/boat-serve.conf" ]] || fail "dry run wrote files"
 
+# Serving time installs chrony when missing and disables systemd-timesyncd, once: the stub package
+# managers create chronyd and the stub systemctl keeps timesyncd's state; PATH hides a real chronyd.
+safe="$tmp/safe" state="$tmp/state" log="$tmp/calls.log"
+mkdir -p "$safe" "$state"
+for f in /usr/bin/* /bin/*; do
+    case "${f##*/}" in chronyd|sudo|systemctl|pacman|apt-get|dnf|timedatectl) ;; *) ln -sf "$f" "$safe/${f##*/}" 2>/dev/null || true ;; esac
+done
+rm -f "$stubs/chronyd"
+for pm in pacman apt-get dnf; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s"\ncase "$*" in *install*|*-S*) printf "#!/bin/sh\\nexit 0\\n" > "%s/chronyd"; chmod +x "%s/chronyd" ;; esac\n' \
+        "$pm" "$log" "$stubs" "$stubs" > "$stubs/$pm"
+done
+cat > "$stubs/systemctl" <<EOF
+#!/bin/sh
+echo "systemctl \$*" >> "$log"
+case "\$1:\$*" in
+    is-active:*|is-enabled:*) [ -e "$state/timesyncd" ] && exit 0; exit 3 ;;
+    disable:*timesyncd*) rm -f "$state/timesyncd" ;;
+esac
+exit 0
+EOF
+chmod +x "$stubs"/*
+touch "$state/timesyncd"
+operator() {
+    : > "$log"
+    PATH="$stubs:$safe" ASTRO_NTP_ALLOW=operator ASTRO_CHRONY_CONF="$etc/chrony.conf" \
+        "$root/setup.linux.sh" --non-interactive --yes --components clock 2>&1
+}
+printf 'confdir x\n' > "$etc/chrony.conf"
+operator >/dev/null || fail "operator run failed"
+grep -Eq '^(pacman .*-S .*chrony|apt-get install .*chrony|dnf .*install chrony)' "$log" || fail "chrony not installed"
+grep -Fq 'systemctl disable --now systemd-timesyncd' "$log" || fail "timesyncd not disabled"
+[[ ! -e "$state/timesyncd" ]] || fail "timesyncd still enabled"
+# The second run installs and disables nothing.
+operator >/dev/null || fail "second operator run failed"
+! grep -Eq '^(pacman|apt-get|dnf)' "$log" || fail "second run touched the package manager"
+! grep -Fq 'disable' "$log" || fail "second run disabled again"
+grep -Fq 'enable --now' "$log" || fail "chrony not enabled"
+rm -f "$stubs"/{pacman,apt-get,dnf}
+printf '#!/bin/sh\nexit 0\n' > "$stubs/chronyd"
+printf '#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 0\n' > "$stubs/systemctl"
+
 # Without chrony (timesyncd active) the chrony polling message is not printed.
 printf '#!/bin/sh\n[ "$1" = list-unit-files ] && echo systemd-timesyncd.service enabled\nexit 0\n' > "$stubs/systemctl"
 out="$(ASTRO_NTP_SERVER=boat clock --dry-run)"
