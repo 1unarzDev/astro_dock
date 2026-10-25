@@ -444,7 +444,7 @@ EOF
 }
 
 stage_boat() {
-    local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device
+    local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
     read -r subnet gateway_ip leases < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
@@ -461,12 +461,19 @@ stage_boat() {
     else
         echo "NetworkManager is not running; configure wired DHCP and Wi-Fi off in the OS image." >&2
     fi
+    session_device=""
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+        read -r _ _ session_ip _ <<<"$SSH_CONNECTION"
+        session_device="$(ip -o addr show | awk -v a="$session_ip" 'index($4, a "/") == 1 {print $2; exit}')"
+    fi
     if [[ -z "$device" ]]; then
         echo "No wired link is on $subnet; leaving the network unchanged."
-    elif [[ "${address%/*}" == "$gateway_ip" ]]; then
+    elif ip -4 -o addr show dev "$device" to "$subnet" | grep -q " $gateway_ip/"; then
         echo "$device holds the gateway address $gateway_ip; leaving the gateway's network unchanged."
         device=""
     else
+        [[ "$session_device" == "$device" ]] \
+            && echo "This session runs over $device; run on the console or under systemd-run/tmux so a dropped link cannot stop the setup." >&2
         uuid="$(nmcli -g GENERAL.CON-UUID device show "$device")"
         mac="$(cat "/sys/class/net/$device/address")"
         for lease in $leases; do
@@ -478,7 +485,7 @@ stage_boat() {
             # Revert to the saved profile unless the reservation is confirmed within 120 s.
             saved="$(nmcli -t -f ipv4.method,ipv4.addresses,ipv4.gateway,ipv4.dns connection show uuid "$uuid" \
                 | sed -E 's/^([^:]*):(.*)$/\1 "\2"/' | tr '\n' ' ')"
-            run sudo systemd-run --unit astro-boat-revert --on-active=120 \
+            run sudo systemd-run --collect --unit astro-boat-revert --on-active=120 \
                 sh -c "nmcli connection modify $uuid $saved && nmcli device reapply $device"
             run sudo nmcli connection modify "$uuid" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" connection.autoconnect yes
             run sudo nmcli device reapply "$device"
@@ -493,11 +500,6 @@ stage_boat() {
             run sudo systemctl stop astro-boat-revert.timer
         fi
         [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in config/boat-network.env for a fixed address." >&2
-    fi
-    session_device=""
-    if [[ -n "${SSH_CONNECTION:-}" ]]; then
-        read -r _ _ address _ <<<"$SSH_CONNECTION"
-        session_device="$(ip -o addr show | awk -v a="$address" 'index($4, a "/") == 1 {print $2; exit}')"
     fi
     if [[ -z "$device" ]]; then
         echo "Leaving Wi-Fi on: no wired boat link."
