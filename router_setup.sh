@@ -439,13 +439,14 @@ build_apply_script() {
 
 # Router-side lines, run before any change, that save the current value of every key the
 # transaction sets into a startup script. Five minutes after the next boot it restores them
-# and reboots, unless confirm_router ran. It lives in NVRAM because the apply reboots.
+# and reboots, unless confirm_router has cleared astro_prev_rc_startup. It lives in NVRAM
+# because the apply reboots, and checks NVRAM rather than /tmp for the same reason.
 revert_lines() {
     local keys
     keys=$(sed -n 's/^nvram set \([A-Za-z0-9_]*\)=.*/\1/p' <<<"$1" | sort -u | tr '\n' ' ')
     sed "s/@KEYS@/$keys/" <<'EOF'
 [ -n "$(nvram get astro_prev_rc_startup)" ] || nvram set astro_prev_rc_startup="x$(nvram get rc_startup)"
-r='( sleep 300; [ -e /tmp/astro-keep ] && exit 0'
+r='( sleep 300; [ -n "$(nvram get astro_prev_rc_startup)" ] || exit 0'
 for k in @KEYS@; do v=$(nvram get "$k" | sed "s/'/'\\\\''/g"); r="$r
 nvram set $k='$v'"; done
 r="$r
@@ -456,7 +457,7 @@ EOF
 
 # Cancel the auto-revert armed by the apply transaction and restore the startup script.
 confirm_router() {
-    router_ssh 'touch /tmp/astro-keep; p=$(nvram get astro_prev_rc_startup); nvram set rc_startup="${p#x}"; nvram unset astro_prev_rc_startup; nvram commit' </dev/null \
+    router_ssh 'p=$(nvram get astro_prev_rc_startup); nvram set rc_startup="${p#x}" && nvram unset astro_prev_rc_startup && nvram commit && [ -z "$(nvram get astro_prev_rc_startup)" ]' </dev/null \
         || die "Could not cancel the auto-revert; the router restores its previous settings five minutes after boot"
     info "Verified; auto-revert cancelled."
 }
