@@ -23,4 +23,10 @@ out="$(clock)"
 
 out="$(ASTRO_NTP_SERVER=192.168.0.152 clock)"
 grep -q '192.168.0.152' <<<"$out" || { echo "FAIL: server not used"; exit 1; }
+# "boat" resolves through config/boat-network.env
+read -r server subnet < <(. "$root/config/boat-network.env"; echo "$BOAT_TIME_SERVER $BOAT_SUBNET")
+out="$(ASTRO_NTP_SERVER=boat clock)"
+grep -q "at: $server\.$" <<<"$out" || { echo "FAIL: boat server not resolved"; exit 1; }
+out="$(ASTRO_NTP_ALLOW=boat clock)"
+grep -q "Serves time to $subnet " <<<"$out" || { echo "FAIL: boat subnet not resolved"; exit 1; }
 echo "clock stage ok"

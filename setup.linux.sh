@@ -417,21 +417,67 @@ EOF
 }
 
 stage_boat() {
-    local device connection
+    local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device
+    read -r subnet gateway_ip leases < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
     heading "Boat LAN computer"
-    echo "Takes the wired address from the router's DHCP reservation, turns Wi-Fi off, and raises"
-    echo "net.core.rmem_max to the 4 MiB that config/fastdds.xml requests for DDS bursts."
+    echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
+    echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"
+    echo "on Wi-Fi, and raises net.core.rmem_max to the 4 MiB that config/fastdds.xml requests."
     approve "Configure this host as a boat LAN computer?" || { SKIPPED+=(boat); return; }
     if command -v nmcli >/dev/null 2>&1 && [[ "$(nmcli -g RUNNING general 2>/dev/null)" == running ]]; then
-        while IFS=: read -r device connection; do
-            [[ -n "$connection" ]] || continue
-            run sudo nmcli connection modify "$connection" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" connection.autoconnect yes
-            run sudo nmcli device reapply "$device"
-        done < <(nmcli -g DEVICE,TYPE,CONNECTION device | awk -F: '$2 == "ethernet" && $3 != "" {print $1 ":" $3}')
-        # NetworkManager persists the radio state across reboots.
-        run sudo nmcli radio wifi off
+        while IFS=: read -r candidate type; do
+            [[ "$type" == ethernet ]] || continue
+            address="$(ip -4 -o addr show dev "$candidate" to "$subnet" | awk '{print $4; exit}')"
+            [[ -n "$address" ]] && { device="$candidate"; break; }
+        done < <(nmcli -g DEVICE,TYPE device)
     else
         echo "NetworkManager is not running; configure wired DHCP and Wi-Fi off in the OS image." >&2
+    fi
+    if [[ -z "$device" ]]; then
+        echo "No wired link is on $subnet; leaving the network unchanged."
+    elif [[ "${address%/*}" == "$gateway_ip" ]]; then
+        echo "$device holds the gateway address $gateway_ip; leaving the gateway's network unchanged."
+        device=""
+    else
+        uuid="$(nmcli -g GENERAL.CON-UUID device show "$device")"
+        mac="$(cat "/sys/class/net/$device/address")"
+        for lease in $leases; do
+            [[ "${lease%%=*}" == "${mac,,}" ]] && reserved="${lease##*=}"
+        done
+        if [[ "$(nmcli -g ipv4.method,ipv4.addresses connection show uuid "$uuid" | tr '\n' ' ')" == "auto  " ]]; then
+            echo "$device already takes DHCP (${address%/*})."
+        else
+            # Revert to the saved profile unless the reservation is confirmed within 120 s.
+            saved="$(nmcli -t -f ipv4.method,ipv4.addresses,ipv4.gateway,ipv4.dns connection show uuid "$uuid" \
+                | sed -E 's/^([^:]*):(.*)$/\1 "\2"/' | tr '\n' ' ')"
+            run sudo systemd-run --unit astro-boat-revert --on-active=120 \
+                sh -c "nmcli connection modify $uuid $saved && nmcli device reapply $device"
+            run sudo nmcli connection modify "$uuid" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" connection.autoconnect yes
+            run sudo nmcli device reapply "$device"
+            if ! $DRY_RUN; then
+                for _ in $(seq 30); do
+                    address="$(ip -4 -o addr show dev "$device" dynamic to "$subnet" | awk '{print $4; exit}')"
+                    [[ -n "$address" && ( -z "$reserved" || "${address%/*}" == "$reserved" ) ]] && break
+                    address=""; sleep 2
+                done
+                [[ -n "$address" ]] || { echo "No DHCP reservation on $device; the profile reverts in 120 s." >&2; exit 1; }
+            fi
+            run sudo systemctl stop astro-boat-revert.timer
+        fi
+        [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in config/boat-network.env for a fixed address." >&2
+    fi
+    session_device=""
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+        read -r _ _ address _ <<<"$SSH_CONNECTION"
+        session_device="$(ip -o addr show | awk -v a="$address" 'index($4, a "/") == 1 {print $2; exit}')"
+    fi
+    if [[ -z "$device" ]]; then
+        echo "Leaving Wi-Fi on: no wired boat link."
+    elif [[ -n "$session_device" && "$(nmcli -g GENERAL.TYPE device show "$session_device" 2>/dev/null)" == wifi ]]; then
+        echo "Leaving Wi-Fi on: this session uses $session_device; rerun over the wired link."
+    else
+        # NetworkManager persists the radio state across reboots.
+        run sudo nmcli radio wifi off
     fi
     if $DRY_RUN; then
         quote_command sudo tee /etc/sysctl.d/90-astro-dds.conf
@@ -451,8 +497,8 @@ stage_jetson() {
         return
     fi
     # Prefer the Super power mode where the board has one.
-    mode="$(sed -n 's/.*POWER_MODEL ID=\([0-9]*\) NAME=MAXN_SUPER .*/\1/p' /etc/nvpmodel.conf)"
-    [[ -n "$mode" ]] || mode="$(sed -n 's/.*POWER_MODEL ID=\([0-9]*\) NAME=MAXN .*/\1/p' /etc/nvpmodel.conf)"
+    mode="$(sed -n 's/.*POWER_MODEL ID=\([0-9]*\) NAME=MAXN_SUPER .*/\1/p' /etc/nvpmodel.conf 2>/dev/null || true)"
+    [[ -n "$mode" ]] || mode="$(sed -n 's/.*POWER_MODEL ID=\([0-9]*\) NAME=MAXN .*/\1/p' /etc/nvpmodel.conf 2>/dev/null || true)"
     echo "Sets the persistent nvpmodel power mode ${mode:-?} (MAXN), adds a $size swap file at $swap,"
     echo "and boots to the headless multi-user target (the desktop stops at the next boot)."
     [[ "$mode" =~ ^[0-9]+$ ]] || { echo "No MAXN power mode in /etc/nvpmodel.conf." >&2; exit 1; }
