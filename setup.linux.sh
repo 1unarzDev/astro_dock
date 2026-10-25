@@ -282,8 +282,8 @@ ensure_mdns() {
         fi
     fi
     run sudo systemctl enable --now avahi-daemon
-    if [[ "$role" == boat ]] && ! grep -qx 'use-ipv6=no' "$conf"; then
-        run sudo sed -i 's/^#\?use-ipv6=.*/use-ipv6=no/' "$conf"
+    if [[ "$role" == boat ]] && ! { grep -qx 'use-ipv6=no' "$conf" && grep -qx 'publish-aaaa-on-ipv4=no' "$conf"; }; then
+        run sudo sed -i -e 's/^#\?use-ipv6=.*/use-ipv6=no/' -e 's/^#\?publish-aaaa-on-ipv4=.*/publish-aaaa-on-ipv4=no/' "$conf"
         run sudo systemctl restart avahi-daemon
     fi
     if ! grep -Eq '^hosts:.*\bmdns' /etc/nsswitch.conf; then
