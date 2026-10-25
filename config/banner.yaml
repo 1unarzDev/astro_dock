@@ -1,5 +1,5 @@
 # Shell-opening banner (.devcontainer/astro_banner.py), shown once per interactive
-# terminal. ~/.config/mhseals/banner.yaml overrides any top-level key here.
+# terminal. ~/.config/astro/banner.yaml overrides any top-level key here.
 # Opt out per shell with ASTRO_BANNER=0.
 
 # auto follows COLORTERM/TERM and NO_COLOR; or truecolor | 256 | 16 | none.
@@ -26,8 +26,7 @@ gradient: ['#c6a0f6', '#8aadf4', '#7dc4e4']
 # meanwhile and never waits on git, the ROS graph or the network.
 ttl: {repos: 60, nodes: 30, lan: 30}
 
-# Disk to watch for free space; empty means $MHSEALS_DATA (run.yaml data.root),
-# else the workspace.
+# Disk to watch for free space; empty means the workspace.
 disk: ''
 
 # LAN hosts to probe by TCP, as name: host[:port] (port 22 by default).

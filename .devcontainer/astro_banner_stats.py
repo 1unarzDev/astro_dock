@@ -269,7 +269,7 @@ def stat_time(c):
 
 
 def stat_disk(c):
-    path = c['config'].get('disk') or c['env'].get('MHSEALS_DATA') or str(c['ws'])
+    path = c['config'].get('disk') or str(c['ws'])
     while path and not os.path.exists(path):
         path = os.path.dirname(path)
     fs = os.statvfs(path)

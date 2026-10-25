@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # python3 -I leaves the script's directory off the path
 from astro_banner_stats import collect, read  # noqa: E402
 
-CONFIGS = (HERE.parent / 'config' / 'banner.yaml', Path.home() / '.config' / 'mhseals' / 'banner.yaml')
+CONFIGS = (HERE.parent / 'config' / 'banner.yaml', Path.home() / '.config' / 'astro' / 'banner.yaml')
 # Star glyphs by brightness: near, mid and distant.
 STARS = {'✦': 'star', '⋆': 'faint', '+': 'faint', '·': 'dim', '.': 'dim'}
 # 16-colour code and soft truecolour per tone (cx: 16 ANSI colours, cyan accent).
