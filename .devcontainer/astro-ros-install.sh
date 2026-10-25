@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Install packages by distro-independent name on every Astro image (Foxy or Jazzy).
+# Install packages by distro-independent name on every Astro image.
 # A ROS package name (nav2_bringup) installs ros-$ROS_DISTRO-nav2-bringup; any other
 # name installs from apt as-is; ROS packages without a deb are built from source.
 set -eo pipefail
 if [[ $# == 0 || "$1" == --help ]]; then
     echo 'Usage: sudo -E astro-ros-install [--source] NAME [NAME ...]'
-    echo '       sudo -E astro-ros-install --file LIST   (one name per line, # comments;'
-    echo '       "name !foxy" skips name on distros that have no release of it)'
+    echo '       sudo -E astro-ros-install --file LIST   (one name per line, # comments)'
     echo 'Source installs live in /opt/astro-extra; container shells reload after this command.'
     echo 'For persistent images add names to packages.txt or jetson-packages.txt.'
     exit 0
@@ -16,13 +15,8 @@ force_source=false
 if [[ "$1" == --source ]]; then force_source=true; shift; fi
 if [[ "$1" == --file ]]; then
     names=()
-    while read -r name conditions; do
-        [[ -n "$name" ]] || continue
-        if [[ " $conditions " == *" !${ROS_DISTRO:-} "* ]]; then
-            echo "Skipping $name: not released for $ROS_DISTRO"
-            continue
-        fi
-        names+=("$name")
+    while read -r name _; do
+        [[ -n "$name" ]] && names+=("$name")
     done < <(sed 's/#.*//' "${2:?--file needs a path}")
 else
     names=("$@")
