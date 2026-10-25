@@ -33,7 +33,7 @@ Jetson images contain camera drivers; MAVROS is provided by `core` for a separat
 
 Images supply the platform dependencies; the mounted workspace supplies your application. `core` and `cuda` share [`Dockerfile.dev`](.devcontainer/Dockerfile.dev), using ROS and ZED/CUDA base images respectively. JetPack 6 separates the expensive ROS and sensor builds in [`Dockerfile.deps`](.devcontainer/Dockerfile.deps) from the user, Python environment, and runtime tooling in [`Dockerfile.jetson`](.devcontainer/Dockerfile.jetson). ROS and the ZED wrapper occupy separate cache layers, so wrapper changes can reuse the ROS build. JetPack 5 has its own compatible Dockerfile.
 
-[`docker-compose.yml`](.devcontainer/docker-compose.yml) defines the shared services. The workspace mount resolves relative to this file, so it always mounts the repository regardless of the launcher's working directory. `prebuild.sh` copies a host adapter to the ignored `docker-compose.override.yml`, which Dev Containers merges after the base file. Adapters add display sockets, devices, NVIDIA runtime settings, or immutable-host mounts as needed; The probe preserves the host hostname and maps device group IDs; Jetson detection also selects the JetPack image and DDS domain. Rerunning the probe regenerates this file, so keep persistent changes in an adapter or an additional override.
+[`docker-compose.yml`](.devcontainer/docker-compose.yml) defines the shared services. `prebuild.sh` copies a host adapter to the ignored `docker-compose.override.yml`, which Dev Containers merges after the base file. Adapters add display sockets, devices, NVIDIA runtime settings or immutable-host mounts; the probe also preserves the host hostname, maps device group IDs, and on Jetson selects the JetPack image and DDS domain. Rerunning it regenerates the override, so keep persistent changes in an adapter or an additional override.
 
 `~/.config/mhseals` on the host (created by `prebuild.sh`) is bind-mounted at `/home/roboboat/.config/mhseals`, so operator config survives container rebuilds.
 
@@ -126,14 +126,7 @@ If your project launch already starts MAVROS, configure that instance instead. T
 
 On physical hardware, launch your project's nodes on the hosts responsible for their devices. Disable simulation time and synchronize clocks across hosts so sensor timestamps and TF agree. Device configuration and actuator control belong to the project using the workspace.
 
-The hardware package keeps normalized PWM effort separate from Nav2's SI body
-velocity. `ros2 run mhseals_testing boat_test` is the test suite: it checks
-sensors and TF, runs thruster trials, fits drift, response, stopping, and
-combined-axis limits into the shared hardware YAML (with a Nav2 profile to pass
-as `navigation.launch.py params_file:=...`), and scores navigation and mission
-runs. `--velocity-control` inserts the bounded feedback controller between
-`/cmd_vel` and the effort-only PWM driver; review the fit before arming. The
-same suite previews against crane_ml with `--profile crane_full_stack`.
+Thruster effort and navigation velocity, hardware characterization, and the test suite belong to the project packages (`mhseals_hardware`, `mhseals_testing`, `mhseals_nav`); see their READMEs.
 
 For a standalone camera session inside a Jetson container:
 
@@ -146,41 +139,27 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 
 In Foxglove, choose **Rosbridge**, connect to `ws://<jetson-host>:9090`, and select an image topic. Inspect `ros2 topic list` because ZED 4 and 5 topic names differ. Keep the unauthenticated connection on a trusted LAN.
 
-For JP5 buoy detection, use `ros2 launch mhseals_nav legacy_zed.launch.py` instead of the two standalone commands. It feeds TensorRT 2D inference into SDK 4 for native 3D boxes (requires the JP5 image's wrapper patch); [mhseals_nav's README](https://github.com/MHSeals/mhseals_nav#architecture) covers the ODROID bridge and the `/objects/map` and RViz marker outputs shared with Unity. The `rviz2` preset uses `/detections/markers` for TF-filtered SDK box outlines and confidence percentages; `/tracked_objects` shows retained semantic tracks.
+For JP5 buoy detection (boat), `ros2 launch mhseals_nav legacy_zed.launch.py` replaces the two commands above; see the [mhseals_nav README](https://github.com/MHSeals/mhseals_nav#architecture).
 
 Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching their domain IDs can cause discovery failures and crashes. Use an explicit cross-version bridge for shared data. Jazzy RViz cannot directly view the Foxy camera stream; use Foxglove or a matching Foxy environment. `ASTRO_ROS_DOMAIN_ID` overrides the Jetson default for networks with compatible peers.
 
-#### Lidar DDS transport
+#### Lidar transport and mapping (boat)
 
-VLP16 clouds (~642 KB) use a separate large-data DDS transport. Compose and Jazzy container shells load `config/fastdds.xml` for the normal TF, odometry and RViz graph: its 1400-byte UDP messages avoid IP fragment-buffer stalls when viewing maps and costmaps together.
+VLP16 clouds (~642 KB) use a separate large-data DDS transport; TF, odometry and RViz use the default one.
 
-- `mhseals_nav/config/fastdds_large_data.xml` uses TCP with netmask filtering and TCP_NODELAY. SHM stays disabled here to keep raw and relayed `/points` separate. `sensors.launch.py` applies it to the Velodyne driver and transform only.
-- `lidar_relay` runs once on the sensor host as two processes with separate transports. It receives full `/points`, preserves all 16 rings while reducing the payload to 32 KiB, and publishes one reliable `/points` writer on normal DDS for both Nav2 and remote RViz. The hardware sensor launch starts it automatically. Its reader keeps only the latest scan; the output publishes asynchronously so viewer delays stay separate from sensor ingestion.
+- Compose and Jazzy shells load [`config/fastdds.xml`](config/fastdds.xml) (1400-byte UDP messages avoid IP fragment-buffer stalls when viewing maps and costmaps together).
+- `mhseals_nav/config/fastdds_large_data.xml` (TCP, netmask filtering) is applied by `sensors.launch.py` to the Velodyne driver and transform only.
+- `lidar_relay`, started by the hardware sensor launch, republishes a reduced 32 KiB `/points` on the normal transport for Nav2 and remote RViz. Viewers just run `rviz2` in a container shell; no relay is needed there.
+- To inspect full clouds on the sensor host, set `FASTRTPS_DEFAULT_PROFILES_FILE` and `FASTDDS_DEFAULT_PROFILES_FILE` to `$ROS_WS/install/share/mhseals_nav/config/fastdds_large_data.xml` in a dedicated shell.
 
-Viewers only run `rviz2` in a container shell; the helper keeps `config/dark.rviz` and uses Cyclone DDS when installed on Jazzy to avoid redundant traffic across a laptop's multiple interfaces. The core image includes it. No viewer relay or transport export is needed. If an older setup created `astro_lidar_relay`, remove it once with `docker rm -f astro_lidar_relay` to avoid duplicate scans. The checked-in profiles use no device addresses and load again after container recreation or reboot.
-
-To inspect full clouds on the sensor host, set both `FASTRTPS_DEFAULT_PROFILES_FILE` and `FASTDDS_DEFAULT_PROFILES_FILE` to `$ROS_WS/install/share/mhseals_nav/config/fastdds_large_data.xml` in a dedicated shell.
-
-#### Lidar-only RTAB-Map and Nav2 commissioning
-
-The current physical stack publishes VLP16 data as `/points`, not `sensor_msgs/LaserScan` on `/scan`, and the Jetson camera is optional on a separate ROS domain. The checked-in RTAB-Map profile therefore uses `subscribe_scan_cloud: true` and remaps `scan_cloud` to `/points`; RGB/depth are disabled so a stopped camera cannot block map updates. Start mapping and navigation on the ODROID after hardware sensors (which start the local relay) and odometry are running:
+With hardware sensors and odometry running, start mapping and navigation on the ODROID:
 
 ```bash
 ros2 launch mhseals_nav slam.launch.py sim:=false
 ros2 launch mhseals_nav navigation.launch.py sim:=false use_lidar:=true
 ```
 
-Check the live graph before sending a planner-only goal:
-
-```bash
-ros2 topic hz /points
-ros2 topic echo /map --once
-ros2 topic echo /global_costmap/costmap --once
-ros2 action send_goal /compute_path_to_pose nav2_msgs/action/ComputePathToPose \
-  "{goal: {header: {frame_id: map}, pose: {position: {x: 6.0, y: 2.3}, orientation: {w: 1.0}}}, planner_id: GridBased}"
-```
-
-`ComputePathToPose` exercises the planner and publishes `/plan` without driving a thruster. `/local_plan` is produced only while a controller is following a path. In RViz on the viewer laptop, add `/points`, `/map`, `/global_costmap/costmap`, `/local_costmap/costmap`, `/plan`, `/local_plan`, TF, and TF Static; all use ROS domain 42 and the normal DDS transport.
+Check `ros2 topic hz /points` and `ros2 topic echo /map --once`; see the [mhseals_nav README](https://github.com/MHSeals/mhseals_nav#architecture) for the rest.
 
 `./setup.linux.sh --components devices` lists attached serial and camera devices with their owners and modes; rerun it after a JetPack upgrade if permissions change. Use scoped device rules rather than recursive permission changes under `/dev`.
 
@@ -191,55 +170,31 @@ Containers share the host clock. For an isolated network with a reachable NTP se
 timedatectl status
 ```
 
-Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. With no internet in the field, run `ASTRO_NTP_ALLOW=192.168.0.0/24 ./setup.linux.sh --components clock` on the ODROID (chrony) to serve boat time at local stratum 10, and `ASTRO_NTP_SERVER=192.168.0.152` on squirtle to follow it. Offline hosts need an available time source or battery-backed RTC. Stop control nodes and actuators before clock steps.
+Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. With no internet, run `ASTRO_NTP_ALLOW=192.168.0.0/24 ./setup.linux.sh --components clock` on the ODROID (chrony) to serve boat time, and point other hosts at it with `ASTRO_NTP_SERVER`. Stop control nodes and actuators before clock steps.
 
-If a Linux host has the wrong time, the common systemd recovery path is:
+If a Linux host has the wrong time, `./setup.linux.sh --components clock` is the supported fix: it selects the existing NTP client and persists its configuration.
 
-```bash
-sudo timedatectl set-ntp on
-sudo systemctl enable --now systemd-timesyncd
-# Wait until: timedatectl show -p NTPSynchronized --value  -> yes
-sudo hwclock --systohc
-```
+#### Boat network
 
-Run `hwclock --systohc` only after synchronization succeeds and only on a host with an RTC. On systems that use `chronyd`, configure or restart that service instead of `systemd-timesyncd`; running `./setup.linux.sh --components clock` is the supported alternative because it selects the existing NTP client and persists its configuration.
+Everything boat-specific is here; the rest of this README is project-agnostic. The boat LAN is defined once in [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range, reservations and DNS.
 
-#### Router and internet sharing
+- **Router.** [`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH from those values: DHCP, DNS and WPA2 Wi-Fi, with router WAN/NAT disabled. Addresses, SSID and credentials are prompted. `--dry-run` inspects without changing anything; applying confirms, backs up NVRAM when supported, reboots and verifies. State lives in the ignored `router_setup_state/`.
+- **Reservations** sit above the DHCP pool. Once per boat computer, drop any hand-set address so DHCP supplies it, the gateway and DNS:
 
-The boat LAN is defined once in [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range and DNS. [`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH from those values, so DHCP clients use the gateway device as their default route. The script configures DHCP, DNS, and WPA2 Wi-Fi, disables router WAN/NAT, and connects devices through normal LAN ports. Addresses, SSID, and credentials are prompted during setup.
+  ```bash
+  nmcli con mod "Wired connection 1" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""
+  nmcli dev reapply <interface>
+  ```
 
-```bash
-./router_setup.sh --dry-run
-./router_setup.sh
-```
-
-Reservations for the boat computers sit above the DHCP pool, so each keeps one address. Once per boat computer, drop any hand-set address and let DHCP supply it, the gateway and DNS (use the wired profile's name and interface):
-
-```bash
-nmcli con mod "Wired connection 1" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""
-nmcli dev reapply <interface>
-```
-
-The preview connects and inspects without changing router settings. Applying requires confirmation, saves an NVRAM backup when supported, reboots, and verifies the configuration. SSH keys, trusted host keys, and backups live in the ignored `router_setup_state/` directory; the menu also provides backup restoration.
-
-On the gateway device (any Linux host), give its LAN interface `GATEWAY_IP` and install the persistent forwarding service:
-
-```bash
-./setup.linux.sh --components gateway
-```
-
-`astro-gateway.service` enables IPv4 forwarding and NATs `BOAT_SUBNET` through the device's normal routing, so boat devices reach the internet through WARP when it is connected and through the default uplink otherwise. Edit the config file and rerun the stage to change the subnet. It names no interfaces apart from excluding `docker0`, places its rules in `DOCKER-USER` when Docker is present, reapplies them after Docker or iptables restarts, keeps the boat subnet on the main routing table ahead of WARP, and survives reboots. Check internet access and DNS from a LAN client afterward.
-
-Keep the boat LAN and internet uplink on different subnets. With NetworkManager, the stage also installs a dispatcher that gives any link that joins the boat LAN `GATEWAY_IP` and marks its profile `never-default`, so the internet follows the uplink rather than looping through the boat router. Other network managers need the boat interface configured without a default route.
-
-On the boat and Jetson computers, `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service`. The Jetson connects to `BOAT_TRANSPORT_IP`, the boat's reserved address. It also raises `net.core.rmem_max` to 4 MiB (`/etc/sysctl.d/90-astro-dds.conf`) so DDS bursts fit the UDP receive buffer; `config/fastdds.xml` requests that size with `receiveBufferSize`, because Fast DDS ignores `rmem_max` alone and sizes sockets from `rmem_default`.
+- **Gateway.** On any Linux host whose LAN interface has `GATEWAY_IP`, `./setup.linux.sh --components gateway` installs `astro-gateway.service`: IPv4 forwarding and NAT of `BOAT_SUBNET` through the host's normal routing (WARP when connected). Keep the LAN and uplink on different subnets; with NetworkManager a dispatcher marks LAN profiles `never-default`, otherwise configure the boat interface without a default route.
+- **ROS transport.** `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service` on the boat and Jetson computers; the Jetson connects to `BOAT_TRANSPORT_IP`. It also raises `net.core.rmem_max` to 4 MiB, which `config/fastdds.xml` requests via `receiveBufferSize`.
 
 | Transport topic | Direction |
 | --- | --- |
 | `/transport/blastoise/odom` | boat computer to Jetson |
 | `/transport/squirtle/odom` | Jetson to boat computer |
 
-Only odometry crosses the bridge: Foxy and Jazzy encode `vision_msgs` differently over CDR, so detections travel over rosbridge instead.
+Only odometry crosses the bridge: Foxy and Jazzy encode `vision_msgs` differently over CDR, so detections travel over rosbridge.
 
 #### Remote work
 
@@ -260,7 +215,7 @@ To copy session bags off a host into `bags/<name>`, run `./fetch_bags.sh host:~/
 
 #### Refresh and stop
 
-Compose pulls missing images while allowing Dev Containers to use its local UID-adjusted image. To refresh published images, run this from the host before reopening the container:
+To refresh published images, run this from the host before reopening the container:
 
 ```bash
 docker compose \
@@ -269,7 +224,7 @@ docker compose \
   pull dev
 ```
 
-Keep `ASTRO_PULL_POLICY=missing` during Dev Containers startup; `always` attempts to pull the locally generated UID image from the registry. To stop and remove the services, use the same Compose files with `down`.
+Keep `ASTRO_PULL_POLICY=missing` during Dev Containers startup; `always` would try to pull the locally generated UID image. Use the same Compose files with `down` to stop and remove the services.
 
 ### Development
 
@@ -302,16 +257,14 @@ This builds `core`; Jetson images use their platform-specific Dockerfiles. On Je
 
 For a persistent ARM64 build server, register a GitHub runner with `self-hosted`, `linux`, `ARM64`, and `arm64-builder` labels, then dispatch the image workflow with `arm64_builder=self-hosted`. This switches the JetPack 6 jobs; normal automatic builds use hosted runners. Publishing requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets, with Read, Write, and Delete access for retention. [Pull-request checks](.github/workflows/container-checks.yml) validate adapters, scripts, dependency locks, and image policy, then build `core` without publishing.
 
-Runtime tags select the current validated image, with `-prev` and `-old` retaining two rollback generations. `-next` and candidate slots are staging references. Both Jetson families use the on-demand [promotion helper](promote_jetson.sh) from a machine with Bash, SSH, `jq`, and an authenticated GitHub CLI:
+Runtime tags select the current validated image, with `-prev` and `-old` as rollback generations; `-next` and candidate slots are staging. Promote a Jetson family from a machine with Bash, SSH, `jq` and an authenticated GitHub CLI:
 
 ```bash
 ./promote_jetson.sh jp5
 ./promote_jetson.sh jp6 user@your-jp6-host
 ```
 
-The helper selects the latest successful `main` build's immutable candidate, connects through `ssh tranquility` using Tranquility's keys, and checks ROS, non-root CUDA, and three live ZED frames on the Jetson. It then waits for [hosted CI](.github/workflows/promote-jetson.yml) to verify the build digest and rotate that family's tags, and pulls the release on the Jetson. It installs no services and leaves running containers unchanged. JP5 defaults to `roboboat@squirtle-jetson.local`; JP6 requires a compatible L4T R36 Jetson. Set `ASTRO_JETSON_GATEWAY` to another SSH gateway, or empty for a direct connection. An optional third argument selects a successful build run; candidate artifacts expire after 30 days, so rebuild if needed.
-
-Stop any existing camera publisher before validation. The probe uses isolated ROS domain 223 and removes its temporary container and helper. A failed check prevents promotion; repeating a promotion preserves rollback history. Docker Hub credentials stay in GitHub CI. For a manual diagnostic, run `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST` on either matching Jetson. Use the Compose command below to deploy after promotion.
+The helper takes the latest successful `main` build's candidate (artifacts expire after 30 days; an optional third argument picks a run), validates it on the Jetson over SSH (ROS, non-root CUDA, live ZED frames; isolated domain 223; stop any camera publisher first), then waits for [hosted CI](.github/workflows/promote-jetson.yml) to rotate the tags. `ASTRO_JETSON_GATEWAY` sets the SSH gateway (empty for direct); JP5 defaults to `roboboat@squirtle-jetson.local`, JP6 needs an L4T R36 host. Manual diagnostic: `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST`.
 
 For standalone deployment on either Jetson generation, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 5 (Foxy) or 6 (Jazzy) image and domain, and the Jetson adapter restarts the container after reboots:
 
@@ -322,20 +275,15 @@ docker compose -p astro_dock_devcontainer -f .devcontainer/docker-compose.yml -f
 docker exec -it roboboat_dev bash
 ```
 
-Rerun the `up` command to update; `--pull always` replaces a stale local image. For offline deployment, transfer the ARM64 image with `docker save` / `docker load` and drop `--pull always`.
+Rerun `up` to update; for offline deployment, `docker save` / `docker load` the ARM64 image and drop `--pull always`.
 
 The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.github/scripts/registry-retention.py --repository lunarzdev/astro audit`.
 
 Keep changes scoped, explain their purpose and validation in the pull request, and update this README when setup, usage, or architecture changes. Run ROS probes in an isolated container/domain without attached actuators.
 
-### Opt-in static Linux run YAML (off-boat)
+### Static run YAML (off-boat)
 
-`config/run.yaml` holds the defaults. `prebuild.sh` layers an operator
-`~/.config/mhseals/run.yaml` (if present) and then `--config /absolute/run.yaml`
-(or `ASTRO_RUN_CONFIG`) over it, and `python3 -I .devcontainer/run_env.py` projects
-the result into the Compose override's `dev` environment. This supports
-Linux/Jazzy, the fixed `/home/roboboat/roboboat_ws` bind and the static FastDDS XML
-only. With neither file, the dynamic boat shell behaviour is unchanged. Example:
+`config/run.yaml` holds defaults. `prebuild.sh` layers the operator `~/.config/mhseals/run.yaml` and then `--config /absolute/run.yaml` (or `ASTRO_RUN_CONFIG`) over it, and `python3 -I .devcontainer/run_env.py` projects the result into the Compose override's `dev` environment. Linux/Jazzy only. Example:
 
 ```yaml
 ros:
@@ -347,17 +295,7 @@ transport:
   mode: static-fastdds
 ```
 
-Loading is strict: the four keys above are the only ones accepted, each typed;
-unknown keys, duplicate keys, anchors, aliases, merge keys and non-finite numbers
-refuse with file and line. The files are validated before any environment override,
-so a session override cannot hide a bad baseline. Only explicitly present
-`ASTRO_ROS_DOMAIN_ID` or `ROS_DOMAIN_ID` (both is an error),
-`ROS_AUTOMATIC_DISCOVERY_RANGE` and `MHSEALS_DATA` override YAML; empty values
-refuse, and so does any explicit transport control (`RMW_IMPLEMENTATION`, DDS
-profile, Cyclone, `ASTRO_DDS_*`). Data paths must be normalized beneath the
-workspace bind; `$` refuses. A failed projection leaves the previous override file
-in place. In a managed shell `dev.bashrc` unsets rival transport variables after
-each ROS overlay and skips interface pinning. The DDS address and subnet stay in
-`config/boat-network.env` and `config/fastdds.xml`. Quote YAML `"OFF"` (unquoted
-it reads as a boolean). New YAML takes effect after prebuild and container
-recreation.
+- Strict loading: only these four typed keys; unknown or duplicate keys, anchors, aliases and merge keys refuse with file and line.
+- Environment overrides: `ASTRO_ROS_DOMAIN_ID` or `ROS_DOMAIN_ID` (not both), `ROS_AUTOMATIC_DISCOVERY_RANGE`, `MHSEALS_DATA`. Explicit transport controls (`RMW_IMPLEMENTATION`, DDS profiles, `ASTRO_DDS_*`) refuse.
+- `data.root` must sit under the workspace bind. Quote `"OFF"`.
+- Changes take effect after prebuild and container recreation. The DDS address and subnet stay in `config/boat-network.env` and `config/fastdds.xml`.
