@@ -290,7 +290,7 @@ authenticate() {
 
 probe_router() {
     local probe radio
-    probe=$(router_ssh 'printf "version="; version=$(nvram get os_version); [ -n "$version" ] || version=$(nvram get dist_type); [ -n "$version" ] || version=$(uname -n); printf "%s\n" "$version"; printf "build="; nvram get os_date; command -v nvram >/dev/null || exit 20; command -v base64 >/dev/null && echo base64=yes || echo base64=no; command -v od >/dev/null && echo od=yes || echo od=no; command -v setuserpasswd >/dev/null && echo setuserpasswd=yes || echo setuserpasswd=no; nvram show 2>/dev/null | sed -n "s/^\(wl[0-9][0-9]*\|ath[0-9][0-9]*\|wlan[0-9][0-9]*\)_\(ssid\|ifname\)=.*/radio=\1/p" | sort -u') \
+    probe=$(router_ssh 'printf "version="; version=$(nvram get os_version); [ -n "$version" ] || version=$(nvram get dist_type); [ -n "$version" ] || version=$(uname -n); printf "%s\n" "$version"; printf "build="; nvram get os_date; command -v nvram >/dev/null || exit 20; command -v base64 >/dev/null && echo base64=yes || echo base64=no; command -v od >/dev/null && echo od=yes || echo od=no; command -v setuserpasswd >/dev/null && echo setuserpasswd=yes || echo setuserpasswd=no; nvram show 2>/dev/null | sed -n "s/^\(wl[0-9][0-9]*\|ath[0-9][0-9]*\|wlan[0-9][0-9]*\)_\(ssid\|ifname\)=.*/radio=\1/p" | sort -u' </dev/null) \
         || die "Router inspection failed"
     DDWRT_VERSION=$(awk -F= '/^version=/{print $2; exit}' <<<"$probe")
     [[ -n $DDWRT_VERSION ]] || die "The target does not identify itself as DD-WRT"
@@ -328,10 +328,10 @@ make_backup() {
     umask 077
     if [[ $BACKUP_ENCODING == base64 ]]; then
         router_ssh 'for key in $(nvram show 2>/dev/null | sed -n "s/^\([A-Za-z0-9_.:-][A-Za-z0-9_.:-]*\)=.*/\1/p"); do encoded=$(nvram get "$key" | base64 | tr -d "\n"); printf "%s\t%s\n" "$key" "$encoded"; done' \
-            >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
+            </dev/null >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
     else
         router_ssh 'for key in $(nvram show 2>/dev/null | sed -n "s/^\([A-Za-z0-9_.:-][A-Za-z0-9_.:-]*\)=.*/\1/p"); do encoded=$(nvram get "$key" | od -An -v -tx1 | tr -d " \n"); printf "%s\t%s\n" "$key" "$encoded"; done' \
-            >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
+            </dev/null >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
     fi
     chmod 600 -- "$BACKUP_FILE"
     [[ -s $BACKUP_FILE ]] || die "NVRAM backup was empty"
@@ -350,7 +350,7 @@ nvset_line() {
 
 build_apply_script() {
     local script='' radio existing_keys merged_keys dns_options lease static_leases='' static_count=0
-    existing_keys=$(router_ssh 'nvram get sshd_authorized_keys' 2>/dev/null || true)
+    existing_keys=$(router_ssh 'nvram get sshd_authorized_keys' </dev/null 2>/dev/null || true)
     if grep -Fq -- "$PUBLIC_KEY" <<<"$existing_keys"; then
         merged_keys=$existing_keys
     elif [[ -n $existing_keys ]]; then
@@ -372,9 +372,9 @@ build_apply_script() {
     script+="command -v nvram >/dev/null"$'\n'
     script+=$(nvset_line wan_proto disabled)$'\n'
     script+=$(nvset_line wk_mode router)$'\n'
-    # lan_proto controls how the router obtains its own LAN management address.
-    # It must remain static; dhcpd_enable controls the client-facing DHCP server.
-    script+=$(nvset_line lan_proto static)$'\n'
+    # On DD-WRT lan_proto=dhcp is "DHCP Type: DHCP Server"; static drops dhcp-range
+    # and dhcp-host from dnsmasq.conf. The router's own address is lan_ipaddr.
+    script+=$(nvset_line lan_proto dhcp)$'\n'
     script+=$(nvset_line lan_ipaddr "$ROUTER_IP")$'\n'
     script+=$(nvset_line lan_netmask "$NETMASK")$'\n'
     script+=$(nvset_line lan_gateway "$LAPTOP_IP")$'\n'
@@ -473,15 +473,16 @@ wait_for_router() {
 
 verify_router() {
     local result lease mac ip
-    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'lan_proto='; nvram get lan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'; cat /tmp/dnsmasq.conf 2>/dev/null") \
+    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'lan_proto='; nvram get lan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'; cat /tmp/dnsmasq.conf 2>/dev/null" </dev/null) \
         || die "Post-reboot verification failed"
     grep -qx "lan=$ROUTER_IP" <<<"$result" || die "Router LAN address verification failed"
     grep -qx "gateway=$LAPTOP_IP" <<<"$result" || die "Router gateway verification failed"
     grep -qx 'wan=disabled' <<<"$result" || die "WAN-disable verification failed"
-    grep -qx 'lan_proto=static' <<<"$result" || die "Router LAN address is not configured as static"
+    grep -qx 'lan_proto=dhcp' <<<"$result" || die "Router DHCP server type is not set"
     grep -qx 'dhcp=1' <<<"$result" || die "DHCP-server enable verification failed"
     grep -qx 'dnsmasq=1' <<<"$result" || die "DNSMasq enable verification failed"
     grep -qx 'dnsmasq_process=yes' <<<"$result" || die "DHCP was enabled in NVRAM, but DNSMasq did not start after reboot"
+    grep -q '^dhcp-range=' <<<"$result" || die "dnsmasq.conf serves no DHCP range"
     if ! grep -q "^route=.*via $LAPTOP_IP" <<<"$result"; then
         warn "DD-WRT saved LAN gateway $LAPTOP_IP but did not expose a matching default route yet."
     fi
@@ -490,7 +491,7 @@ verify_router() {
         || warn "dnsmasq.conf lacks the tagged gateway option; fall back to dhcp-option=tag:boat,3 with set:boat on the reservations."
     for lease in $STATIC_LEASES; do
         IFS== read -r mac _ ip <<<"$lease"
-        grep -qi "^dhcp-host=.*$mac.*$ip" <<<"$result" || warn "dnsmasq.conf has no reservation for $lease"
+        grep -qi "^dhcp-host=.*$mac.*$ip" <<<"$result" || die "dnsmasq.conf has no reservation for $lease"
     done
     info "Core NVRAM settings verified. On one client, check 'nmcli -f DHCP4 device show' reports routers = $LAPTOP_IP."
 }
@@ -529,7 +530,7 @@ configure_router() {
         fi
     fi
     info "Settings committed. Rebooting DD-WRT..."
-    router_ssh 'reboot' >/dev/null 2>&1 || true
+    router_ssh 'reboot' </dev/null >/dev/null 2>&1 || true
     AUTH_MODE=key
     wait_for_router
     verify_router
@@ -560,7 +561,7 @@ restore_backup() {
             'tab=$(printf "\t"); while IFS="$tab" read -r key encoded; do case "$key" in *[!A-Za-z0-9_.:-]*|"") exit 30;; esac; value=$(printf "%s\n" "$encoded" | awk '\''function h(c){return index("0123456789abcdef",tolower(c))-1} {for(i=1;i<length($0);i+=2) printf "%c",h(substr($0,i,1))*16+h(substr($0,i+1,1))}'\'') || exit 31; nvram set "$key=$value"; done; nvram commit; sync' \
             <"$selected" || die "Restore failed"
     fi
-    router_ssh 'reboot' >/dev/null 2>&1 || true
+    router_ssh 'reboot' </dev/null >/dev/null 2>&1 || true
     info "Backup restored and reboot requested."
 }
 
