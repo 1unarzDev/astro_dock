@@ -24,7 +24,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway,transport
+  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway,boat,jetson
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -166,9 +166,12 @@ stage_docker() {
         return
     fi
 
-    echo "This stage installs Docker Engine from Docker's official repository and enables it."
+    echo "This stage installs Docker Engine from Docker's official repository unless Docker and Compose"
+    echo "are already present, enables it, and adds $USER to the docker group."
     approve "Run the container-runtime stage?" || { SKIPPED+=(docker); return; }
-    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+    if docker compose version >/dev/null 2>&1; then
+        echo "Docker and Compose are installed; keeping them."
+    elif [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
         run sudo pacman -Syu --needed --noconfirm docker docker-buildx docker-compose
     elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
         install_docker_debian
@@ -197,9 +200,17 @@ stage_gpu() {
         SKIPPED+=(gpu)
         return
     fi
-    echo "This installs NVIDIA Container Toolkit only. It does not install or replace the host GPU driver."
+    echo "This installs NVIDIA Container Toolkit unless present and registers the nvidia runtime."
+    echo "It does not install or replace the host GPU driver."
     approve "Install NVIDIA Container Toolkit?" || { SKIPPED+=(gpu); return; }
-    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+    local before
+    if command -v nvidia-ctk >/dev/null 2>&1; then
+        echo "NVIDIA Container Toolkit is installed; keeping it."
+    elif [[ -e /etc/apt/sources.list.d/nvidia-l4t-apt-source.list ]]; then
+        # JetPack's own apt source carries the toolkit build matched to L4T.
+        run sudo apt-get update
+        run sudo apt-get install -y nvidia-container-toolkit
+    elif [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
         run sudo pacman -Syu --needed --noconfirm nvidia-container-toolkit
     elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
         run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
@@ -210,8 +221,12 @@ stage_gpu() {
         run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null"
         run sudo dnf -y install nvidia-container-toolkit
     fi
+    before="$(cat /etc/docker/daemon.json 2>/dev/null || true)"
     run sudo nvidia-ctk runtime configure --runtime="$RUNTIME"
-    [[ "$RUNTIME" == docker ]] && run sudo systemctl restart docker
+    # Restarting Docker restarts running containers, so only do it for a new runtime entry.
+    if [[ "$RUNTIME" == docker && "$before" != "$(cat /etc/docker/daemon.json 2>/dev/null || true)" ]]; then
+        run sudo systemctl restart docker
+    fi
     COMPLETED+=(gpu)
 }
 
@@ -277,7 +292,12 @@ stage_compose() {
 }
 
 stage_clock() {
-    local servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com}) allow="${ASTRO_NTP_ALLOW:-}" server file config service
+    local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service boat_server boat_subnet
+    # "boat" names the boat time server and subnet from config/boat-network.env.
+    read -r boat_server boat_subnet < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
+    servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
+    [[ "${servers[*]}" == boat ]] && servers=("$boat_server")
+    [[ "$allow" == boat ]] && allow="$boat_subnet"
     heading "Automatic host time synchronization"
     echo "Points the host's existing NTP client (chrony or systemd-timesyncd) at: ${servers[*]}."
     echo "Containers share the host clock. Set ASTRO_NTP_SERVER only when a local time server is available."
@@ -396,63 +416,61 @@ EOF
     COMPLETED+=(gateway)
 }
 
-stage_transport() {
-    local version=1.10.1 zip_sha=fdb64d942d4b6beccbe9b1f8a359a01a2fca95a023c27535bf97b233603fad5f
-    local host distro subnet transport_ip work config unit
-    host="$(uname -n)"
-    case "$host" in
-        blastoise*|squirtle*) host="${host%%[-.]*}" ;;
-        *) echo "No transport config for host $host; expected blastoise or squirtle." >&2; exit 2 ;;
-    esac
-    read -r subnet transport_ip < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_SUBNET" "$BOAT_TRANSPORT_IP")
-    # Foxy only on JetPack 5; every other host runs Jazzy.
-    distro=jazzy
-    grep -qs 'R35' /etc/nv_tegra_release && distro=foxy
-    heading "ROS 2 zenoh transport bridge"
-    echo "Installs zenoh-bridge-ros2dds $version and ros-transport.service for $host (ROS $distro)."
-    echo "It cross-connects the boat and Jetson DDS domains for the listed /transport topics only."
-    [[ "$ARCH" == aarch64 ]] || { echo "The pinned bridge build is aarch64 only." >&2; exit 2; }
-    approve "Install the transport bridge?" || { SKIPPED+=(transport); return; }
-    work="$(mktemp -d)"
-    config="$work/config.json5"
-    unit="$work/ros-transport.service"
-    sed "s/@BOAT_TRANSPORT_IP@/$transport_ip/" "$SCRIPT_DIR/config/ros-transport/$host.json5" > "$config"
-    # Cyclone matches a network address with a zero host part against the interfaces,
-    # so the bridge follows the boat LAN whichever address DHCP hands out.
-    cat > "$unit" <<EOF
-[Unit]
-Description=ROS 2 zenoh transport bridge
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=roboboat
-Environment=ROS_DISTRO=$distro
-Environment='CYCLONEDDS_URI=<CycloneDDS><Domain><General><Interfaces><NetworkInterface address="${subnet%/*}"/></Interfaces></General></Domain></CycloneDDS>'
-ExecStart=/usr/local/lib/ros-transport/zenoh-bridge-ros2dds -c /etc/ros-transport/config.json5
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    run curl -fsSL -o "$work/bridge.zip" "https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/releases/download/$version/zenoh-plugin-ros2dds-$version-aarch64-unknown-linux-gnu-standalone.zip"
-    run_shell "echo '$zip_sha  $work/bridge.zip' | sha256sum -c -"
-    run python3 -m zipfile -e "$work/bridge.zip" "$work/bridge"
-    run sudo install -D -m 0755 "$work/bridge/zenoh-bridge-ros2dds" /usr/local/lib/ros-transport/zenoh-bridge-ros2dds
-    run sudo install -D -m 0644 "$config" /etc/ros-transport/config.json5
-    run sudo install -m 0644 "$unit" /etc/systemd/system/ros-transport.service
-    rm -rf "$work"
-    # DDS bursts overflow the stock 208 KB UDP receive buffer on the Jetson.
+stage_boat() {
+    local device connection
+    heading "Boat LAN computer"
+    echo "Takes the wired address from the router's DHCP reservation, turns Wi-Fi off, and raises"
+    echo "net.core.rmem_max to the 4 MiB that config/fastdds.xml requests for DDS bursts."
+    approve "Configure this host as a boat LAN computer?" || { SKIPPED+=(boat); return; }
+    if command -v nmcli >/dev/null 2>&1 && [[ "$(nmcli -g RUNNING general 2>/dev/null)" == running ]]; then
+        while IFS=: read -r device connection; do
+            [[ -n "$connection" ]] || continue
+            run sudo nmcli connection modify "$connection" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" connection.autoconnect yes
+            run sudo nmcli device reapply "$device"
+        done < <(nmcli -g DEVICE,TYPE,CONNECTION device | awk -F: '$2 == "ethernet" && $3 != "" {print $1 ":" $3}')
+        # NetworkManager persists the radio state across reboots.
+        run sudo nmcli radio wifi off
+    else
+        echo "NetworkManager is not running; configure wired DHCP and Wi-Fi off in the OS image." >&2
+    fi
     if $DRY_RUN; then
         quote_command sudo tee /etc/sysctl.d/90-astro-dds.conf
     else
         echo net.core.rmem_max=4194304 | sudo tee /etc/sysctl.d/90-astro-dds.conf >/dev/null
     fi
     run sudo sysctl -q -p /etc/sysctl.d/90-astro-dds.conf
-    run sudo systemctl daemon-reload
-    run sudo systemctl enable ros-transport.service
-    run sudo systemctl restart ros-transport.service
-    COMPLETED+=(transport)
+    COMPLETED+=(boat)
+}
+
+stage_jetson() {
+    local mode swap=/swapfile size=16G
+    heading "Jetson host"
+    if [[ ! -r /proc/device-tree/compatible ]] || ! grep -aqi tegra /proc/device-tree/compatible; then
+        echo "Not a Jetson; skipping."
+        SKIPPED+=(jetson)
+        return
+    fi
+    # Prefer the Super power mode where the board has one.
+    mode="$(sed -n 's/.*POWER_MODEL ID=\([0-9]*\) NAME=MAXN_SUPER .*/\1/p' /etc/nvpmodel.conf)"
+    [[ -n "$mode" ]] || mode="$(sed -n 's/.*POWER_MODEL ID=\([0-9]*\) NAME=MAXN .*/\1/p' /etc/nvpmodel.conf)"
+    echo "Sets the persistent nvpmodel power mode ${mode:-?} (MAXN), adds a $size swap file at $swap,"
+    echo "and boots to the headless multi-user target (the desktop stops at the next boot)."
+    [[ "$mode" =~ ^[0-9]+$ ]] || { echo "No MAXN power mode in /etc/nvpmodel.conf." >&2; exit 1; }
+    approve "Configure this Jetson for headless full-power use?" || { SKIPPED+=(jetson); return; }
+    # nvpmodel keeps the mode across boots; answer no to its reboot prompt and report it instead.
+    if [[ "$(nvpmodel -q 2>/dev/null | sed -n 2p)" != "$mode" ]]; then
+        run_shell "echo no | sudo nvpmodel -m $mode"
+    fi
+    if ! grep -q "^$swap " /proc/swaps; then
+        [[ -e "$swap" ]] || run sudo fallocate -l "$size" "$swap"
+        run sudo chmod 600 "$swap"
+        run sudo mkswap "$swap"
+        run sudo swapon "$swap"
+    fi
+    grep -q "^$swap " /etc/fstab || run sudo sh -c "printf '%s none swap sw 0 0\n' '$swap' >> /etc/fstab"
+    run sudo systemctl set-default multi-user.target
+    $DRY_RUN || nvpmodel -q 2>/dev/null | head -1
+    COMPLETED+=(jetson)
 }
 
 main() {
@@ -469,7 +487,8 @@ main() {
     has_component devtools && stage_devtools
     has_component compose && stage_compose
     has_component gateway && stage_gateway
-    has_component transport && stage_transport
+    has_component boat && stage_boat
+    has_component jetson && stage_jetson
 
     heading "Summary"
     $DRY_RUN && printf 'Planned:   %s\n' "${COMPLETED[*]:-none}" || printf 'Completed: %s\n' "${COMPLETED[*]:-none}"
