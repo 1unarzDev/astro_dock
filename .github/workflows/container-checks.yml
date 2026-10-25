@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate shell scripts
         run: |
-          for script in setup.linux.sh promote_jetson.sh .devcontainer/*.sh .github/scripts/*.sh; do
+          for script in setup.linux.sh promote_jetson.sh boat_hosts.sh .devcontainer/*.sh .github/scripts/*.sh; do
             bash -n "$script"
           done
       - name: Prove docker stop reaches exec'd keepers

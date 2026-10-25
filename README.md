@@ -329,6 +329,14 @@ docker exec -it roboboat_dev bash
 
 Rerun `up` to update; for offline deployment, `docker save` / `docker load` the ARM64 image and drop `--pull always`.
 
+To update every boat computer from one shell, [`boat_hosts.sh`](boat_hosts.sh) deploys to the ssh hosts of [`config/devices.yaml`](config/devices.yaml) (the host name is the ssh destination; `BOAT_REPOS` and `BOAT_DEVICES` override the repositories and the registry):
+
+```bash
+./boat_hosts.sh deploy [--image lunarzdev/astro@sha256:DIGEST] [HOST...]
+```
+
+`deploy` backs up dirty state under `~/.local/state/astro_dock/boat_hosts/` on each host, fast-forwards astro_dock and the application repositories to `origin/main` (checking out `main` first), deletes dangling symlink-install links and runs `colcon build --symlink-install` in `roboboat_dev`. `--image` first commits the running container as `astro-rollback:TIMESTAMP`, then runs the commands above; the named ZED volumes persist. Renaming the old container is no fallback, because Compose finds and recreates it by its labels. Parts are started from the `boat_test` TUI.
+
 The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.github/scripts/registry-retention.py --repository lunarzdev/astro audit`.
 
 Keep changes scoped, explain their purpose and validation in the pull request, and update this README when setup, usage, or architecture changes. Run ROS probes in an isolated container/domain without attached actuators.
