@@ -8,7 +8,6 @@ openssh-client
 python3-scipy
 python3-rich
 python3-libgpiod
-python3-websocket
 
 # ROS packages
 ros_base  # standard core and the full ros2 CLI, even on non-ROS base images
@@ -33,8 +32,6 @@ robot_localization
 ros2_control
 ros2_controllers
 ros_gz
-rosbridge_server  # mhseals_nav exec_depend; Foxglove bridge
-rosapi
 rqt_graph
 rqt_tf_tree
 rtabmap_ros

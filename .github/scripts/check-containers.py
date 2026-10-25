@@ -41,8 +41,8 @@ for path in ("packages.txt", "jetson-packages.txt"):
 # The dev image carries the tools boat_test needs to send bags off the boat.
 packages = read(devcontainer / "packages.txt")
 # The boat stack's runtime dependencies are baked in, never installed by hand into a container.
-for pkg in ("rsync", "openssh-client", "python3-rich", "python3-libgpiod", "py_trees", "rosbridge_server",
-            "rosapi", "spatio_temporal_voxel_layer", "mavros_extras"):
+for pkg in ("rsync", "openssh-client", "python3-rich", "python3-libgpiod", "py_trees",
+            "spatio_temporal_voxel_layer", "mavros_extras"):
     require(re.search(rf"^{pkg}( |$)", packages, re.MULTILINE), f"packages: {pkg} missing from packages.txt")
 # The RTCM forwarding needs a pyubx2 with PARSE_META (1.3.9); GNSS parsers are pinned.
 requirements = read(devcontainer / "requirements.txt")

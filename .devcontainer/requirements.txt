@@ -8,4 +8,3 @@ pyyaml
 scikit-learn
 setuptools
 transforms3d
-websocket-client
