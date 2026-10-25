@@ -338,14 +338,14 @@ Visualization Manager:
             Durability Policy: Transient Local
             Filter size: 10
             History Policy: Keep Last
-            Reliability Policy: Reliable
+            Reliability Policy: Best Effort
             Value: /global_costmap/costmap
           Update Topic:
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
-            Reliability Policy: Reliable
-            Value: /global_costmap/costmap_updates
+            Reliability Policy: Best Effort
+            Value: 
           Use Timestamp: false
           Value: true
         - Alpha: 0.30000001192092896
@@ -359,14 +359,14 @@ Visualization Manager:
             Durability Policy: Transient Local
             Filter size: 10
             History Policy: Keep Last
-            Reliability Policy: Reliable
+            Reliability Policy: Best Effort
             Value: /downsampled_costmap
           Update Topic:
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
-            Reliability Policy: Reliable
-            Value: /downsampled_costmap_updates
+            Reliability Policy: Best Effort
+            Value: 
           Use Timestamp: false
           Value: true
         - Alpha: 1
@@ -426,7 +426,7 @@ Visualization Manager:
             Durability Policy: Volatile
             Filter size: 10
             History Policy: Keep Last
-            Reliability Policy: Reliable
+            Reliability Policy: Best Effort
             Value: /global_costmap/voxel_marked_cloud
           Use Fixed Frame: true
           Use rainbow: true
@@ -459,14 +459,14 @@ Visualization Manager:
             Durability Policy: Transient Local
             Filter size: 10
             History Policy: Keep Last
-            Reliability Policy: Reliable
+            Reliability Policy: Best Effort
             Value: /local_costmap/costmap
           Update Topic:
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
-            Reliability Policy: Reliable
-            Value: /local_costmap/costmap_updates
+            Reliability Policy: Best Effort
+            Value: 
           Use Timestamp: false
           Value: true
         - Alpha: 1
@@ -551,7 +551,7 @@ Visualization Manager:
             Durability Policy: Volatile
             Filter size: 10
             History Policy: Keep Last
-            Reliability Policy: Reliable
+            Reliability Policy: Best Effort
             Value: /local_costmap/voxel_marked_cloud
           Use Fixed Frame: true
           Use rainbow: true
@@ -612,7 +612,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /points
       Use Fixed Frame: true
       Use rainbow: true
