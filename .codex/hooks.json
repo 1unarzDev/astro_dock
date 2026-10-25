@@ -1,0 +1,28 @@
+{
+  "description": "astro_dock agent hooks: .agents/hook.py runs the workspace packages' hooks (see .agents/hooks.yaml)",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "timeout": 5, "command": "d=\"$PWD\"; while [ ! -f \"$d/.agents/hook.py\" ] && [ \"$d\" != / ]; do d=$(dirname \"$d\"); done; [ -f \"$d/.agents/hook.py\" ] && exec python3 -I \"$d/.agents/hook.py\" codex; exit 0"}
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {"type": "command", "timeout": 5, "command": "d=\"$PWD\"; while [ ! -f \"$d/.agents/hook.py\" ] && [ \"$d\" != / ]; do d=$(dirname \"$d\"); done; [ -f \"$d/.agents/hook.py\" ] && exec python3 -I \"$d/.agents/hook.py\" codex; exit 0"}
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {"type": "command", "timeout": 5, "command": "d=\"$PWD\"; while [ ! -f \"$d/.agents/hook.py\" ] && [ \"$d\" != / ]; do d=$(dirname \"$d\"); done; [ -f \"$d/.agents/hook.py\" ] && exec python3 -I \"$d/.agents/hook.py\" codex; exit 0"}
+        ]
+      }
+    ]
+  }
+}
