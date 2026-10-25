@@ -86,7 +86,7 @@ for _, name in socket.if_nameindex():
         continue
     ip = ipaddress.ip_address(socket.inet_ntoa(raw[20:24]))
     if ip in net:
-        print(ip); break' "$subnet" "${boat:-192.168.0.152}" 2>/dev/null)}"
+        print(ip); break' "$subnet" "$boat" 2>/dev/null)}"
   # Loopback stays allowed so localhost-only discovery, whose peers are 127.0.0.1,
   # still works; Fast DDS never announces loopback beside a whitelisted address.
   if [[ -n "$address" ]]; then
