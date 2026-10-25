@@ -5,8 +5,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
-      additional_contexts:
-        astro_repo: ..
       args:
         BASE_IMAGE: ros:jazzy-ros-base-noble
         USERNAME: roboboat

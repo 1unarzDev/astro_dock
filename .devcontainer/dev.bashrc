@@ -1,18 +1,3 @@
-# Selected startup must refuse before overlays or the requested child command.
-# Exit also when sourced: a failed BASH_ENV return alone would run bash -c.
-if [[ -n "${ASTRO_RUN_MANAGED:-}" || -v ASTRO_RUN_GENERATION ]]; then
-  __astro_generation="$ASTRO_RUN_GENERATION"
-  __astro_frozen="$(astro-run-config --verify "$__astro_generation")" || exit 2
-  astro_restore() {
-    local key value frozen
-    frozen="$(astro-run-config --verify "$__astro_generation" --restore)" || exit 2
-    unset FASTDDS_BUILTIN_TRANSPORTS CYCLONEDDS_URI ROS_LOCALHOST_ONLY \
-      ASTRO_DDS_SUBNET ASTRO_DDS_ADDRESS ASTRO_ROS_DOMAIN_ID
-    while IFS=$'\t' read -r key value; do export "$key=$value"; done <<< "$frozen"
-  }
-  astro_restore
-fi
-
 export ROS_WS="${ROS_WS:-$HOME/roboboat_ws}"
 
 # Load ROS, the image overlays and the built workspace. Later entries take
@@ -23,10 +8,11 @@ ros_env() {
   for prefix in "/opt/ros/${ROS_DISTRO:-jazzy}" /opt/zed_ros2 /opt/velodyne /opt/astro-extra "$ROS_WS/install"; do
     if [[ -f "$prefix/setup.bash" ]]; then
       source "$prefix/setup.bash"
-      [[ -z "${__astro_generation:-}" ]] || astro_restore
     fi
   done
-  [[ -z "${__astro_generation:-}" ]] || astro_restore
+  # A run.yaml-managed shell keeps the projected transport; an overlay cannot add rivals.
+  [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || unset FASTDDS_BUILTIN_TRANSPORTS CYCLONEDDS_URI \
+    ROS_LOCALHOST_ONLY ASTRO_DDS_SUBNET ASTRO_DDS_ADDRESS ASTRO_ROS_DOMAIN_ID
 }
 ros_env
 
@@ -37,7 +23,6 @@ colcon() {
   if [[ "${1:-}" == build ]]; then
     ros_env
     if [[ "$PWD" != "$ROS_WS" && -f install/setup.bash ]]; then source install/setup.bash; fi
-    [[ -z "${__astro_generation:-}" ]] || astro_restore
   fi
 }
 astro-ros-install() {
@@ -47,7 +32,7 @@ astro-ros-install() {
 # Jazzy replaces ROS_LOCALHOST_ONLY with an explicit discovery range. Unset
 # the legacy variable as well so shells in containers created before this
 # migration do not emit a warning.
-if [[ -z "${__astro_generation:-}" ]]; then
+if [[ -z "${ASTRO_RUN_MANAGED:-}" ]]; then
   unset ROS_LOCALHOST_ONLY
   export ROS_AUTOMATIC_DISCOVERY_RANGE="${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}"
 fi
@@ -57,7 +42,7 @@ fi
 
 # Terminals use the default DDS transport; the lidar participants opt into
 # mhseals_nav/config/fastdds_large_data.xml from their launch files.
-[[ -n "${__astro_generation:-}" ]] || unset FASTDDS_BUILTIN_TRANSPORTS
+[[ -n "${ASTRO_RUN_MANAGED:-}" ]] || unset FASTDDS_BUILTIN_TRANSPORTS
 
 # Pin DDS to this host's address on the boat subnet. A viewer laptop may also be
 # on Wi-Fi, WARP or Docker networks; left to choose, Fast DDS advertises every
@@ -67,7 +52,7 @@ fi
 # Off the boat subnet (simulation, home) the static profile applies unchanged.
 # Set ASTRO_DDS_ADDRESS to force an address.
 ros_net() {
-  [[ -z "${__astro_generation:-}" ]] || return 0
+  [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
   local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override
   subnet="${ASTRO_DDS_SUBNET:-$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
@@ -136,8 +121,7 @@ export GZ_SIM_SYSTEM_PLUGIN_PATH="${ROS_WS}/install/lib${GZ_SIM_SYSTEM_PLUGIN_PA
 
 unalias rviz2 2>/dev/null || true
 rviz2() {
-  if [[ -n "${__astro_generation:-}" ]]; then
-    astro_restore
+  if [[ -n "${ASTRO_RUN_MANAGED:-}" ]]; then
     command rviz2 -d "$ROS_WS/config/dark.rviz" --stylesheet "$ROS_WS/config/dark.qss" "$@"
     return
   fi
@@ -157,4 +141,3 @@ help() {
   cat "$HOME/.helper.txt"
 }
 
-[[ -z "${__astro_generation:-}" ]] || astro_restore

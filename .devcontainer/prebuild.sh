@@ -47,7 +47,7 @@ if [[ -n "$selection" && "$os_type" != linux ]]; then
 fi
 # Stage every derivation; selected validation never damages the active adapter.
 work_file="$(mktemp "${script_dir}/.adapter.XXXXXX")"
-trap 'rm -f "$work_file" "$work_file.bak"' EXIT
+trap 'rm -f "$work_file" "$work_file.bak" "$script_dir/docker-compose.override.yml.new"' EXIT
 cp "$override_file" "$work_file"
 if [[ "$os_type" == jetson ]]; then
     sed -i.bak "s/jetson-jp6-jazzy/${jetson_family}/g" "$work_file"
@@ -80,14 +80,15 @@ if command -v getent >/dev/null; then
 " "$work_file"
     fi
 fi
-if [[ -n "$selection" ]]; then
-    bash "$script_dir/install-run-tooling.sh"
-    "$script_dir/run-tooling/bin/astro-run-config" --config "$selection" \
-        --defaults "$script_dir/../config/run-defaults.yaml" --adapter "$work_file" \
-        --transport "$script_dir/../config/fastdds.xml" --platform "$os_type" \
-        --output "$script_dir/docker-compose.override.yml"
+operator_file="${HOME}/.config/mhseals/run.yaml"
+if [[ "$os_type" == linux && ( -n "$selection" || -f "$operator_file" ) ]]; then
+    files=(--file "$script_dir/../config/run.yaml")
+    [[ ! -f "$operator_file" ]] || files+=(--file "$operator_file")
+    [[ -z "$selection" ]] || files+=(--file "$selection")
+    python3 -I "$script_dir/run_env.py" "${files[@]}" --adapter "$work_file" \
+        --output "$script_dir/docker-compose.override.yml.new"
+    mv "$script_dir/docker-compose.override.yml.new" "$script_dir/docker-compose.override.yml"
 else
-    echo 'Legacy unmanaged environment: no ASTRO_RUN_CONFIG/--config selection.'
     mv "$work_file" "$script_dir/docker-compose.override.yml"
 fi
 echo "Selected ${os_type} adapter: $override_file"

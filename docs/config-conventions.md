@@ -16,17 +16,17 @@ Keys are `snake_case`. A quantity names its unit from this closed list, in the
 catalog row's `unit` field (a key suffix only for a bare quantity, e.g.
 `timeout_s`):
 
-`s, Hz, m, m/s, rad, rad/s, m/s^2, count, bool, enum, frame, topic, path, 1`
+`s, Hz, m, m/s, rad, rad/s, rad/s^2, m/s^2, count, bool, enum, frame, topic, path, 1`
 
-(`1` is dimensionless.) Nav2, robot_localization, ZED and MAVROS keys and every
+(`1` is dimensionless.) A list or map of mixed quantities joins its units with commas
+(`m/s,m/s,rad/s`); `ID:Hz` marks an id-to-rate map. Nav2, robot_localization, ZED and MAVROS keys and every
 `vendor_*` file keep their upstream spelling (e.g. `FollowPath.TwirlingCritic`);
 their catalog rows still carry a unit from the list.
 
 ## R3 Layers and precedence
 Lowest first: `package`, `deployment` (boat or site), `profile`, `operator`,
 `session`, `patch`/`trial` (the catalog accepts both spellings), `derived`
-(deterministic derivations and non-overridable safety constraints). The
-resolver (`resolver.ORDER`) still spells `package` as `defaults`.
+(deterministic derivations and non-overridable safety constraints).
 
 Environment variables select a path; they are not a value layer. Path
 precedence: explicit argument, then `MHSEALS_<SURFACE>_CONFIG` (surface

@@ -41,13 +41,6 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/astro
 
-# Normal installed tooling is required before BASH_ENV can validate a selection.
-COPY --from=astro_repo src/mhseals_config /tmp/astro-core
-COPY --from=astro_repo tools /tmp/astro-run-tools
-COPY --from=astro_repo config/run-defaults.yaml config/run-catalog.yaml /tmp/config/
-RUN /workspace/venv/bin/pip install --no-cache-dir /tmp/astro-core /tmp/astro-run-tools \
-    && rm -rf /tmp/astro-core /tmp/astro-run-tools /tmp/config
-
 RUN set -e; if [ -d /usr/local/zed ]; then \
       git clone --branch "${ZED_WRAPPER_REF}" --depth 1 --recursive \
         https://github.com/stereolabs/zed-ros2-wrapper.git /tmp/zed_ws/src/zed-ros2-wrapper; \

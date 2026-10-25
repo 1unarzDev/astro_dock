@@ -83,22 +83,6 @@ colcon build --symlink-install
 help
 ```
 
-For the configuration consumers, use `colcon build --packages-up-to mhseals_testing`
-so declared dependencies include the tracked `mhseals_config` package. To verify a
-private, non-symlink installation without starting ROS nodes, source its
-`install/local_setup.bash`, change to a directory outside the source tree, and run:
-
-```bash
-python3 /path/to/astro_dock/scripts/check_config_install.py --prefix /absolute/install --include-testing
-```
-
-The check imports only pure configuration modules and verifies import origins,
-versions, ament markers, hardware defaults, and nav/testing share resources.
-For an isolated build, start a clean shell with only `/opt/ros/jazzy/setup.bash`
-and select private build/log/install paths; an existing workspace overlay is not
-an installation test. Host pip installations can use the same check with their
-venv prefix. This gate checks packaging, not running consumers or physical outputs.
-
 Container shells load ROS, the image overlays and the workspace at startup, and reload them after a successful `colcon build` or `astro-ros-install`; run `ros_env` to reload by hand.
 
 Camera images already include the ZED wrapper. Only clone it when developing the driver, and match the revision pinned in the corresponding Dockerfile. On JetPack 5, use `humble-v4.0.8` with its recursive submodules; the optional clone helper defaults to `master`, which is incompatible with that image.
@@ -346,10 +330,12 @@ Keep changes scoped, explain their purpose and validation in the pull request, a
 
 ### Opt-in static Linux run YAML (off-boat)
 
-`ASTRO_RUN_CONFIG=/absolute/run.yaml bash .devcontainer/prebuild.sh` (or
-`bash .devcontainer/prebuild.sh --config /absolute/run.yaml`) selects strict YAML
-with defaults in `config/run-defaults.yaml`. This supports Linux/Jazzy, the fixed
-`/home/roboboat/roboboat_ws` bind and existing static FastDDS XML only. Example:
+`config/run.yaml` holds the defaults. `prebuild.sh` layers an operator
+`~/.config/mhseals/run.yaml` (if present) and then `--config /absolute/run.yaml`
+(or `ASTRO_RUN_CONFIG`) over it, and `python3 -I .devcontainer/run_env.py` projects
+the result into the Compose override's `dev` environment. This supports
+Linux/Jazzy, the fixed `/home/roboboat/roboboat_ws` bind and the static FastDDS XML
+only. With neither file, the dynamic boat shell behaviour is unchanged. Example:
 
 ```yaml
 ros:
@@ -361,55 +347,17 @@ transport:
   mode: static-fastdds
 ```
 
-The prebuild automatically installs normal local `mhseals_config` and
-`astro-run-config` distributions into `.devcontainer/run-tooling`, using host
-Python venv, setuptools and PyYAML prerequisites without downloading packages.
-No `PYTHONPATH` is needed. A missing dependency or invalid selection refuses
-without replacing the previous generated adapter. Supported managed images must
-include installed tooling: build the core image using the existing
-`.devcontainer/docker-compose.build.yml` configuration (its `astro_repo` build
-context supplies both packages). Older pulled images without the verifier refuse
-selected Bash startup; rebuild before selecting this mode.
-
-Use Dev Containers normally after prebuild, or inspect the same projection with:
-
-```sh
-docker compose --env-file /dev/null -f .devcontainer/docker-compose.yml \
-  -f .devcontainer/docker-compose.override.yml config --format json
-```
-
-Only explicitly present `ASTRO_ROS_DOMAIN_ID` or `ROS_DOMAIN_ID` (both is an
-error), `ROS_AUTOMATIC_DISCOVERY_RANGE` and `MHSEALS_DATA` override YAML. Empty
-values refuse. Provenance records these as session assignments, separately from
-the YAML baseline. Explicit transport overrides refuse. Data paths must be
-normalized beneath the workspace bind with a writable existing ancestor; symlink
-escapes refuse. Dollar-containing data paths currently refuse before rendering,
-pending proof of exact downstream Compose runtime escaping. Spaces, quotes and
-backticks remain literal supported path characters. Other platforms, workspace locations and transports are excluded.
-
-Generated `.devcontainer/run-generations/` snapshots contain source bytes and
-hashes, baseline/effective JSON, environment provenance, Compose and XML plus a
-compiler identity manifest. These are immutable startup artifacts, never editable
-authority. New YAML takes effect only after prebuild and container recreation.
-Existing generations keep their selected values after YAML edits. Installed
-compiler changes require regeneration. Noninteractive `BASH_ENV`, interactive
-Bash and managed RViz verify artifacts before use and restore selection after
-ROS overlays. Selected mode skips interface discovery and daemon stops. Explicit
-conflicting `docker exec -e` inputs refuse in Bash; raw exec environment overrides
-are outside this contract. Direct exec inherits the frozen Compose environment.
-
-`config/run-catalog.yaml` records only these four startup-supported leaves.
-Offline tests use actual Compose rendering and Bash with inert overlays/commands;
-they establish startup parity, not DDS endpoint discovery or message delivery.
-Boat network configuration, dynamic interface pinning, Cyclone/RViz fallback,
-other platforms, colcon defaults, optional repositories, images and SITL remain
-outside this YAML contract. Without YAML selection prebuild reports **legacy
-unmanaged environment** and retains the existing dynamic boat shell behavior.
-No running processes, interfaces, routes, daemons or host services are changed.
-
-The installed `astro_run_config.catalog_bundle()` provider returns an existing
-core read-only `DescriptorBundle` for explicit catalog assembly. Connecting it
-to a cross-package assembly caller and production UI/CLI remains a separate
-packet; this does not claim central registry integration or runtime mutation
-support. Quote YAML `"OFF"` when selecting that discovery enum (YAML 1.1 otherwise
-reads the unquoted spelling as a boolean).
+Loading is strict: the four keys above are the only ones accepted, each typed;
+unknown keys, duplicate keys, anchors, aliases, merge keys and non-finite numbers
+refuse with file and line. The files are validated before any environment override,
+so a session override cannot hide a bad baseline. Only explicitly present
+`ASTRO_ROS_DOMAIN_ID` or `ROS_DOMAIN_ID` (both is an error),
+`ROS_AUTOMATIC_DISCOVERY_RANGE` and `MHSEALS_DATA` override YAML; empty values
+refuse, and so does any explicit transport control (`RMW_IMPLEMENTATION`, DDS
+profile, Cyclone, `ASTRO_DDS_*`). Data paths must be normalized beneath the
+workspace bind; `$` refuses. A failed projection leaves the previous override file
+in place. In a managed shell `dev.bashrc` unsets rival transport variables after
+each ROS overlay and skips interface pinning. The DDS address and subnet stay in
+`config/boat-network.env` and `config/fastdds.xml`. Quote YAML `"OFF"` (unquoted
+it reads as a boolean). New YAML takes effect after prebuild and container
+recreation.

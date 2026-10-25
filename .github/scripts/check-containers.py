@@ -37,6 +37,15 @@ for path in ("packages.txt", "jetson-packages.txt"):
              if line.split("#")[0].strip()}
     require({"topic_tools", "vision_msgs"} <= names, f"packages: {path} must include topic_tools and vision_msgs")
 
+# The dev image carries the tools boat_test needs to send bags off the boat.
+packages = read(devcontainer / "packages.txt")
+for pkg in ("rsync", "openssh-client"):
+    require(re.search(rf"^{pkg}( |$)", packages, re.MULTILINE), f"packages: {pkg} missing from packages.txt")
+# The RTCM forwarding needs a pyubx2 with PARSE_META (1.3.9).
+pyubx2 = re.search(r"^pyubx2>=([0-9.]+)", read(devcontainer / "requirements.txt"), re.MULTILINE)
+require(pyubx2 and tuple(map(int, pyubx2.group(1).split("."))) >= (1, 3, 9),
+        "requirements: pyubx2 needs a minimum of 1.3.9 for PARSE_META")
+
 # Dev Containers Compose: VS Code's local UID image must never be pulled.
 with tempfile.NamedTemporaryFile("w", suffix=".yml") as overlay:
     overlay.write("services:\n  dev:\n    image: vsc-local-uid-image\n")
