@@ -92,3 +92,17 @@ COPY astro-ros-install.sh /usr/local/bin/astro-ros-install
 COPY jetson-packages.txt /tmp/jetson-packages.txt
 RUN chmod +x /usr/local/bin/astro-ros-install \
     && /usr/local/bin/astro-ros-install --file /tmp/jetson-packages.txt
+
+# Stereolabs' L4T image installs the SDK with skip_tools; validation needs
+# ZED_Diagnostic. Copy only tools/ and its Qt runtime from the same pinned
+# installer, as the installer's tools step does, without reinstalling the SDK.
+ARG ZED_SDK_URL=https://download.stereolabs.com/zedsdk/5.4.1/l4t36.4/jetsons
+ARG ZED_SDK_SHA256=680ffc85e1999eb953703d76f570fe8492fa7c67719575f88c83caefd854dfcc
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl zstd libqt5opengl5 libqt5svg5 \
+    && curl -fsSL -o /tmp/zed_sdk.run "${ZED_SDK_URL}" \
+    && echo "${ZED_SDK_SHA256}  /tmp/zed_sdk.run" | sha256sum -c - \
+    && size="$(sed -n 's/^filesizes="\([0-9]*\)"$/\1/p' /tmp/zed_sdk.run | head -1)" \
+    && tail -c "${size}" /tmp/zed_sdk.run | zstd -dc | tar -x -C /usr/local/zed ./tools \
+    && test -x /usr/local/zed/tools/ZED_Diagnostic \
+    && rm -rf /tmp/zed_sdk.run /var/lib/apt/lists/*
