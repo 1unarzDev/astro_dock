@@ -4,7 +4,7 @@
 
 This repository provides a project-agnostic ROS container workspace and host tooling for robotics development, with sensor drivers and integration for the Unity simulator in [`crane_sim`](https://github.com/1unarzDev/crane_sim). Startup uses prebuilt images from [`lunarzdev/astro`](https://hub.docker.com/r/lunarzdev/astro); application code lives in the mounted workspace and can be rebuilt independently.
 
-The main stack uses ROS 2 Jazzy. JetPack 5 hosts use a separate Foxy image for camera compatibility. Linux, NVIDIA Jetson, Raspberry Pi, Windows, and macOS have Compose adapters; robotics hardware runs on native Linux, while desktop hosts also support development and simulation connections.
+The stack uses ROS 2 Jazzy. Linux, NVIDIA Jetson, Raspberry Pi, Windows, and macOS have Compose adapters; robotics hardware runs on native Linux, while desktop hosts also support development and simulation connections.
 
 ### Architecture
 
@@ -24,16 +24,15 @@ Runtime images separate the host capabilities:
 | `core` | AMD64 / ARM64, Ubuntu 24.04, Jazzy | General ROS development and MAVROS |
 | `cuda` | AMD64, Ubuntu 24.04, Jazzy, CUDA / ZED | NVIDIA desktop development and cameras |
 | `jetson-jp6-jazzy` | ARM64, JetPack 6 / L4T R36, Ubuntu 22.04, Jazzy, ZED 5.4 | Orin camera / GPU host |
-| `jetson-jp5-foxy` | ARM64, JetPack 5 / L4T R35, Ubuntu 20.04, Foxy, ZED 4.0 | Xavier NX camera / GPU host |
 | `sitl` | AMD64, ArduPilot | Simulated FCU |
 
-Jetson images contain camera drivers; MAVROS is provided by `core` for a separate control host. JetPack 6 builds Jazzy from pinned sources because Jazzy's official Ubuntu packages target 24.04. Keep ROS apt repositories matched to the image's Ubuntu release. JetPack 4 / L4T R32 is unsupported, and Foxy is end-of-life.
+Jetson images contain camera drivers; MAVROS is provided by `core` for a separate control host. JetPack 6 builds Jazzy from pinned sources because Jazzy's official Ubuntu packages target 24.04. Keep ROS apt repositories matched to the image's Ubuntu release. Only JetPack 6 / L4T R36 is supported; JetPack 5 (Foxy) tooling lives on the `legacy/jp5-foxy` branch.
 
 #### Layers and host overrides
 
-Images supply the platform dependencies; the mounted workspace supplies your application. `core` and `cuda` share [`Dockerfile.dev`](.devcontainer/Dockerfile.dev), using ROS and ZED/CUDA base images respectively. JetPack 6 separates the expensive ROS and sensor builds in [`Dockerfile.deps`](.devcontainer/Dockerfile.deps) from the user, Python environment, and runtime tooling in [`Dockerfile.jetson`](.devcontainer/Dockerfile.jetson). ROS and the ZED wrapper occupy separate cache layers, so wrapper changes can reuse the ROS build. JetPack 5 has its own compatible Dockerfile.
+Images supply the platform dependencies; the mounted workspace supplies your application. `core` and `cuda` share [`Dockerfile.dev`](.devcontainer/Dockerfile.dev), using ROS and ZED/CUDA base images respectively. JetPack 6 separates the expensive ROS and sensor builds in [`Dockerfile.deps`](.devcontainer/Dockerfile.deps) from the user, Python environment, and runtime tooling in [`Dockerfile.jetson`](.devcontainer/Dockerfile.jetson). ROS and the ZED wrapper occupy separate cache layers, so wrapper changes can reuse the ROS build.
 
-[`docker-compose.yml`](.devcontainer/docker-compose.yml) defines the shared services. `prebuild.sh` copies a host adapter to the ignored `docker-compose.override.yml`, which Dev Containers merges after the base file. Adapters add display sockets, devices, NVIDIA runtime settings or immutable-host mounts; the probe also preserves the host hostname, maps device group IDs, and on Jetson selects the JetPack image and DDS domain. Rerunning it regenerates the override, so keep persistent changes in an adapter or an additional override.
+[`docker-compose.yml`](.devcontainer/docker-compose.yml) defines the shared services. `prebuild.sh` copies a host adapter to the ignored `docker-compose.override.yml`, which Dev Containers merges after the base file. Adapters add display sockets, devices, NVIDIA runtime settings or immutable-host mounts; the probe also preserves the host hostname, maps device group IDs, and on Jetson requires JetPack 6. Rerunning it regenerates the override, so keep persistent changes in an adapter or an additional override.
 
 `~/.config/mhseals` on the host (created by `prebuild.sh`) is bind-mounted at `/home/roboboat/.config/mhseals`, so operator config survives container rebuilds.
 
@@ -133,15 +132,9 @@ For a standalone camera session inside a Jetson container:
 ```bash
 ros2 launch zed_wrapper zed_camera.launch.py \
   camera_model:=zed2i camera_name:=front publish_tf:=false publish_map_tf:=false
-# In another container shell:
-ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 ```
 
-In Foxglove, choose **Rosbridge**, connect to `ws://<jetson-host>:9090`, and select an image topic. Inspect `ros2 topic list` because ZED 4 and 5 topic names differ. Keep the unauthenticated connection on a trusted LAN.
-
-For JP5 buoy detection (boat), `ros2 launch mhseals_nav legacy_zed.launch.py` replaces the two commands above; see the [mhseals_nav README](https://github.com/MHSeals/mhseals_nav#architecture).
-
-Foxy uses DDS domain **142**; Jazzy uses **42**. Keep them separate: matching their domain IDs can cause discovery failures and crashes. Use an explicit cross-version bridge for shared data. Jazzy RViz cannot directly view the Foxy camera stream; use Foxglove or a matching Foxy environment. `ASTRO_ROS_DOMAIN_ID` overrides the Jetson default for networks with compatible peers.
+The Jetson uses DDS domain **42** like every other host; `ASTRO_ROS_DOMAIN_ID` overrides it. `/usr/local/zed/tools/ZED_Explorer --all` lists attached cameras.
 
 #### Lidar transport and mapping (boat)
 
@@ -170,31 +163,31 @@ Containers share the host clock. For an isolated network with a reachable NTP se
 timedatectl status
 ```
 
-Boat devices reach `time.cloudflare.com` through the gateway laptop; set `ASTRO_NTP_SERVER` only when a local time server is available. With no internet, run `ASTRO_NTP_ALLOW=192.168.0.0/24 ./setup.linux.sh --components clock` on the ODROID (chrony) to serve boat time, and point other hosts at it with `ASTRO_NTP_SERVER`. Stop control nodes and actuators before clock steps.
+Boat devices reach `time.cloudflare.com` through the gateway laptop. The value `boat` selects `BOAT_TIME_SERVER` or `BOAT_SUBNET` from [`config/boat-network.env`](config/boat-network.env): run `ASTRO_NTP_ALLOW=boat ./setup.linux.sh --components clock` on the ODROID (chrony) to serve boat time, also without internet, and `ASTRO_NTP_SERVER=boat` on the other boat computers. Stop control nodes and actuators before clock steps.
 
 If a Linux host has the wrong time, `./setup.linux.sh --components clock` is the supported fix: it selects the existing NTP client and persists its configuration.
+
+#### Jetson camera computer (boat)
+
+A freshly flashed JetPack 6 Jetson (the Orin Nano Super with the ZED 2i on USB) reaches its working state from this repository. Reserve its wired MAC in `STATIC_LEASES` first (see below), then on the Jetson:
+
+```bash
+git clone --recurse-submodules https://github.com/1unarzDev/astro_dock.git ~/astro_dock && cd ~/astro_dock
+ASTRO_NTP_SERVER=boat ./setup.linux.sh --non-interactive --yes \
+  --components clock,docker,gpu,devices,devtools,compose,boat,jetson
+sudo reboot
+```
+
+`jetson` sets the persistent MAXN_SUPER power mode, a 16 GB `/swapfile` and the headless multi-user target; `docker` and `gpu` keep JetPack's Docker and toolkit and add the user to `docker`. After the reboot, start the container as in [Image publishing and deployment](#image-publishing-and-deployment). The ZED SDK downloads the camera's factory calibration by serial number on first use (through the gateway) and keeps it in the `zed_settings` volume.
 
 #### Boat network
 
 Everything boat-specific is here; the rest of this README is project-agnostic. The boat LAN is defined once in [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range, reservations and DNS.
 
 - **Router.** [`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH from those values: DHCP, DNS and WPA2 Wi-Fi, with router WAN/NAT disabled. Addresses, SSID and credentials are prompted. `--dry-run` inspects without changing anything; applying confirms, backs up NVRAM when supported, reboots and verifies. State lives in the ignored `router_setup_state/`.
-- **Reservations** sit above the DHCP pool. Once per boat computer, drop any hand-set address so DHCP supplies it, the gateway and DNS:
-
-  ```bash
-  nmcli con mod "Wired connection 1" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""
-  nmcli dev reapply <interface>
-  ```
+- **Reservations** sit above the DHCP pool. `./setup.linux.sh --components boat` on each boat computer drops any hand-set wired address so DHCP supplies it, the gateway and DNS, turns Wi-Fi off, and raises `net.core.rmem_max` to the 4 MiB that `config/fastdds.xml` requests.
 
 - **Gateway.** On any Linux host whose LAN interface has `GATEWAY_IP`, `./setup.linux.sh --components gateway` installs `astro-gateway.service`: IPv4 forwarding and NAT of `BOAT_SUBNET` through the host's normal routing (WARP when connected). Keep the LAN and uplink on different subnets; with NetworkManager a dispatcher marks LAN profiles `never-default`, otherwise configure the boat interface without a default route.
-- **ROS transport.** `./setup.linux.sh --components transport` installs the pinned zenoh bridge (`config/ros-transport/`) as `ros-transport.service` on the boat and Jetson computers; the Jetson connects to `BOAT_TRANSPORT_IP`. It also raises `net.core.rmem_max` to 4 MiB, which `config/fastdds.xml` requests via `receiveBufferSize`.
-
-| Transport topic | Direction |
-| --- | --- |
-| `/transport/blastoise/odom` | boat computer to Jetson |
-| `/transport/squirtle/odom` | Jetson to boat computer |
-
-Only odometry crosses the bridge: Foxy and Jazzy encode `vision_msgs` differently over CDR, so detections travel over rosbridge.
 
 #### Remote work
 
@@ -237,7 +230,7 @@ colcon test --packages-select your_package
 colcon test-result --verbose
 ```
 
-On any image, `astro-ros-install <name>` (it adds `sudo -E` in container shells) installs a package by distro-independent name: ROS package names resolve to the image's `ros-$ROS_DISTRO-*` debs, with a source build when no deb exists, and other names install from apt. Source additions live in `/opt/astro-extra`. To persist additions across recreation, add the names to [`packages.txt`](.devcontainer/packages.txt) or [`jetson-packages.txt`](.devcontainer/jetson-packages.txt) and rebuild the image; `name !foxy` skips a package on a distro with no release of it.
+On any image, `astro-ros-install <name>` (it adds `sudo -E` in container shells) installs a package by distro-independent name: ROS package names resolve to the image's `ros-$ROS_DISTRO-*` debs, with a source build when no deb exists, and other names install from apt. Source additions live in `/opt/astro-extra`. To persist additions across recreation, add the names to [`packages.txt`](.devcontainer/packages.txt) or [`jetson-packages.txt`](.devcontainer/jetson-packages.txt) and rebuild the image.
 
 For a local `core` image build, add the build override from the host:
 
@@ -253,20 +246,19 @@ This builds `core`; Jetson images use their platform-specific Dockerfiles. On Je
 
 #### Image publishing and deployment
 
-[The image workflow](.github/workflows/images.yml) builds `core` on native hosted AMD64 and ARM64 runners, smoke-tests both, and combines them into a multi-architecture tag. `cuda` and `sitl` use hosted AMD64 runners. JetPack 6 builds `deps` and the runtime candidate on hosted ARM64; its dependency content key skips an unchanged foundation, and registry caching preserves intermediate layers. `deps` is an internal build layer. [JetPack 5](.github/workflows/jetson-jp5.yml) builds independently on hosted ARM64. Image compilation uses native runners rather than QEMU.
+[The image workflow](.github/workflows/images.yml) builds `core` on native hosted AMD64 and ARM64 runners, smoke-tests both, and combines them into a multi-architecture tag. `cuda` and `sitl` use hosted AMD64 runners. JetPack 6 builds `deps` and the runtime candidate on hosted ARM64; its dependency content key skips an unchanged foundation, and registry caching preserves intermediate layers. `deps` is an internal build layer. Image compilation uses native runners rather than QEMU.
 
 For a persistent ARM64 build server, register a GitHub runner with `self-hosted`, `linux`, `ARM64`, and `arm64-builder` labels, then dispatch the image workflow with `arm64_builder=self-hosted`. This switches the JetPack 6 jobs; normal automatic builds use hosted runners. Publishing requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets, with Read, Write, and Delete access for retention. [Pull-request checks](.github/workflows/container-checks.yml) validate adapters, scripts, dependency locks, and image policy, then build `core` without publishing.
 
-Runtime tags select the current validated image, with `-prev` and `-old` as rollback generations; `-next` and candidate slots are staging. Promote a Jetson family from a machine with Bash, SSH, `jq` and an authenticated GitHub CLI:
+Runtime tags select the current validated image, with `-prev` and `-old` as rollback generations; `-next` and candidate slots are staging. Promote the Jetson image from a machine with Bash, SSH, `jq` and an authenticated GitHub CLI:
 
 ```bash
-./promote_jetson.sh jp5
-./promote_jetson.sh jp6 user@your-jp6-host
+./promote_jetson.sh user@your-jp6-host
 ```
 
-The helper takes the latest successful `main` build's candidate (artifacts expire after 30 days; an optional third argument picks a run), validates it on the Jetson over SSH (ROS, non-root CUDA, live ZED frames; isolated domain 223; stop any camera publisher first), then waits for [hosted CI](.github/workflows/promote-jetson.yml) to rotate the tags. `ASTRO_JETSON_GATEWAY` sets the SSH gateway (empty for direct); JP5 defaults to `roboboat@squirtle-jetson.local`, JP6 needs an L4T R36 host. Manual diagnostic: `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST`.
+The helper takes the latest successful `main` build's candidate (artifacts expire after 30 days; an optional third argument picks a run), validates it on the Jetson over SSH (ROS, non-root CUDA, live ZED frames; isolated domain 223; stop any camera publisher first), then waits for [hosted CI](.github/workflows/promote-jetson.yml) to rotate the tags. `ASTRO_JETSON_GATEWAY` sets the SSH gateway (empty for direct); the host must run L4T R36. Manual diagnostic: `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST`.
 
-For standalone deployment on either Jetson generation, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 5 (Foxy) or 6 (Jazzy) image and domain, and the Jetson adapter restarts the container after reboots:
+For standalone deployment on a Jetson, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 6 adapter (warning when `roboboat_dev` runs an image older than its tag), and the adapter restarts the container after reboots:
 
 ```bash
 .devcontainer/prebuild.sh
