@@ -13,6 +13,8 @@ source "$SCRIPT_DIR/config/boat-network.env"
 # Credentials live only in the ignored .env (see .env.example); the environment wins.
 if [[ -r $SCRIPT_DIR/.env ]]; then
     while IFS='=' read -r key value; do
+        value=${value%$'\r'}
+        [[ $value =~ ^\"(.*)\"$ || $value =~ ^\'(.*)\'$ ]] && value=${BASH_REMATCH[1]}
         [[ $key =~ ^(ROUTER_(USER|PASSWORD|ADMIN_PASSWORD)|BOAT_WIFI_PASSWORD)$ && -z ${!key:-} ]] \
             && printf -v "$key" '%s' "$value"
     done <"$SCRIPT_DIR/.env"
@@ -377,8 +379,6 @@ build_apply_script() {
         ((static_count += 1))
     done
 
-    script+="set -e"$'\n'
-    script+="command -v nvram >/dev/null"$'\n'
     script+=$(nvset_line wan_proto disabled)$'\n'
     script+=$(nvset_line wk_mode router)$'\n'
     # On DD-WRT lan_proto=dhcp is "DHCP Type: DHCP Server"; static drops dhcp-range
@@ -434,7 +434,31 @@ build_apply_script() {
     script+="setuserpasswd $(shell_quote "$ADMIN_USER") $(shell_quote "$ADMIN_PASSWORD")"$'\n'
     script+="nvram commit"$'\n'
     script+="sync"$'\n'
-    printf '%s' "$script"
+    printf 'set -e\ncommand -v nvram >/dev/null\n%s\n%s' "$(revert_lines "$script")" "$script"
+}
+
+# Router-side lines, run before any change, that save the current value of every key the
+# transaction sets into a startup script. Five minutes after the next boot it restores them
+# and reboots, unless confirm_router ran. It lives in NVRAM because the apply reboots.
+revert_lines() {
+    local keys
+    keys=$(sed -n 's/^nvram set \([A-Za-z0-9_]*\)=.*/\1/p' <<<"$1" | sort -u | tr '\n' ' ')
+    sed "s/@KEYS@/$keys/" <<'EOF'
+[ -n "$(nvram get astro_prev_rc_startup)" ] || nvram set astro_prev_rc_startup="x$(nvram get rc_startup)"
+r='( sleep 300; [ -e /tmp/astro-keep ] && exit 0'
+for k in @KEYS@; do v=$(nvram get "$k" | sed "s/'/'\\\\''/g"); r="$r
+nvram set $k='$v'"; done
+r="$r
+p=\$(nvram get astro_prev_rc_startup); nvram set rc_startup=\"\${p#x}\"; nvram unset astro_prev_rc_startup; nvram commit; reboot ) &"
+nvram set rc_startup="$r"
+EOF
+}
+
+# Cancel the auto-revert armed by the apply transaction and restore the startup script.
+confirm_router() {
+    router_ssh 'touch /tmp/astro-keep; p=$(nvram get astro_prev_rc_startup); nvram set rc_startup="${p#x}"; nvram unset astro_prev_rc_startup; nvram commit' </dev/null \
+        || die "Could not cancel the auto-revert; the router restores its previous settings five minutes after boot"
+    info "Verified; auto-revert cancelled."
 }
 
 show_preview() {
@@ -482,7 +506,7 @@ wait_for_router() {
 
 verify_router() {
     local result lease mac ip
-    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'lan_proto='; nvram get lan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'; cat /tmp/dnsmasq.conf 2>/dev/null" </dev/null) \
+    result=$(router_ssh "printf 'lan='; nvram get lan_ipaddr; printf 'gateway='; nvram get lan_gateway; printf 'wan='; nvram get wan_proto; printf 'lan_proto='; nvram get lan_proto; printf 'dhcp='; nvram get dhcpd_enable; printf 'dnsmasq='; nvram get dnsmasq_enable; printf 'dnsmasq_process='; pidof dnsmasq >/dev/null 2>&1 && echo yes || echo no; printf 'route='; ip route 2>/dev/null | sed -n '/^default /{p;q}'; cat /tmp/dnsmasq.conf 2>/dev/null; for f in \$(sed -n 's/^dhcp-hostsfile=//p' /tmp/dnsmasq.conf 2>/dev/null); do cat \"\$f\"; done" </dev/null) \
         || die "Post-reboot verification failed"
     grep -qx "lan=$ROUTER_IP" <<<"$result" || die "Router LAN address verification failed"
     grep -qx "gateway=$LAPTOP_IP" <<<"$result" || die "Router gateway verification failed"
@@ -500,7 +524,8 @@ verify_router() {
         || warn "dnsmasq.conf lacks the tagged gateway option; fall back to dhcp-option=tag:boat,3 with set:boat on the reservations."
     for lease in $STATIC_LEASES; do
         IFS== read -r mac _ ip <<<"$lease"
-        grep -qi "^dhcp-host=.*$mac.*$ip" <<<"$result" || die "dnsmasq.conf has no reservation for $lease"
+        # Some builds write reservations to a dhcp-hostsfile instead of dhcp-host lines.
+        grep -qiE "^(dhcp-host=)?[^=]*$mac.*$ip" <<<"$result" || die "dnsmasq serves no reservation for $lease"
     done
     info "Core NVRAM settings verified. On one client, check 'nmcli -f DHCP4 device show' reports routers = $LAPTOP_IP."
 }
@@ -538,11 +563,13 @@ configure_router() {
             die "Apply failed; no NVRAM backup was available on this router build"
         fi
     fi
-    info "Settings committed. Rebooting DD-WRT..."
+    info "Settings committed. Rebooting DD-WRT; it restores the previous settings five minutes"
+    info "after boot unless the verification below passes."
     router_ssh 'reboot' </dev/null >/dev/null 2>&1 || true
     AUTH_MODE=key
     wait_for_router
     verify_router
+    confirm_router
 }
 
 restore_backup() {
