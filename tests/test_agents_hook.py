@@ -152,6 +152,7 @@ class Dispatcher(unittest.TestCase):
         playbook = subprocess.run([sys.executable, '-I', str(script), '--playbook'], capture_output=True,
                                   text=True, env=env, timeout=10)
         self.assertEqual(playbook.stdout.strip(), 'playbook for agent')
+        self.assertEqual(self.events()[-1]['source'], 'playbook')     # a package can give the whole text here
 
     def test_shipped_configs_point_every_cli_at_the_dispatcher(self):
         claude_hooks = json.loads((ROOT / '.claude' / 'settings.json').read_text())['hooks']
@@ -164,6 +165,52 @@ class Dispatcher(unittest.TestCase):
                     self.assertIn('.agents/hook.py', handler['command'])
                     self.assertIn('-I', handler['command'])
                     self.assertTrue(handler['command'].split('exit 0')[0].rstrip('; ').endswith(agent))
+
+
+WORKSPACE_HOOKS = [name for name, _ in hook.packages(ROOT)]
+# (blocked?, command): the workspace's own package hooks behind the real dispatcher, as each CLI sends it.
+REGRESSION = [
+    (True, 'ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{}"'),
+    (True, 'ssh blastoise \'docker exec roboboat_dev bash -c "ros2 topic pub /cmd_vel x y"\''),
+    (True, "ssh blastoise <<'EOF'\nros2 service call /mavros/cmd/arming x y\nEOF"),
+    (True, 'echo "ros2 topic pub /goal_pose x y" | bash'),
+    (True, 'kill -9 $(pgrep -f fence_watchdog)'),
+    (True, 'ssh blastoise pkill -f boat_test'),
+    (True, 'ssh blastoise docker stop roboboat_dev'),
+    (False, 'pkill -P 12345'),
+    (False, 'killall -u me codex'),
+    (False, "grep -rn 'ros2 topic pub /cmd_vel' src/"),
+    (False, "git commit -m \"$(cat <<'EOF'\ndeny ros2 topic pub /cmd_vel and pkill\nEOF\n)\""),
+    (False, "cat > test_x.py <<'EOF'\ndef test_kill():\n    proc.kill()  # watchdog\nEOF"),
+    (False, 'ros2 topic echo /cmd_vel --once'),
+    (False, 'git status')]
+
+
+@unittest.skipUnless('mhseals_testing' in WORKSPACE_HOOKS, 'needs the workspace checkout of src/mhseals_testing')
+class WorkspaceHooks(unittest.TestCase):
+    """The regression table through ``python3 -I .agents/hook.py`` for Claude's and Codex's payloads
+    (Codex may send the command as argv), and the per-call latency the agent waits for."""
+
+    def test_blocks_raw_control_allows_text_and_stays_fast(self):
+        state = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, state)
+        env = dict(os.environ, XDG_STATE_HOME=str(state), XDG_RUNTIME_DIR=str(state), MHSEALS_DATA=str(state))
+        env.pop('BOAT_AGENT_TARGET', None)
+        took = []
+        for blocked, command in REGRESSION:
+            for agent, payload in (('claude', claude('PreToolUse', tool_input={'command': command})),
+                                   ('codex', codex('PreToolUse', tool_input={'command': command})),
+                                   ('codex', codex('PreToolUse', tool_input={'command': ['bash', '-lc', command]}))):
+                began = time.monotonic()
+                done = subprocess.run([sys.executable, '-I', str(ROOT / '.agents' / 'hook.py'), agent],
+                                      input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=10)
+                took.append(time.monotonic() - began)
+                out = json.loads(done.stdout) if done.stdout.strip() else {}
+                decision = out.get('hookSpecificOutput', {}).get('permissionDecision')
+                with self.subTest(agent=agent, command=command):
+                    self.assertEqual(decision == 'deny', blocked, out)
+        took.sort()
+        self.assertLess(took[len(took) // 2], 0.15, 'median hook latency per tool call')
 
 
 if __name__ == '__main__':

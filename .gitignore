@@ -21,3 +21,8 @@ src/mhseals_testing/
 .devcontainer/installed.local.txt
 *.egg-info/
 .env
+# Agent CLIs: only the hook wiring is committed; local settings, agents and caches stay local
+.claude/*
+!.claude/settings.json
+.codex/*
+!.codex/hooks.json

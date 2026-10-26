@@ -2,13 +2,16 @@
 """One hook for every coding agent: Claude Code and Codex call this; workspace packages decide.
 
     python3 -I .agents/hook.py claude|codex      # a hook: the agent CLI's event JSON on stdin
-    python3 -I .agents/hook.py --playbook        # print the session-start playbooks as text
+    python3 -I .agents/hook.py --playbook        # print the full playbooks as text
 
 A package opts in with an ``agent_hook.py`` module at ``src/<repo>/<package>/agent_hook.py``
 that defines ``agent_event(event)``. Each one gets the same neutral event, whichever CLI sent it:
 
     {agent: claude|codex, event: start|pre|post, session_id, cwd, source,
      tool, tool_id, command, exit, duration_ms, failed}
+
+``source`` at start is the CLI's (startup, resume, clear, compact) or ``playbook`` for
+``--playbook``: a package can keep its session-start text short and give the whole of it on demand.
 
 ``exit`` is 0 on success, N for ``Exit code N``, else None (interrupted, or not reported).
 It returns None, ``{"context": text}`` (start) or ``{"deny": reason}`` (pre). The first deny
@@ -150,7 +153,8 @@ def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     try:
         if args[:1] == ['--playbook']:
-            start = normalize(args[1] if len(args) > 1 else 'agent', {'hook_event_name': 'SessionStart'})
+            start = normalize(args[1] if len(args) > 1 else 'agent',
+                              {'hook_event_name': 'SessionStart', 'source': 'playbook'})
             out = '\n\n'.join(dispatch(start)[1])
         else:
             out = run(args[0] if args else '', sys.stdin.read())
