@@ -1,0 +1,7 @@
+# Jetson image promotion: validate a CI candidate on the hardware, then promote and pull it.
+driver: jetson/l4t
+family: jetson-jp6-jazzy
+image: lunarzdev/astro
+gateway: tranquility            # ssh hop with LAN name resolution; empty = ssh directly
+validator: .devcontainer/boat-validate.sh
+workflow: promote-jetson.yml

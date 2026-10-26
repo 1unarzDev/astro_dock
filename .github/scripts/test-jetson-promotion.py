@@ -142,6 +142,19 @@ elif command.startswith('docker pull '):
             self.assertNotEqual(self.promote(*arguments).returncode, 0)
             self.assertEqual(self.commands(), '')
 
+    def test_plan_touches_no_host_and_rollback_needs_a_build(self):
+        hw = lambda *a: subprocess.run(['bash', str(ROOT / 'hw.sh'), 'jetson', *a], env=self.env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
+        result = hw('plan', 'user@jetson')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('Candidate lunarzdev/astro@' + DIGEST, result.stdout)
+        self.assertNotIn('ssh ', self.commands())
+        self.assertNotIn('"workflow", "run"', self.commands())
+        self.log.write_text('')
+        result = hw('rollback', 'user@jetson')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.commands(), '')
+
     def test_direct_ssh_and_explicit_build(self):
         self.env['ASTRO_JETSON_GATEWAY'] = ''
         result = self.promote('user@jetson', '123')
