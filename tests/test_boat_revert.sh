@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stubbed checks for the router auto-revert (router_setup.sh) and stage_boat's gateway guard.
+# Stubbed checks for the router auto-revert (devices/router/ddwrt.sh) and stage_boat's gateway guard.
 # Nothing here contacts a router or changes the host network.
 set -uo pipefail
 
@@ -25,8 +25,14 @@ printf '#!/bin/sh\necho rebooted >>"$NV/../reboots"\n' >"$tmp/bin/reboot"
 printf '#!/bin/sh\n:\n' >"$tmp/bin/setuserpasswd"
 chmod +x "$tmp/bin"/*
 
-# Source the router functions without running the menu.
-source <(sed -e '/^require_local_tools$/,$d' -e "s|^SCRIPT_DIR=.*|SCRIPT_DIR=$root|" "$root/router_setup.sh")
+# The router driver with the shipped profile's values; sourcing it runs nothing.
+HW_ROOT=$root ASTRO_ENV_FILE=/dev/null
+source "$root/devices/lib.sh"
+hw_init
+hw_load_kind router
+source "$root/devices/router/ddwrt.sh"
+router_settings --state-dir "$tmp/state"
+trap 'rm -rf "$tmp"' EXIT
 set +e
 router_ssh() {
     local cmd=${1//\/proc\/sys\/kernel\/random\/boot_id/$tmp/boot_id}
@@ -50,6 +56,7 @@ nv() { cat "$NV/$1" 2>/dev/null || echo "<unset>"; }
 fresh 1
 apply || fail "apply"
 [[ $(nv lan_ipaddr) == "$ROUTER_IP" && $(nv astro_prev_rc_startup) == xowner-script ]] || fail "apply state"
+[[ $(nv rc_startup) == *"sleep $REVERT_SECONDS;"* && $REVERT_SECONDS == 300 ]] || fail "revert delay from the profile"
 boot boot-B
 [[ $(nv lan_ipaddr) == 192.168.1.1 && $(nv wl0_ssid) == old-ssid ]] || fail "revert values"
 [[ $(nv dhcpfwd_enable) == "<unset>" && $(nv rc_startup) == owner-script ]] || fail "revert unset/rc_startup"
