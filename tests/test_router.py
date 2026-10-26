@@ -1,4 +1,5 @@
 """hw.sh router against a fake DD-WRT (one file per NVRAM key) behind a fake ssh; no router is contacted."""
+import base64
 import os
 from pathlib import Path
 import subprocess
@@ -87,6 +88,32 @@ class Router(unittest.TestCase):
         self.assertIn('use: ./hw.sh router plan', run.stderr)
         self.assertIn('Plan only', run.stdout)
         self.assertEqual(self.writes(), '')
+        (self.tmp / 'ssh.log').unlink()
+        run = subprocess.run(['bash', str(ROOT / 'router_setup.sh')], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('Usage:', run.stdout)
+        self.assertFalse((self.tmp / 'ssh.log').exists())     # no arguments: usage, never apply
+
+    def test_rollback_refuses_a_bad_backup_before_contacting_the_router(self):
+        b64 = lambda value: base64.b64encode(value.encode() + b'\n').decode()
+        cases = {'empty': ('', 'is empty'),
+                 'empty-value': ('lan_ipaddr\t%s\nwl0_ssid\t\n' % b64(ENV['ROUTER_IP']), 'not KEY<TAB>VALUE'),
+                 'no-tab': ('lan_ipaddr\t%s\nwl0_ssid\n' % b64(ENV['ROUTER_IP']), 'not KEY<TAB>VALUE'),
+                 'bad-ip': ('lan_ipaddr\t%s\nwl0_ssid\t%s\n' % (b64('192.168.1.300'), b64('old')), 'no valid lan_ipaddr'),
+                 'no-ip': ('wl0_ssid\t%s\n' % b64('old'), 'no valid lan_ipaddr')}
+        backups = self.tmp / 'state' / ENV['ROUTER_IP']
+        backups.mkdir(mode=0o700, exist_ok=True)
+        for name, (text, message) in cases.items():
+            with self.subTest(backup=name):
+                for old in backups.glob('nvram-*'):
+                    old.unlink()
+                (backups / 'nvram-20260101-000000.b64').write_text(text)
+                run = self.hw('rollback', stdin='1\nRESTORE\n')
+                self.assertNotEqual(run.returncode, 0)
+                self.assertIn(message, run.stderr)
+                self.assertNotIn('restored', run.stdout + run.stderr)
+                self.assertFalse((self.tmp / 'ssh.log').exists())
+                self.assertEqual(self.writes(), '')
 
 
 if __name__ == '__main__':

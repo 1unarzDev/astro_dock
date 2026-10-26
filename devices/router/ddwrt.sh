@@ -12,10 +12,14 @@ plan      Connect, inspect and preview the configuration; changes nothing on the
 apply     plan, then (after you type APPLY) back up NVRAM, commit one transaction and reboot. It
           restores the previous values $(cfg revert_seconds)s after boot unless the post-reboot verify passes.
 verify    Read-only: check NVRAM and the dnsmasq config the router serves against the profile.
-rollback  Restore a saved NVRAM backup and reboot (you pick it and type RESTORE).
+rollback  Restore a saved NVRAM backup (you pick it and type RESTORE): refused unless every line
+          is KEY<TAB>VALUE and lan_ipaddr is an IPv4. Only differing keys are set, under the same
+          timed revert as apply, confirmed once the router answers at the restored lan_ipaddr.
 key       Print the per-router public key for DD-WRT's Authorized Keys.
 --host is the router's current address (default: lan.address). State (key, known_hosts, backups):
 the ignored router_setup_state/ when present, else ~/.local/state/astro_dock/router.
+status, plan and verify write nothing to the router; locally they may create the router key and
+add its host key to known_hosts (after you accept the fingerprint).
 Secrets: the .env keys named under credentials; empty passwords are asked for.
 EOF
 }
@@ -264,6 +268,7 @@ probe_router() {
     info "Detected DD-WRT $DDWRT_VERSION with radio(s): ${RADIOS[*]}"
 }
 
+# make_backup [SUFFIX]: save every NVRAM key, encoded, to KEY_DIR/nvram-STAMP[SUFFIX].b64|.hex.
 make_backup() {
     local stamp
     if [[ $BACKUP_ENCODING == none ]]; then
@@ -271,7 +276,7 @@ make_backup() {
         warn "Proceeding without an NVRAM backup because this DD-WRT build lacks encoding tools."
         return
     fi
-    stamp=$(date +%Y%m%d-%H%M%S)
+    stamp=$(date +%Y%m%d-%H%M%S)${1:-}
     if [[ $BACKUP_ENCODING == base64 ]]; then
         BACKUP_FILE="$KEY_DIR/nvram-$stamp.b64"
     else
@@ -286,7 +291,7 @@ make_backup() {
             </dev/null >"$BACKUP_FILE" || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup failed"; }
     fi
     chmod 600 -- "$BACKUP_FILE"
-    [[ -s $BACKUP_FILE ]] || die "NVRAM backup was empty"
+    [[ -s $BACKUP_FILE ]] || { rm -f -- "$BACKUP_FILE"; die "NVRAM backup was empty"; }
     info "Saved permission-restricted NVRAM backup: $BACKUP_FILE"
 }
 
@@ -384,7 +389,7 @@ build_apply_script() {
 # rather than /tmp for the same reason. An unconfirmed earlier apply exits 3 untouched.
 revert_lines() {
     local keys
-    keys=$(sed -n 's/^nvram set \([A-Za-z0-9_]*\)=.*/\1/p' <<<"$1" | sort -u | tr '\n' ' ')
+    keys=$(sed -n 's/^nvram set \([A-Za-z0-9_.:-]*\)=.*/\1/p' <<<"$1" | sort -u | tr '\n' ' ')
     sed -e "s/@KEYS@/$keys/" -e "s/@SECONDS@/$((10#$REVERT_SECONDS))/" <<'EOF'
 [ -z "$(nvram get astro_prev_rc_startup)" ] || exit 3
 s=$(nvram show 2>/dev/null || true); [ -n "$s" ]
@@ -537,10 +542,47 @@ driver_verify() {
     verify_router
 }
 
+# decode_value FILE ENCODED: an encoded backup value as nvram set receives it (trailing newline
+# dropped, as the old router-side decode did).
+decode_value() {
+    if [[ $1 == *.b64 ]]; then
+        printf '%s' "$2" | base64 -d
+    else
+        [[ $2 =~ ^([0-9a-fA-F]{2})+$ ]] || return 1
+        # shellcheck disable=SC2059 # the format is only \xHH escapes built from checked hex
+        printf "$(sed 's/../\\x&/g' <<<"$2")"
+    fi
+}
+
+# backup_value FILE KEY: the decoded value of KEY in an NVRAM backup.
+backup_value() {
+    local encoded
+    encoded=$(awk -F'\t' -v k="$2" '$1 == k { print $2; exit }' "$1")
+    [[ -n $encoded ]] && decode_value "$1" "$encoded"
+}
+
+# validate_backup FILE: refuse what make_backup never writes. Every line is KEY<TAB>ENCODED with a
+# non-empty encoding (an empty NVRAM value still encodes its newline), and lan_ipaddr is an IPv4.
+validate_backup() {
+    local file=$1 pattern ip
+    [[ -s $file ]] || die "Backup $file is empty; refusing to restore it"
+    [[ $file == *.b64 ]] && pattern='^[A-Za-z0-9+/]+=*$' || pattern='^([0-9a-fA-F][0-9a-fA-F])+$'
+    awk -F'\t' -v p="$pattern" 'NF != 2 || $1 !~ /^[A-Za-z0-9_.:-]+$/ || $2 !~ p { bad = 1; exit } END { exit bad }' "$file" \
+        || die "Backup $file has a line that is not KEY<TAB>VALUE with an encoded value; refusing to restore it"
+    ip=$(backup_value "$file" lan_ipaddr) && is_ipv4 "$ip" \
+        || die "Backup $file has no valid lan_ipaddr; refusing to restore it"
+}
+
+# Restore a saved backup as one transaction under the same timed revert as apply: only keys whose
+# value differs from a fresh pre-restore backup are set, the tool's key stays authorized so the
+# result can be confirmed, and the revert is cancelled only once the router answers at the
+# restored lan_ipaddr after a new boot.
 driver_rollback() {
-    local files=() selected answer
+    local files=() selected answer boot restore_ip key encoded auth script status=0
+    local -A want=()
     router_settings "$@"
-    connect
+    [[ $REVERT_SECONDS =~ ^[0-9]+$ ]] && ((REVERT_SECONDS >= 240)) || die "revert_seconds must be at least 240"
+    initialize_state
     mapfile -t files < <(find "$KEY_DIR" -maxdepth 1 -type f \( -name 'nvram-*.b64' -o -name 'nvram-*.hex' \) -print | sort -r)
     ((${#files[@]})) || die "No NVRAM backups found in $KEY_DIR"
     printf '\nAvailable backups:\n'
@@ -549,19 +591,46 @@ driver_rollback() {
         [[ -n $selected ]] && break
     done
     printf 'Selected: %s\n' "$selected"
-    read -r -p "Type RESTORE to replace NVRAM and reboot: " answer
-    [[ $answer == RESTORE ]] || { info "Restore cancelled."; return; }
-    if [[ $selected == *.b64 ]]; then
-        router_ssh \
-            'tab=$(printf "\t"); while IFS="$tab" read -r key encoded; do case "$key" in *[!A-Za-z0-9_.:-]*|"") exit 30;; esac; value=$(printf "%s" "$encoded" | base64 -d) || exit 31; nvram set "$key=$value"; done; nvram commit; sync' \
-            <"$selected" || die "Restore failed"
-    else
-        router_ssh \
-            'tab=$(printf "\t"); while IFS="$tab" read -r key encoded; do case "$key" in *[!A-Za-z0-9_.:-]*|"") exit 30;; esac; value=$(printf "%s\n" "$encoded" | awk '\''function h(c){return index("0123456789abcdef",tolower(c))-1} {for(i=1;i<length($0);i+=2) printf "%c",h(substr($0,i,1))*16+h(substr($0,i+1,1))}'\'') || exit 31; nvram set "$key=$value"; done; nvram commit; sync' \
-            <"$selected" || die "Restore failed"
-    fi
+    validate_backup "$selected"
+    restore_ip=$(backup_value "$selected" lan_ipaddr)
+    ensure_key; trust_host_key; authenticate
+    probe_router
+    [[ ${selected##*.} == "${BACKUP_ENCODING/base64/b64}" ]] \
+        || die "The router now encodes backups as $BACKUP_ENCODING; it cannot be compared with $selected"
+    boot=$(router_ssh 'cat /proc/sys/kernel/random/boot_id' </dev/null) && [[ -n $boot ]] \
+        || die "Could not read the router boot ID; nothing was changed"
+    make_backup -before-restore
+    [[ $BACKUP_FILE != "$selected" ]] || die "The pre-restore backup would overwrite $selected; rerun"
+    while IFS=$'\t' read -r key encoded; do
+        want[$key]=$(decode_value "$selected" "$encoded") || die "Cannot decode $key in $selected"
+    done < <(awk -F'\t' 'NR == FNR { now[$1] = $2; next } !($1 in now) || now[$1] != $2' "$BACKUP_FILE" "$selected")
+    # The timer lives in rc_startup, so the restore never sets it or its saved copy.
+    [[ -z ${want[rc_startup]+x} ]] || warn "rc_startup differs in $selected; it is left as is (the auto-revert uses it)."
+    unset 'want[rc_startup]' 'want[astro_prev_rc_startup]'
+    # Keep this tool's key and sshd: without them the restore could never be confirmed.
+    auth=${want[sshd_authorized_keys]-$(backup_value "$BACKUP_FILE" sshd_authorized_keys)}
+    grep -Fq -- "$PUBLIC_KEY" <<<"$auth" || want[sshd_authorized_keys]=${auth:+$auth$'\n'}$PUBLIC_KEY
+    [[ ${want[sshd_enable]-1} == 1 ]] || want[sshd_enable]=1
+    ((${#want[@]})) || { info "The router already matches $selected; nothing to restore."; return; }
+    printf 'Keys to restore (%d): %s\n' "${#want[@]}" "$(printf '%s\n' "${!want[@]}" | sort | tr '\n' ' ')"
+    printf 'Router LAN address after the restore: %s\n' "$restore_ip"
+    read -r -p "Type RESTORE to restore them, reboot, and confirm within ${REVERT_SECONDS}s: " answer
+    [[ $answer == RESTORE ]] || { info "Restore cancelled; the router is unchanged."; return; }
+    script=''
+    for key in "${!want[@]}"; do script+=$(nvset_line "$key" "${want[$key]}")$'\n'; done
+    script+="nvram commit"$'\n'"sync"$'\n'
+    printf 'set -e\ncommand -v nvram >/dev/null\n%s\n%s\n' "$(revert_lines "$script")" "$script" | router_ssh 'sh -s' || status=$?
+    ((status != 3)) || die "An earlier apply or restore is still unconfirmed; let its auto-revert run (reboot the router if needed), then rerun."
+    ((status == 0)) || die "Restore failed; the pre-restore values are in $BACKUP_FILE"
+    info "Restore committed. Rebooting DD-WRT; it returns to the pre-restore values ${REVERT_SECONDS}s"
+    info "after boot unless it answers at $restore_ip."
     router_ssh 'reboot' </dev/null >/dev/null 2>&1 || true
-    info "Backup restored and reboot requested."
+    ROUTER_IP=$restore_ip
+    wait_for_router "$boot"
+    [[ $(router_ssh 'nvram get lan_ipaddr' </dev/null) == "$restore_ip" ]] \
+        || die "The router answered but lan_ipaddr is not $restore_ip; it reverts ${REVERT_SECONDS}s after boot"
+    confirm_router
+    info "Backup restored and confirmed: $selected (pre-restore values: $BACKUP_FILE)"
 }
 
 driver_key() {

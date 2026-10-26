@@ -13,7 +13,7 @@ mkdir -p "$tmp/bin"
 cat >"$tmp/bin/nvram" <<'EOF'
 #!/bin/sh
 case $1 in
-    get) [ -f "$NV/$2" ] && cat "$NV/$2"; exit 0 ;;
+    get) [ -f "$NV/$2" ] && cat "$NV/$2"; echo; exit 0 ;;
     set) k=${2%%=*}; printf '%s' "${2#*=}" >"$NV/$k" ;;
     unset) rm -f "$NV/$2" ;;
     show) for f in "$NV"/*; do [ -f "$f" ] && printf '%s=%s\n' "${f##*/}" "$(cat "$f")"; done ;;
@@ -84,6 +84,39 @@ echo boot-C >"$tmp/boot_id"
 (wait_for_router boot-A && confirm_router) >/dev/null || fail "confirm after reboot"
 [[ $(nv rc_startup) == owner-script && $(nv astro_prev_rc_startup) == "<unset>" ]] || fail "confirm state"
 echo "router revert ok"
+
+# Rollback: a valid backup is restored (differing keys only, never rc_startup) under the same timer.
+trust_host_key() { :; }
+authenticate() { AUTH_MODE=key; ssh_base_options; }
+b64() { printf '%s\n' "$1" | base64 | tr -d '\n'; }
+keydir="$tmp/state/$(cfg lan.address)"
+rollback() { ( driver_rollback --state-dir "$tmp/state" ) <<<$'1\nRESTORE' 2>&1; }
+backup() {
+    mkdir -p "$keydir"; rm -f "$keydir"/nvram-*
+    printf 'lan_ipaddr\t%s\nwl0_ssid\t%s\nrc_startup\t%s\nos_version\t%s\n' "$(b64 192.168.1.2)" \
+        "$(b64 backup-ssid)" "$(b64 other-script)" "$(b64 r1)" >"$keydir/nvram-20260101-000000.b64"
+}
+# Unconfirmed: no new boot, so no confirm; the next boot returns to the pre-restore values.
+fresh 3; printf r1 >"$NV/os_version"; backup
+out=$(rollback) && fail "unconfirmed rollback succeeded"
+grep -q "did not reboot" <<<"$out" && grep -q "rc_startup differs" <<<"$out" || fail "unconfirmed rollback messages: $out"
+! grep -qi "restored and confirmed" <<<"$out" || fail "unconfirmed rollback claimed success"
+[[ $(nv wl0_ssid) == backup-ssid && $(nv lan_ipaddr) == 192.168.1.2 ]] || fail "rollback values"
+[[ $(nv astro_prev_rc_startup) == xowner-script && $(nv rc_startup) == *"sleep $REVERT_SECONDS;"* ]] || fail "rollback timer"
+[[ $(nv rc_startup) != *os_version* ]] || fail "rollback set an unchanged key"
+ls "$keydir"/nvram-*-before-restore.b64 >/dev/null 2>&1 || fail "no pre-restore backup"
+boot boot-B
+[[ $(nv wl0_ssid) == old-ssid && $(nv lan_ipaddr) == 192.168.1.1 && $(nv sshd_authorized_keys) == "<unset>" ]] || fail "rollback revert values"
+[[ $(nv rc_startup) == owner-script && $(nv astro_prev_rc_startup) == "<unset>" ]] || fail "rollback revert rc_startup"
+# Confirmed: the router answers at the restored address after a new boot; the timer is cancelled.
+fresh 4; printf r1 >"$NV/os_version"; backup
+printf '#!/bin/sh\necho rebooted >>"$NV/../reboots"\necho boot-R >"$NV/../boot_id"\n' >"$tmp/bin/reboot"
+out=$(rollback) || fail "confirmed rollback: $out"
+grep -q "Backup restored and confirmed" <<<"$out" || fail "confirmed rollback message"
+[[ $(nv wl0_ssid) == backup-ssid && $(nv lan_ipaddr) == 192.168.1.2 ]] || fail "confirmed rollback values"
+[[ $(nv rc_startup) == owner-script && $(nv astro_prev_rc_startup) == "<unset>" ]] || fail "confirmed rollback state"
+grep -qF "$(cat "$keydir/id_router.pub")" "$NV/sshd_authorized_keys" || fail "rollback dropped the tool's key"
+echo "router rollback ok"
 
 # stage_boat: the gateway host keeps its network even when GATEWAY_IP is not the first address.
 read -r gw subnet < <(. "$root/config/boat-network.env"; echo "$GATEWAY_IP $BOAT_SUBNET")
