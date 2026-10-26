@@ -1,4 +1,4 @@
-"""hw.sh hosts (and the boat_hosts.sh alias) with an ssh stand-in that records scripts; nothing is deployed."""
+"""hw.sh hosts with an ssh stand-in that records scripts; nothing is deployed."""
 import os
 from pathlib import Path
 import subprocess
@@ -39,12 +39,6 @@ class Hosts(unittest.TestCase):
         self.assertIn('find build install -xtype l -delete', calls)
         self.assertIn('colcon build --symlink-install', calls)
         self.assertNotIn('docker compose', calls)
-
-    def test_old_deploy_command_and_overrides(self):
-        result, calls = self.run_script('deploy', 'host-a', script='boat_hosts.sh', BOAT_REPOS='repo_y')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('for repo in astro_dock repo_y', calls)
-        self.assertIn('colcon build --symlink-install', calls)
 
     def test_deploy_image_commits_a_rollback_before_compose(self):
         result, calls = self.run_script('apply', '--image', 'repo/img@sha256:abc', 'host-a')
@@ -122,9 +116,9 @@ class Hosts(unittest.TestCase):
             log = Path(tmp, 'ssh.log')
             env = {**os.environ, 'HW_SSH': str(Path(tmp, 'ssh')), 'FAKE_SSH_LOG': str(log),
                    'HW_SSH_COPY_ID': str(Path(tmp, 'copy')), 'XDG_STATE_HOME': tmp, 'ASTRO_ENV_FILE': '/dev/null',
-                   'XDG_CONFIG_HOME': str(Path(tmp, 'xdg')), 'BOAT_DEVICES': str(devices),
-                   'BOAT_ENV': str(Path(tmp, 'boat-network.env'))}
-            run = lambda: subprocess.run([str(ROOT / 'boat_hosts.sh'), 'keys'], capture_output=True,
+                   'XDG_CONFIG_HOME': str(Path(tmp, 'xdg')), 'ASTRO_REGISTRY': str(devices),
+                   'ASTRO_NETWORK_ENV': str(Path(tmp, 'boat-network.env'))}
+            run = lambda: subprocess.run([str(ROOT / 'hw.sh'), 'hosts', 'keys'], capture_output=True,
                                          text=True, env=env)
             result = run()
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -140,9 +134,10 @@ class Hosts(unittest.TestCase):
             self.assertEqual(key.read_text(), first)                                 # kept, not replaced
 
     def test_usage_without_a_verb(self):
-        result, _ = self.run_script(script='boat_hosts.sh')
-        self.assertEqual(result.returncode, 2)
-        self.assertIn('deploy [--image REF]', result.stderr)
+        result, calls = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('plan|apply [--image REF] [HOST...]', result.stdout)
+        self.assertEqual(calls, '')
 
 
 if __name__ == '__main__':

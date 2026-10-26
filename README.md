@@ -195,7 +195,6 @@ sudo reboot
 - **Drivers:** `devices/<kind>/<driver>.sh` must define `driver_status`, `driver_plan`, `driver_apply`, `driver_verify` and `driver_rollback`; `hw.sh` refuses a driver missing one. Other `driver_<verb>` functions are extra verbs.
 - **Profiles:** `config/profiles/<profile>/`. `profile.env` names the network env and the host registry; each `<kind>.yaml` picks a driver and holds its settings (`$KEY` reads the network env). `ASTRO_PROFILE` picks one when there are several.
 - **Layers:** environment > `.env` (per machine, secrets; [`.env.example`](.env.example)) > profile. `HW_<PATH>` overrides a YAML value (`HW_MEASURE_SECONDS=3`). A YAML names its secrets' `.env` keys under `credentials:`, never the values.
-- **Old commands:** `router_setup.sh`, `ubiquiti_setup.sh`, `link_measure.sh`, `lidar_setup.sh` and `promote_jetson.sh` forward to `hw.sh` for one release; `boat_hosts.sh deploy|keys` stays.
 
 #### Boat network
 
@@ -354,13 +353,13 @@ docker exec -it roboboat_dev bash
 
 Rerun `up` to update; for offline deployment, `docker save` / `docker load` the ARM64 image and drop `--pull always`.
 
-To update every boat computer from one shell, [`boat_hosts.sh`](boat_hosts.sh) (= `./hw.sh hosts apply`) deploys to the ssh hosts of [`config/devices.yaml`](config/devices.yaml) (the host name is the ssh destination; repositories in `hosts.yaml`, container and workspace in the registry):
+To update every boat computer from one shell, `./hw.sh hosts apply` deploys to the ssh hosts of [`config/devices.yaml`](config/devices.yaml) (the host name is the ssh destination; repositories in `hosts.yaml`, container and workspace in the registry):
 
 ```bash
-./boat_hosts.sh deploy [--image lunarzdev/astro@sha256:DIGEST] [HOST...]
+./hw.sh hosts apply [--image lunarzdev/astro@sha256:DIGEST] [HOST...]
 ```
 
-`deploy` backs up dirty state under `~/.local/state/astro_dock/hosts/` on each host, fast-forwards astro_dock and the application repositories to `origin/main` (checking out `main` first), deletes dangling symlink-install links and runs `colcon build --symlink-install` in `roboboat_dev`. `--image` first commits the running container as `astro-rollback:TIMESTAMP`, then runs the commands above; the named ZED volumes persist. Renaming the old container is no fallback, because Compose finds and recreates it by its labels. `./hw.sh hosts status|plan|verify` only read (heads against `origin/main` by `ls-remote`), and `./hw.sh hosts rollback astro-rollback:TIMESTAMP [HOST...]` recreates on the rollback image and builds. Parts are started from the `boat_test` TUI.
+`apply` backs up dirty state under `~/.local/state/astro_dock/hosts/` on each host, fast-forwards astro_dock and the application repositories to `origin/main` (checking out `main` first), deletes dangling symlink-install links and runs `colcon build --symlink-install` in `roboboat_dev`. `--image` first commits the running container as `astro-rollback:TIMESTAMP`, then runs the commands above; the named ZED volumes persist. Renaming the old container is no fallback, because Compose finds and recreates it by its labels. `./hw.sh hosts status|plan|verify` only read (heads against `origin/main` by `ls-remote`), and `./hw.sh hosts rollback astro-rollback:TIMESTAMP [HOST...]` recreates on the rollback image and builds. Parts are started from the `boat_test` TUI.
 
 The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.github/scripts/registry-retention.py --repository lunarzdev/astro audit`.
 

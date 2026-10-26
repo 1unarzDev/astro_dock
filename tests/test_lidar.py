@@ -210,11 +210,6 @@ class LidarSetupTest(unittest.TestCase):
         self.assertEqual(self.posts(), ['setting/host addr=192.168.0.152', 'setting/net gateway=192.168.0.3',
                                         'save submit', 'reset reset_system'])
 
-    def test_old_command_still_works(self):
-        run = self.run_script('verify', script='lidar_setup.sh')
-        self.assertEqual(run.returncode, 3, run.stderr)
-        self.assertIn('use: ./hw.sh lidar verify', run.stderr)
-
     def test_apply_refuses_unreachable_lidar(self):
         Path(str(self.state) + '.down').write_text('999')
         run = self.run_script('apply', 'APPLY\n')

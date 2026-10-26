@@ -88,7 +88,7 @@ elif command.startswith('docker pull '):
     def promote(self, *arguments):
         """Run the real helper without contacting GitHub or the boat."""
         return subprocess.run(
-            ['bash', str(ROOT / 'promote_jetson.sh'), *arguments],
+            ['bash', str(ROOT / 'hw.sh'), 'jetson', 'apply', *arguments],
             env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=10)
 
@@ -156,7 +156,7 @@ elif command.startswith('docker pull '):
         self.assertEqual(self.commands(), '')
 
     def test_direct_ssh_and_explicit_build(self):
-        self.env['ASTRO_JETSON_GATEWAY'] = ''
+        self.env['HW_GATEWAY'] = ''
         result = self.promote('user@jetson', '123')
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn('tranquility', self.commands())

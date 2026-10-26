@@ -1,6 +1,7 @@
 """hw.sh's device contract and profile layering, with throwaway profiles and drivers (no devices)."""
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -109,6 +110,27 @@ class Contract(unittest.TestCase):
                                      text=True, env={**os.environ, 'ASTRO_PROFILE': yaml.parent.name,
                                                      'ASTRO_ENV_FILE': '/dev/null'})
                 self.assertEqual(run.returncode, 0, run.stderr)
+
+
+# Commands hw.sh replaced: nothing tracked here, nor a checked-out src/mhseals_* repo, may name them.
+REMOVED = re.compile(r'\b(?:router_setup|ubiquiti_setup|link_measure|lidar_setup|promote_jetson|boat_hosts)\.sh\b')
+
+
+class RemovedCommands(unittest.TestCase):
+    def test_no_file_names_a_removed_command(self):
+        def tracked(repo):
+            run = subprocess.run(['git', '-C', str(repo), 'ls-files', '-z'], capture_output=True, check=True)
+            return [repo / name for name in run.stdout.decode().split('\0') if name]
+        files = tracked(ROOT) + [f for repo in sorted(ROOT.glob('src/mhseals_*')) if (repo / '.git').exists()
+                                 for f in tracked(repo)]
+        hits = []
+        for path in files:
+            if path == Path(__file__) or not path.is_file():
+                continue
+            for number, line in enumerate(path.read_text(errors='ignore').splitlines(), 1):
+                if REMOVED.search(line):
+                    hits.append('%s:%d: %s' % (path.relative_to(ROOT), number, line.strip()))
+        self.assertEqual(hits, [])
 
 
 if __name__ == '__main__':

@@ -117,13 +117,6 @@ class LinkMeasureTest(unittest.TestCase):
     def test_scripts_parse(self):
         subprocess.run(['bash', '-n', str(ROOT / 'devices/radio/airmax.sh')], check=True)
 
-    def test_old_commands_still_work(self):
-        run = self.run_script('ubiquiti_setup.sh', 'status', 'rocket')
-        self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn('wlanPollingQuality=92', run.stdout)
-        run = self.run_script('link_measure.sh', 'propose', self.write_measurement(), LINK_FREQ='5300')
-        self.assertRegex(run.stdout, r'radio.1.freq +5180 -> 5300')
-
     def test_measure_reads_radios_runs_iperf_both_ways_and_saves(self):
         run = self.hw('measure')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)

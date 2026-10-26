@@ -78,21 +78,15 @@ class Router(unittest.TestCase):
         self.assertIn('Cancelled without router changes', run.stdout)
         self.assertEqual(self.writes(), '')
 
-    def test_old_command_maps_dry_run_to_plan(self):
+    def test_no_verb_prints_usage_and_never_applies(self):
         env = {**os.environ, 'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'FAKE': str(self.tmp),
                'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
                'BOAT_WIFI_PASSWORD': 'wifipass1', 'ROUTER_PASSWORD': ''}
-        run = subprocess.run(['bash', str(ROOT / 'router_setup.sh'), '--dry-run', '--state-dir', str(self.tmp / 'state')],
-                             env=env, capture_output=True, text=True, timeout=60)
-        self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn('use: ./hw.sh router plan', run.stderr)
-        self.assertIn('Plan only', run.stdout)
-        self.assertEqual(self.writes(), '')
-        (self.tmp / 'ssh.log').unlink()
-        run = subprocess.run(['bash', str(ROOT / 'router_setup.sh')], env=env, capture_output=True, text=True, timeout=60)
+        (self.tmp / 'ssh.log').unlink(missing_ok=True)
+        run = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'router'], env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn('Usage:', run.stdout)
-        self.assertFalse((self.tmp / 'ssh.log').exists())     # no arguments: usage, never apply
+        self.assertFalse((self.tmp / 'ssh.log').exists())     # no verb: usage, never apply
 
     def test_rollback_refuses_more_than_200_differing_keys(self):
         backups = self.tmp / 'state' / ENV['ROUTER_IP']

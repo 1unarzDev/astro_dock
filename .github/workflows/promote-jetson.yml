@@ -11,7 +11,7 @@ on:
         description: 'Successful main-branch build run'
         required: true
       digest:
-        description: 'Immutable digest validated by promote_jetson.sh'
+        description: 'Immutable digest validated by ./hw.sh jetson apply'
         required: true
       validation:
         description: 'Successful local CUDA and live-camera validation output'
