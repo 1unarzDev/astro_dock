@@ -180,9 +180,26 @@ sudo reboot
 
 `jetson` sets the persistent MAXN_SUPER power mode, a 16 GB `/swapfile` and the headless multi-user target; `docker` and `gpu` keep JetPack's Docker and toolkit and add the user to `docker`. After the reboot, start the container as in [Image publishing and deployment](#image-publishing-and-deployment), then run `./clone_optional.sh --profile jetson`: it clones the repositories [`optional_repos.yaml`](optional_repos.yaml) marks for the Jetson (mhseals_hardware, mhseals_nav, mhseals_testing; the image bakes none of them) and builds them inside `roboboat_dev`. The ZED SDK downloads the camera's factory calibration by serial number on first use (through the gateway) and keeps it in the `zed_settings` volume.
 
+#### Device tooling
+
+`./hw.sh KIND VERB [ARGS]` drives the robot's network devices and computers; `./hw.sh` lists the kinds, `./hw.sh KIND --help` the verbs.
+
+| Verb | Does | Changes the device |
+| --- | --- | --- |
+| `status` | current state | never |
+| `plan` | what `apply` would change | never |
+| `apply` | the change, after a typed confirmation | yes; network changes roll back on a timer unless verified or kept |
+| `verify` | state against the profile | never |
+| `rollback` | back to the saved or previous state | yes |
+
+- **Drivers:** `devices/<kind>/<driver>.sh` must define `driver_status`, `driver_plan`, `driver_apply`, `driver_verify` and `driver_rollback`; `hw.sh` refuses a driver missing one. Other `driver_<verb>` functions are extra verbs.
+- **Profiles:** `config/profiles/<profile>/`. `profile.env` names the network env and the host registry; each `<kind>.yaml` picks a driver and holds its settings (`$KEY` reads the network env). `ASTRO_PROFILE` picks one when there are several.
+- **Layers:** environment > `.env` (per machine, secrets; [`.env.example`](.env.example)) > profile. `HW_<PATH>` overrides a YAML value (`HW_MEASURE_SECONDS=3`). A YAML names its secrets' `.env` keys under `credentials:`, never the values.
+- **Old commands:** `router_setup.sh`, `ubiquiti_setup.sh`, `link_measure.sh`, `lidar_setup.sh` and `promote_jetson.sh` forward to `hw.sh` for one release; `boat_hosts.sh deploy|keys` stays.
+
 #### Boat network
 
-Everything boat-specific is here; the rest of this README is project-agnostic. The boat LAN is defined once in [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range, reservations and DNS.
+Everything boat-specific is here; the rest of this README is project-agnostic. The RoboBoat profile is [`config/profiles/roboboat/`](config/profiles/roboboat); its device YAMLs read the boat LAN from [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range, reservations, DNS and device addresses.
 
 The operator laptop (tranquility) is the gateway and reaches the boat over a bridged Ubiquiti link, so every device below is on one flat layer-2 LAN, `192.168.0.0/24`:
 
@@ -203,7 +220,7 @@ flowchart LR
 
 | Address | Device | Source |
 | --- | --- | --- |
-| .1 | DD-WRT router: DHCP, DNS, Wi-Fi | static, `router_setup.sh` |
+| .1 | DD-WRT router: DHCP, DNS, Wi-Fi | static, `hw.sh router` |
 | .2 | Gateway laptop | static on its LAN profile |
 | .21 / .22 | Bullet AC / Rocket 5AC Lite management | set on each radio |
 | .100–.149 | DHCP pool | router |
@@ -219,33 +236,37 @@ flowchart LR
   | Frequency / width | 5165 MHz, 40 MHz | follows the AP |
   | Management address | static on `br0`, link-local alias on | static on `br0`, link-local alias on |
 
-  The addresses, MACs, roles and SSID are the `UBNT_*` values in `config/boat-network.env`. [`ubiquiti_setup.sh`](ubiquiti_setup.sh) uses them:
-  - `verify [--via tranquility]` is read-only. It pings the radios, router and boat computer, checks ARP against the MACs, and sends one UBNT discovery probe that prints each radio's model, firmware, SSID, mode and addresses.
-  - `snapshot bullet|rocket` saves the radio's `/tmp/system.cfg` under `~/.local/state/astro_dock/ubiquiti/` (mode 600). It is also an airOS backup you can upload in the web UI (System → Configuration Management).
-  - `status bullet|rocket` is read-only. It prints the radio's `mca-status`, `wstalist` and `status.cgi` output, its radio/wireless config keys (secrets dropped) and its uptime.
-  - `apply bullet|rocket [--dry-run] [KEY=VALUE ...]` changes only existing keys, given on the command line or else listed in `UBNT_<RADIO>_CFG`, after a snapshot and after you type `APPLY`. `--dry-run` stops after the diff. It runs the change as a RAM-only trial (`rc.softrestart test`) with a timer that reboots the radio into its saved config after 300 s. Typing `KEEP` writes the trial to flash and cancels the timer, so until then a reboot or power cycle also restores the saved config.
+  `./hw.sh radio` uses `radio.yaml` (SSID, roles, MACs, default `cfg` keys) and `UBNT_*_IP`:
 
-  `apply` handles one radio at a time and refuses while the other radio is unreachable or has a pending trial. It also refuses management-address keys and link-shared keys (SSID, security, WPA key, mode, WDS, frequency, width, channel shift, DFS, scan list, country), because changing them on one radio drops the link. Change those in the airOS UI, the far radio first and then the near one. The exception is the AP's own frequency, center, width and `ieee_mode`: `apply` trials them on the AP, because the station re-scans and follows, and the timer restores the AP if it does not. It refuses a frequency outside a restricted station scan list. Run `status`, `snapshot` and `apply` from a boat-LAN host, or set `UBNT_JUMP`.
-- **Link measurement.** [`link_measure.sh`](link_measure.sh), run on tranquility:
-  - `measure` is read-only. It reads both radios' `status`, then runs iperf3 TCP and UDP to and from the boat computer (`BOAT_TRANSPORT_IP`, login `BOAT_HOST_USER` from `.env`) with ping running alongside. UDP runs at 70% of the TCP rate in the same direction. It prints a summary and saves the raw output and a JSON summary under `~/.local/state/astro_dock/link/` (mode 600). It never runs a site survey, because on airOS a survey leaves the channel and drops the link. iperf3 comes from the `roboboat_dev` image (`packages.txt`); measure fails when a host and its container both lack it (install it with `astro-ros-install iperf3`).
-  - `propose [FILE]` is offline. From the latest summary it prints each setting it would change on each radio, with the reason, and the `ubiquiti_setup.sh apply … --dry-run` and `apply` commands, channel and width first. The rules: 40 MHz only on a quiet channel (noise ≤ −88 dBm, SNR ≥ 25 dB) and 20 MHz on a noisy or weak one; a channel only from `LINK_FREQ`, with DFS channels flagged; airMAX polling on and PtP mode on the AP; ACK fixed for `LINK_RANGE_M` (default 1000 m) rather than auto, since the boat moves; transmit power aimed at −65 to −50 dBm at the peer, both where it was measured and at `LINK_RANGE_M`; and traffic shaping off. Power only goes down unless `LINK_TXPOWER_MAX` is set (check EIRP first). It proposes only keys that are already in the radio's config.
-- **Lidar.** A Velodyne VLP16 (`VLP-16-A`, firmware 3.0.41.1) with a static address and no login. It sends 2368/8308 UDP by unicast to the host running the driver, the Orin (.153). That is about 8 Mbit/s with single returns and twice that with `Dual`, and unicast keeps it off the radio link. The `LIDAR_*` values in `config/boat-network.env` hold the address, data host, ports, RPM, returns and FOV, and mhseals_nav reads `LIDAR_IP` from there. [`lidar_setup.sh`](lidar_setup.sh) uses its HTTP API (`/cgi/*.json`, `/cgi/setting*`):
-  - `verify` is read-only. It prints the model, firmware, network, destination, RPM, returns, FOV, phase lock and laser/motor state, and lists each `LIDAR_*` value the sensor differs from (exit 3).
-  - `snapshot` saves `settings.json`, `status.json` and `info.json` as one file under `~/.local/state/astro_dock/lidar/` (mode 600).
-  - `apply` validates every value, snapshots, shows the diff, and after you type `APPLY` posts only the differing keys, then saves once. Netmask and gateway go last and add a reset, which needs DHCP off and keeps the LAN host and data host in the subnet. The new values must be active once the sensor is back. It never moves `LIDAR_IP`; re-address the sensor in its web UI.
+  | Verb | What it does |
+  | --- | --- |
+  | `verify [--via tranquility]` | read-only: ping and ARP each radio, ping router and boat computer, one UBNT discovery probe |
+  | `status NAME` | read-only: `mca-status`, `wstalist`, `status.cgi`, radio/wireless keys (secrets dropped), uptime |
+  | `snapshot NAME` | `/tmp/system.cfg` to `~/.local/state/astro_dock/ubiquiti/` (mode 600; also an airOS backup to upload) |
+  | `plan NAME [KEY=VALUE ...]` | snapshot and diff only (= `apply --dry-run`) |
+  | `apply NAME [KEY=VALUE ...]` | RAM-only trial after `APPLY`; reboots into the saved config after 300 s unless `KEEP` |
+  | `rollback NAME` | ends a pending trial now (reboot into the saved config) |
+  | `measure` | read-only: both radios' status, iperf3 TCP/UDP both ways to the boat computer with ping alongside; saved under `~/.local/state/astro_dock/link/` |
+  | `propose [FILE]` | offline: setting changes per radio from the latest measurement, as `plan`/`apply` commands |
 
-  Run it from a boat-LAN host, or set `LIDAR_JUMP=tranquility`. **Recovery:** the VLP16 has no reset switch. Find its address from `ip neigh` (MAC `LIDAR_MAC`) or the source of its UDP packets, put a host on that subnet, fix the address in the web UI, then Save Configuration and Reset System. The factory default is `192.168.1.201/24`.
-- **Credentials** are never in the repo. Copy [`.env.example`](.env.example) to the ignored `.env` (or symlink it to a mode-600 file elsewhere). `ubiquiti_setup.sh` reads `UBNT_*` from it, `link_measure.sh` reads `BOAT_HOST_*` and `router_setup.sh` reads `ROUTER_*` and `BOAT_WIFI_PASSWORD`; empty values fall back to prompts.
+  - `apply` takes one radio at a time and refuses while the peer is unreachable or mid-trial. It refuses management-address and link-shared keys (change those in the airOS UI, far radio first). The AP's frequency, center, width and `ieee_mode` are allowed (the station follows), but not outside the station's scan list, and `KEEP` on such a trial needs the peer to answer.
+  - `propose`: 40 MHz only at noise ≤ −88 dBm and SNR ≥ 25 dB, 20 MHz when noisy; a channel only from `propose.freq` (DFS flagged); polling on, PtP on the AP; ACK fixed for `propose.range_m`; power aimed at −65 to −50 dBm at the peer and raised only with `propose.txpower_max`; shaping off; existing keys only.
+  - Never a site survey: on airOS it leaves the channel and drops the link. iperf3 runs on each host or in its `measure.container` and is never installed. Run from a boat-LAN host or set `UBNT_JUMP`.
+- **Lidar.** A Velodyne VLP16 (`VLP-16-A`, firmware 3.0.41.1) with a static address and no login. It sends 2368/8308 UDP by unicast to the host running the driver, the Orin (.153): about 8 Mbit/s with single returns, twice with `Dual`, and unicast keeps it off the radio link. Addresses are `LIDAR_*` in `config/boat-network.env` (mhseals_nav reads `LIDAR_IP`); ports, RPM, returns, FOV and MAC are in `lidar.yaml`. `./hw.sh lidar` uses its HTTP API:
+  - `status`, `plan` and `verify` are read-only; `verify` exits 3 when a profile value differs. `snapshot` saves settings, status and info to `~/.local/state/astro_dock/lidar/`.
+  - `apply` validates, snapshots and after `APPLY` posts only the differing keys, then saves once. Netmask and gateway go last with a reset, which needs DHCP off, and must be active afterwards. It never moves the address. `rollback [SNAPSHOT]` re-applies a snapshot the same way.
+  - Run from a boat-LAN host or set `LIDAR_JUMP=tranquility`. **Recovery:** no reset switch. Find it by `ip neigh` (its MAC) or its UDP source, put a host on that subnet, fix it in the web UI, Save Configuration, Reset System. Factory default `192.168.1.201/24`.
+- **Credentials** are never in the repo. Copy [`.env.example`](.env.example) to the ignored `.env` (or symlink it to a mode-600 file elsewhere) and fill the keys of [`secrets.env.example`](config/profiles/roboboat/secrets.env.example); the YAMLs name which key each device reads. Empty router passwords are prompted.
 - **Radio recovery.** If a radio is unreachable at its LAN address, connect a host to the radio's PoE LAN port and browse to the link-local address that `verify` printed (give the host a `169.254.0.0/16` address). As a last resort, hold the reset button for about 10 s to restore factory defaults (`192.168.1.20`). Then upload the latest snapshot, or set the values in the table plus the WPA key, and run `verify`.
 - **To fill** (owner):
   - Physical placement and wiring: which end the router and each radio sit on, and what connects to the laptop's `enp0s20f0u1`.
   - Where the team keeps the radio and router passwords and the WPA key, outside `.env`.
   - The Rocket's own default gateway is `192.168.1.1`, which is off this subnet; set it to the router in the airOS UI if the radio needs NTP or firmware checks.
 
-- **Router.** [`router_setup.sh`](router_setup.sh) configures a DD-WRT router over SSH from those values: DHCP, DNS and WPA2 Wi-Fi, with router WAN/NAT disabled. Addresses, SSID and credentials are prompted. `--dry-run` inspects without changing anything; applying confirms, backs up NVRAM when supported, reboots and verifies. State lives in the ignored `router_setup_state/`.
+- **Router.** `./hw.sh router` configures the DD-WRT router over SSH from `router.yaml` (name/SSID/admin user, time zone) and the addresses: DHCP with reservations, DNS and WPA2 Wi-Fi, router WAN/NAT off. `plan` inspects only. `apply` confirms, backs up NVRAM when supported, commits one transaction that restores the previous values 300 s after boot unless the post-reboot `verify` passes, and reboots. `rollback` restores a backup; `key` prints the router key. State: the ignored `router_setup_state/` if present, else `~/.local/state/astro_dock/router/`.
 - **Reservations** sit above the DHCP pool. `./setup.linux.sh --components boat` on each boat computer drops any hand-set wired address so DHCP supplies it, the gateway and DNS, turns Wi-Fi off, and raises `net.core.rmem_max` to the 4 MiB that `config/fastdds.xml` requests.
 
-- **Devices and roles.** [`config/devices.yaml`](config/devices.yaml) says which computer has which role: `blastoise-odroid` is the boat computer (MAVROS, thrusters), `blastoise-jetson` the camera host (GPU, ZED, lidar) and `tranquility` the operator. It names no addresses; each host joins `config/boat-network.env` on its name (a `$KEY` or its `STATIC_LEASES` reservation). mhseals_testing reads it to place each part of the stack on its host and to start or stop it there over ssh and `docker exec`; what each role runs lives in the robot's own device profiles. The ssh key lives in `~/.config/mhseals/ssh/` (`id_ed25519` and `known_hosts`), which the container mounts (a container from before that mount needs a Compose recreate); on the operator computer, `./boat_hosts.sh keys` (or `./setup.linux.sh --components operator-key`) creates it if missing, installs it in each other host's `authorized_keys` through your own ssh and records the host keys, and is safe to rerun. A computer finds itself in the registry by its host name, which prebuild gives the container; on one it cannot recognise, set `self: <host>` in `~/.config/mhseals/devices.yaml`.
+- **Devices and roles.** [`config/devices.yaml`](config/devices.yaml) says which computer has which role: `blastoise-odroid` is the boat computer (MAVROS, thrusters), `blastoise-jetson` the camera host (GPU, ZED, lidar) and `tranquility` the operator. It names no addresses; each host joins `config/boat-network.env` on its name (a `$KEY` or its `STATIC_LEASES` reservation). mhseals_testing reads it to place each part of the stack on its host and to start or stop it there over ssh and `docker exec`; what each role runs lives in the robot's own device profiles. The ssh key lives in `~/.config/mhseals/ssh/` (`id_ed25519` and `known_hosts`), which the container mounts (a container from before that mount needs a Compose recreate); on the operator computer, `./hw.sh hosts keys` (or `./setup.linux.sh --components operator-key`) creates it if missing, installs it in each other host's `authorized_keys` through your own ssh and records the host keys, and is safe to rerun. A computer finds itself in the registry by its host name, which prebuild gives the container; on one it cannot recognise, set `self: <host>` in `~/.config/mhseals/devices.yaml`.
 
 - **Gateway.** On any Linux host whose LAN interface has `GATEWAY_IP`, `./setup.linux.sh --components gateway` installs `astro-gateway.service`: IPv4 forwarding and NAT of `BOAT_SUBNET` through the host's normal routing (WARP when connected). Keep the LAN and uplink on different subnets; with NetworkManager a dispatcher marks LAN profiles `never-default`, otherwise configure the boat interface without a default route.
 
@@ -317,10 +338,10 @@ For a persistent ARM64 build server, register a GitHub runner with `self-hosted`
 Runtime tags select the current validated image, with `-prev` and `-old` as rollback generations; `-next` and candidate slots are staging. Promote the Jetson image from a machine with Bash, SSH, `jq` and an authenticated GitHub CLI:
 
 ```bash
-./promote_jetson.sh user@your-jp6-host
+./hw.sh jetson apply user@your-jp6-host
 ```
 
-The helper takes the latest successful `main` build's candidate (artifacts expire after 30 days; an optional second argument picks a run), validates it on the Jetson over SSH (ROS, non-root CUDA, live ZED frames; isolated domain 223; stop any camera publisher first; reuses the dev container's `zed_resources` and `zed_settings` volumes, so start `roboboat_dev` once beforehand), then waits for [hosted CI](.github/workflows/promote-jetson.yml) to rotate the tags. `ASTRO_JETSON_GATEWAY` sets the SSH gateway (empty for direct); the host must run L4T R36. Manual diagnostic: `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST`.
+The helper takes the latest successful `main` build's candidate (artifacts expire after 30 days; an optional second argument picks a run), validates it on the Jetson over SSH (ROS, non-root CUDA, live ZED frames; isolated domain 223; stop any camera publisher first; reuses the dev container's `zed_resources` and `zed_settings` volumes, so start `roboboat_dev` once beforehand), then waits for [hosted CI](.github/workflows/promote-jetson.yml) to rotate the tags. `jetson.yaml` sets the family and the SSH gateway (`HW_GATEWAY=` for direct); the host must run L4T R36. `plan` only resolves the candidate, `verify` checks the host's tag, `rollback HOST RUN_ID` promotes an earlier build. Manual diagnostic: `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST`.
 
 For standalone deployment on a Jetson, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 6 adapter (warning when `roboboat_dev` runs an image older than its tag), and Compose restarts `roboboat_dev` after reboots unless it was stopped:
 
@@ -333,13 +354,13 @@ docker exec -it roboboat_dev bash
 
 Rerun `up` to update; for offline deployment, `docker save` / `docker load` the ARM64 image and drop `--pull always`.
 
-To update every boat computer from one shell, [`boat_hosts.sh`](boat_hosts.sh) deploys to the ssh hosts of [`config/devices.yaml`](config/devices.yaml) (the host name is the ssh destination; `BOAT_REPOS` and `BOAT_DEVICES` override the repositories and the registry):
+To update every boat computer from one shell, [`boat_hosts.sh`](boat_hosts.sh) (= `./hw.sh hosts apply`) deploys to the ssh hosts of [`config/devices.yaml`](config/devices.yaml) (the host name is the ssh destination; repositories in `hosts.yaml`, container and workspace in the registry):
 
 ```bash
 ./boat_hosts.sh deploy [--image lunarzdev/astro@sha256:DIGEST] [HOST...]
 ```
 
-`deploy` backs up dirty state under `~/.local/state/astro_dock/boat_hosts/` on each host, fast-forwards astro_dock and the application repositories to `origin/main` (checking out `main` first), deletes dangling symlink-install links and runs `colcon build --symlink-install` in `roboboat_dev`. `--image` first commits the running container as `astro-rollback:TIMESTAMP`, then runs the commands above; the named ZED volumes persist. Renaming the old container is no fallback, because Compose finds and recreates it by its labels. Parts are started from the `boat_test` TUI.
+`deploy` backs up dirty state under `~/.local/state/astro_dock/hosts/` on each host, fast-forwards astro_dock and the application repositories to `origin/main` (checking out `main` first), deletes dangling symlink-install links and runs `colcon build --symlink-install` in `roboboat_dev`. `--image` first commits the running container as `astro-rollback:TIMESTAMP`, then runs the commands above; the named ZED volumes persist. Renaming the old container is no fallback, because Compose finds and recreates it by its labels. `./hw.sh hosts status|plan|verify` only read (heads against `origin/main` by `ls-remote`), and `./hw.sh hosts rollback astro-rollback:TIMESTAMP [HOST...]` recreates on the rollback image and builds. Parts are started from the `boat_test` TUI.
 
 The [retention workflow](.github/workflows/registry-retention.yml) keeps bounded candidate slots and release history. Inspect registry state without mutations using `.github/scripts/registry-retention.py --repository lunarzdev/astro audit`.
 
