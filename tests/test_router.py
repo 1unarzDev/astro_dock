@@ -99,8 +99,8 @@ class Router(unittest.TestCase):
         backups.mkdir(mode=0o700, exist_ok=True)
         values = {'lan_ipaddr': ENV['ROUTER_IP'],
                   **{'extra_%d' % i: 'old' for i in range(201)}}
-        (backups / 'nvram-20260101-000000.b64').write_text(''.join(
-            '%s\t%s\n' % (key, base64.b64encode(value.encode() + b'\n').decode())
+        (backups / 'nvram-20260101-000000.hex').write_text(''.join(
+            '%s\t%s\n' % (key, (value.encode() + b'\n').hex())
             for key, value in values.items()))
         run = self.hw('rollback', stdin='1\nRESTORE\n')
         self.assertNotEqual(run.returncode, 0)
