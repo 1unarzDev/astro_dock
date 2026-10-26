@@ -608,7 +608,7 @@ driver_rollback() {
     [[ -z ${want[rc_startup]+x} ]] || warn "rc_startup differs in $selected; it is left as is (the auto-revert uses it)."
     unset 'want[rc_startup]' 'want[astro_prev_rc_startup]'
     # Keep this tool's key and sshd: without them the restore could never be confirmed.
-    auth=${want[sshd_authorized_keys]-$(backup_value "$BACKUP_FILE" sshd_authorized_keys)}
+    auth=${want[sshd_authorized_keys]-$(backup_value "$BACKUP_FILE" sshd_authorized_keys || true)}
     grep -Fq -- "$PUBLIC_KEY" <<<"$auth" || want[sshd_authorized_keys]=${auth:+$auth$'\n'}$PUBLIC_KEY
     [[ ${want[sshd_enable]-1} == 1 ]] || want[sshd_enable]=1
     ((${#want[@]})) || { info "The router already matches $selected; nothing to restore."; return; }
