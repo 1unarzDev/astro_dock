@@ -72,6 +72,14 @@ class BannerTest(unittest.TestCase):
         self.assertEqual([len(line) for line in text.splitlines()],
                          [len(line) for line in self.render(90, 30, charset='unicode').splitlines()])
 
+    def test_ascii_fallback_triggers(self):
+        self.assertTrue(astro_banner.wants_ascii('auto', {'LANG': 'C'}))
+        self.assertTrue(astro_banner.wants_ascii('unicode', {'ASTRO_BANNER_CHARSET': 'ascii'}))
+        self.assertFalse(astro_banner.wants_ascii('ascii', {'ASTRO_BANNER_CHARSET': 'unicode'}))
+        self.assertFalse(astro_banner.wants_ascii('unicode', {'LANG': 'C'}))
+        self.env['LANG'] = 'C'
+        self.render(90, 30, charset='auto').encode('ascii')
+
     def test_cache_ttl(self):
         cache = {'nodes': {'t': 100.0, 'key': '42//', 'value': 3}}
         self.assertFalse(stats.stale(cache, 'nodes', '42//', 30, 120))
@@ -81,7 +89,9 @@ class BannerTest(unittest.TestCase):
 
     def test_cache_dir_falls_back_when_runtime_dir_is_unusable(self):
         # A missing $XDG_RUNTIME_DIR left the refresher unable to write: rows stayed pending for good.
-        self.assertEqual(stats.cache_path({'XDG_RUNTIME_DIR': '/nonexistent/run'}).parent, Path('/tmp'))
+        private = stats.cache_path({'XDG_RUNTIME_DIR': '/nonexistent/run'}).parent
+        self.assertEqual(private, Path('/tmp/astro-%d' % os.getuid()))
+        self.assertEqual(os.lstat(str(private)).st_mode & 0o777, 0o700)
         with tempfile.TemporaryDirectory() as run:
             self.assertEqual(stats.cache_path({'XDG_RUNTIME_DIR': run}).parent, Path(run))
 

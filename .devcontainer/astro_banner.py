@@ -188,6 +188,20 @@ def color_depth(setting, env):
     return 8 if '256' in env.get('TERM', '') else 4
 
 
+def wants_ascii(setting, env):
+    """ASTRO_BANNER_CHARSET=ascii|unicode wins, then config charset; auto falls back to ASCII
+    when the locale names a non-UTF-8 charset (python3 -I coerces its own stdout to UTF-8 under
+    LANG=C, so the locale is read directly) or the output encoding is not UTF-8. An unset locale
+    (a container) is trusted to the output encoding."""
+    setting = env.get('ASTRO_BANNER_CHARSET') or setting
+    if setting in ('ascii', 'unicode'):
+        return setting == 'ascii'
+    locale = env.get('LC_ALL') or env.get('LANG') or env.get('LC_CTYPE') or ''  # not LC_CTYPE first: Python sets it to C.UTF-8 under LANG=C
+    if locale and 'utf' not in locale.lower():
+        return True
+    return 'utf' not in (sys.stdout.encoding or '').lower()
+
+
 def terminal_size(env):
     try:
         size = os.get_terminal_size(sys.stdout.fileno())
@@ -216,8 +230,7 @@ def render(env, cols, rows, config=None, now=None):
             break
     else:
         return ''
-    charset = config.get('charset', 'auto')
-    ascii_only = charset == 'ascii' or (charset == 'auto' and 'utf' not in (sys.stdout.encoding or '').lower())
+    ascii_only = wants_ascii(config.get('charset', 'auto'), env)
     return to_text([[]] + lines, color_depth(config.get('color', 'auto'), env), ascii_only)
 
 

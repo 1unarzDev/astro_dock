@@ -7,18 +7,35 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import tempfile
 import time
 
 
 # ---------------------------------------------------------------- cache
 
+def runtime_dir(env):
+    """A directory only this user can write: $XDG_RUNTIME_DIR, else /tmp/astro-UID.
+
+    $XDG_RUNTIME_DIR can name a directory that does not exist (a container, su, ssh), and
+    /tmp is world-writable: the fallback is made 0700 and used only if it is ours, not a link.
+    """
+    run = env.get('XDG_RUNTIME_DIR') or ''
+    if run and os.path.isdir(run) and os.access(run, os.W_OK):
+        return run
+    mine = '/tmp/astro-%d' % os.getuid()
+    try:
+        os.mkdir(mine, 0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(mine)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise OSError('unsafe %s' % mine)
+    return mine
+
+
 def cache_path(env):
-    # $XDG_RUNTIME_DIR can name a directory that does not exist (a container, su, ssh):
-    # a refresher that cannot write there would leave every probe row pending for good.
-    run = env.get('XDG_RUNTIME_DIR') or '/tmp'
-    if not (os.path.isdir(run) and os.access(run, os.W_OK)):
-        run = '/tmp'
-    return Path(run) / ('astro-banner-%d.json' % os.getuid())
+    return Path(runtime_dir(env)) / 'astro-banner.json'
 
 
 def read_cache(path):
@@ -37,13 +54,15 @@ def probe_repos(ws):
     import subprocess
     roots = [ws] + sorted(p.parent for p in (ws / 'src').glob('*/.git')) + sorted(
         p.parent for p in (ws / 'src').glob('*/*/.git'))
-    repos = []
+    repos, deadline = [], time.time() + 6  # one budget for all repos, not 3 s each
     for root in roots:
+        if time.time() > deadline:
+            break
         if not (root / '.git').exists():
             continue
         try:
             out = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-b'],
-                                 capture_output=True, text=True, timeout=3).stdout.splitlines()
+                                 capture_output=True, text=True, timeout=max(min(3, deadline - time.time()), 0.1)).stdout.splitlines()
         except subprocess.TimeoutExpired:
             continue  # a huge repo costs its own row, not the rest
         head = out[0] if out else ''
@@ -108,9 +127,10 @@ def refresh(path, jobs):
                 cache[name] = {'t': time.time(), 'key': key, 'value': probe()}
             except Exception:
                 cache[name] = {'t': time.time(), 'key': key, 'value': None}
-            tmp = Path('%s.%d' % (path, os.getpid()))  # per job: a slow probe holds back no other row
-            tmp.write_text(json.dumps(cache))
-            os.replace(str(tmp), str(path))
+            fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix='.banner-')  # O_EXCL, 0600
+            with os.fdopen(fd, 'w') as f:  # per job: a slow probe holds back no other row
+                f.write(json.dumps(cache))
+            os.replace(tmp, str(path))
     finally:
         try:
             lock.unlink()
@@ -318,14 +338,17 @@ def collect(env, config, ws, now):
     keys = {'repos': str(ws), 'lan': json.dumps(hosts, sort_keys=True),
             'nodes': '%s/%s/%s' % (env.get('ROS_DOMAIN_ID', '0'), env.get('RMW_IMPLEMENTATION', ''),
                                    env.get('ASTRO_DDS_ADDRESS', ''))}
-    path = cache_path(env)
-    cache = read_cache(path)
+    try:
+        path = cache_path(env)
+    except OSError:  # no safe place for a cache: rows stay pending, the banner still shows
+        path = None
+    cache = read_cache(path) if path else {}
     jobs = [job for job in (('repos', keys['repos'], lambda: probe_repos(ws)),
                             ('nodes', keys['nodes'], lambda: probe_nodes(dict(env))),
                             ('lan', keys['lan'], lambda: probe_lan(hosts)))
             if job[0] in wanted and (job[0] != 'lan' or hosts) and (job[0] != 'nodes' or env.get('ROS_DISTRO'))
             and stale(cache, job[0], job[1], float(ttl.get(job[0], 60)), now)]
-    if jobs:
+    if jobs and path:
         refresh(path, jobs)
     context = {'env': env, 'config': config, 'ws': ws, 'now': now, 'cache': cache, 'keys': keys}
     rows = []

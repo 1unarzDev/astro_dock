@@ -58,7 +58,12 @@ fi
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
   local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override peers run="${XDG_RUNTIME_DIR:-/tmp}"
-  [[ -d "$run" && -w "$run" ]] || run=/tmp
+  if [[ ! -d "$run" || ! -w "$run" ]]; then
+    # World-writable /tmp: use a private per-user directory, and only if it is ours, a real directory, 0700.
+    run="/tmp/astro-$(id -u)"
+    mkdir -m 700 "$run" 2>/dev/null
+    [[ -d "$run" && ! -L "$run" && -O "$run" && "$(stat -c %a "$run" 2>/dev/null)" == 700 ]] || return 0
+  fi
   subnet="${ASTRO_DDS_SUBNET:-$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
   # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported

@@ -4,7 +4,8 @@
 
 # auto follows COLORTERM/TERM and NO_COLOR; or truecolor | 256 | 16 | none.
 color: auto
-# auto uses Unicode when the output encoding is UTF-8; or unicode | ascii.
+# auto uses Unicode when the locale and output encoding are UTF-8; or unicode | ascii.
+# ASTRO_BANNER_CHARSET=ascii in the environment overrides this.
 charset: auto
 
 # Shown top to bottom, and trimmed from the bottom when the terminal is short.
