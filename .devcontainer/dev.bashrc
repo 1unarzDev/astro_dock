@@ -47,12 +47,12 @@ fi
 # mhseals_nav/config/fastdds_large_data.xml from their launch files.
 [[ -n "${ASTRO_RUN_MANAGED:-}" ]] || unset FASTDDS_BUILTIN_TRANSPORTS
 
-# Pin DDS to this host's address on the boat subnet. A viewer laptop may also be
+# Pin DDS to this host's address on the vessel subnet. A viewer laptop may also be
 # on Wi-Fi, WARP or Docker networks; left to choose, Fast DDS advertises every
 # interface and Cyclone binds the default-route one, so data goes nowhere while
 # discovery still lists the topics. Detected again by each new shell and by
 # rviz2, so a changed adapter or address only needs the process restarted.
-# Off the boat subnet (simulation, home) the static profile applies unchanged.
+# Off the vessel subnet (simulation, home) the static profile applies unchanged.
 # Set ASTRO_DDS_ADDRESS to force an address. Silent at shell start; ros_net -v
 # prints the choice, and the banner shows it too.
 # The vessel's network env, resolved once per shell tree by `hw.sh env` and exported as
@@ -76,11 +76,11 @@ __astro_profiles_missing() {
   [[ -z "${ASTRO_PROFILES:-}" ]] && grep -qs '^\[submodule "profiles"\]' "$ROS_WS/.gitmodules" \
     && ! compgen -G "$ROS_WS/profiles/*/profile.yaml" >/dev/null
 }
-__ASTRO_PROFILES_HINT='profiles submodule not initialised: no vessel network env, DDS not pinned to the boat subnet. Run: git submodule update --init profiles'
+__ASTRO_PROFILES_HINT='profiles submodule not initialised: no vessel network env, DDS not pinned to the vessel subnet. Run: git submodule update --init profiles'
 
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
-  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override peers run="${XDG_RUNTIME_DIR:-/tmp}"
+  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned transport override peers run="${XDG_RUNTIME_DIR:-/tmp}"
   __astro_network_env >/dev/null    # here, not in a subshell, so the export reaches this shell
   [[ "${1:-}" != -v ]] || ! __astro_profiles_missing || echo "WARNING: $__ASTRO_PROFILES_HINT" >&2
   if [[ ! -d "$run" || ! -w "$run" ]]; then
@@ -89,15 +89,15 @@ ros_net() {
     mkdir -m 700 "$run" 2>/dev/null
     [[ -d "$run" && ! -L "$run" && -O "$run" && "$(stat -c %a "$run" 2>/dev/null)" == 700 ]] || return 0
   fi
-  subnet="${ASTRO_DDS_SUBNET:-$( . "$(__astro_network_env)" 2>/dev/null && echo "$BOAT_SUBNET")}"
+  subnet="${ASTRO_DDS_SUBNET:-$( . "$(__astro_network_env)" 2>/dev/null && echo "$LAN_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
   # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported
   # (remembered in __ASTRO_DDS_AUTO) is not an override and is detected again.
-  # Otherwise the kernel's source address toward the boat
-  # (a host with Wi-Fi and the boat link both on the subnet must use the route's
+  # Otherwise the kernel's source address toward the vessel
+  # (a host with Wi-Fi and the vessel link both on the subnet must use the route's
   # one), else the first interface primary address (SIOCGIFADDR) in the subnet;
   # secondaries such as a bridge's own are skipped; the image has no iproute2.
-  boat="$( . "$(__astro_network_env)" 2>/dev/null && echo "$BOAT_TRANSPORT_IP")"
+  transport="$( . "$(__astro_network_env)" 2>/dev/null && echo "$TRANSPORT_IP")"
   override="${ASTRO_DDS_ADDRESS:-}"
   [[ "$override" != "${__ASTRO_DDS_AUTO:-}" ]] || override=
   address="${override:-$(python3 -c '
@@ -118,7 +118,7 @@ for _, name in socket.if_nameindex():
         continue
     ip = ipaddress.ip_address(socket.inet_ntoa(raw[20:24]))
     if ip in net:
-        print(ip); break' "$subnet" "$boat" 2>/dev/null)}"
+        print(ip); break' "$subnet" "$transport" 2>/dev/null)}"
   # Loopback stays allowed so localhost-only discovery, whose peers are 127.0.0.1,
   # still works; Fast DDS never announces loopback beside a whitelisted address.
   if [[ -n "$address" ]]; then
@@ -137,7 +137,7 @@ tree.write(sys.argv[2], xml_declaration=True, encoding='UTF-8')
 EOF
     profile="$pinned"
     export CYCLONEDDS_URI="<CycloneDDS><Domain><General><Interfaces><NetworkInterface address=\"$address\"/></Interfaces></General></Domain></CycloneDDS>"
-    # The boat hosts (the gateway and every reserved address) are static peers: discovery
+    # The vessel hosts (the gateway and every reserved address) are static peers: discovery
     # reaches them by unicast even when the radio drops multicast. Multicast stays on, so
     # other hosts still find each other. A user-set ROS_STATIC_PEERS wins, as for the address.
     peers="$( . "$(__astro_network_env)" 2>/dev/null
@@ -161,7 +161,7 @@ EOF
   export ASTRO_DDS_ADDRESS="$address"
   [[ -n "$override" ]] || export __ASTRO_DDS_AUTO="$address"
   export FASTRTPS_DEFAULT_PROFILES_FILE="$profile" FASTDDS_DEFAULT_PROFILES_FILE="$profile"
-  [[ "${1:-}" != -v ]] || echo "DDS: ${address:-all interfaces (not on ${subnet:-the boat subnet})}"
+  [[ "${1:-}" != -v ]] || echo "DDS: ${address:-all interfaces (not on ${subnet:-the vessel subnet})}"
   return 0
 }
 ros_net
@@ -176,7 +176,7 @@ rviz2() {
   fi
   local middleware="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
   ros_net >/dev/null
-  # On the boat subnet ros_net already pins Fast DDS to one interface, the boat
+  # On the vessel subnet ros_net already pins Fast DDS to one interface, the vessel
   # one, so RViz stays on it. Elsewhere Cyclone keeps a viewer with Ethernet,
   # Wi-Fi and several addresses on one interface.
   if [[ -z "$ASTRO_DDS_ADDRESS" && "${ROS_DISTRO:-}" == jazzy && -f "/opt/ros/jazzy/lib/librmw_cyclonedds_cpp.so" ]]; then

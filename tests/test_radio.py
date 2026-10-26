@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ENV = dict(line.split('=', 1) for line in (ROOT / 'config/boat-network.env').read_text().splitlines()
            if line[:1].isalpha())
-ROCKET, BULLET, BOAT = ENV['UBNT_ROCKET_IP'], ENV['UBNT_BULLET_IP'], ENV['BOAT_TRANSPORT_IP']
+ROCKET, BULLET, BOAT = ENV['UBNT_ROCKET_IP'], ENV['UBNT_BULLET_IP'], ENV['TRANSPORT_IP']
 
 # Drops ssh options, logs host and command, and runs the command in that host's directory, with
 # the radio's /tmp, /usr/www and /proc/uptime mapped into it. An unknown host is unreachable.

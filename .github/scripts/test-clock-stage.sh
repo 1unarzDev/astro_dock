@@ -4,7 +4,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 # The shipped vessel (the profiles submodule), named, so the runner's hostname does not matter.
-export ASTRO_VESSEL=blastoise ASTRO_SECRETS=/nonexistent ASTRO_ENV_FILE=/dev/null
+export ASTRO_PROFILES="$root/tests/data/profiles" ASTRO_VESSEL=a ASTRO_SECRETS=/nonexistent ASTRO_ENV_FILE=/dev/null
 network_env="$("$root/hw.sh" env)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -34,11 +34,11 @@ clock() {
         "$root/setup.linux.sh" --non-interactive --yes --components clock "$@" 2>&1
 }
 
-read -r server subnet < <(. "$network_env"; echo "$BOAT_TIME_SERVER $BOAT_SUBNET")
+read -r server subnet < <(. "$network_env"; echo "$TIME_SERVER $LAN_SUBNET")
 
-# The boat server (ODROID): serves the subnet at local stratum 10, not orphan.
-out="$(ASTRO_NTP_ALLOW=boat clock)"
-grep -q "Serves time to $subnet " <<<"$out" || fail "boat subnet not resolved"
+# The LAN time server: serves the subnet at local stratum 10, not orphan.
+out="$(ASTRO_NTP_ALLOW=lan clock)"
+grep -q "Serves time to $subnet " <<<"$out" || fail "LAN subnet not resolved"
 grep -Fxq 'server time.cloudflare.com iburst' "$sources/boat.sources" || fail "public server missing"
 grep -Fxq 'makestep 1 3' "$sources/astro.conf" || fail "makestep missing"
 grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "allow missing"
@@ -48,9 +48,9 @@ grep -Fxq 'local stratum 10' "$sources/astro.conf" || fail "local stratum missin
 grep -Fxq "confdir $sources" "$etc/chrony.conf" || fail "confdir not added"
 grep -Fxq "sourcedir $sources" "$etc/chrony.conf" || fail "sourcedir not added"
 
-# The boat server also follows the operator laptops, listed first and never preferred.
-read -r -a operators < <(. "$network_env"; echo "$BOAT_OPERATOR_TIME_SERVERS")
-((${#operators[@]})) || fail "no operator time servers in boat-network.env"
+# The LAN server also follows the operator laptops, listed first and never preferred.
+read -r -a operators < <(. "$network_env"; echo "$OPERATOR_TIME_SERVERS")
+((${#operators[@]})) || fail "no operator time servers in the network env"
 for op in "${operators[@]}"; do
     grep -Fxq "server $op iburst" "$sources/boat.sources" || fail "operator $op not a source"
 done
@@ -63,21 +63,25 @@ grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "operator allow missing"
 ! grep -q 'local stratum' "$sources/astro.conf" || fail "operator serves at local stratum"
 ! grep -q "server ${operators[0]} " "$sources/boat.sources" || fail "operator follows itself"
 
-# A boat client: prefers the boat server, polls it fast, keeps the public fallback.
-out="$(ASTRO_NTP_SERVER=boat clock)"
-grep -q "at: $server\.$" <<<"$out" || fail "boat server not resolved"
+# A LAN client: prefers the LAN time server, polls it fast, keeps the public fallback.
+out="$(ASTRO_NTP_SERVER=lan clock)"
+grep -q "at: $server\.$" <<<"$out" || fail "LAN server not resolved"
 grep -q 'Prefers' <<<"$out" || fail "polling message missing"
-grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "boat server not preferred"
+grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "LAN server not preferred"
 grep -Fxq 'pool time.cloudflare.com iburst' "$sources/boat.sources" || fail "public fallback missing"
 grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "client does not answer the subnet"
 ! grep -q 'local stratum' "$sources/astro.conf" || fail "client serves at local stratum"
+# "boat" is lan's old name for one release: same result, one notice.
+out="$(ASTRO_NTP_SERVER=boat clock 2>&1)"
+grep -q 'ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan' <<<"$out" || fail "boat alias notice missing"
+grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "boat alias did not follow the LAN server"
 
 # A public server is neither preferred nor polled fast.
 out="$(ASTRO_NTP_SERVER=time.google.com clock)"
 ! grep -q 'Prefers' <<<"$out" || fail "polling message for a public server"
 grep -Fxq 'server time.google.com iburst' "$sources/boat.sources" || fail "public server preferred"
 
-# A private address is preferred like boat.
+# A private address is preferred like the LAN server.
 ASTRO_NTP_SERVER=10.1.2.3 clock >/dev/null
 grep -Fxq 'server 10.1.2.3 iburst prefer minpoll 2 maxpoll 4' "$sources/boat.sources" || fail "private server not preferred"
 
@@ -128,15 +132,15 @@ operator >/dev/null || fail "second operator run failed"
 ! grep -Eq '^(pacman|apt-get|dnf)' "$log" || fail "second run touched the package manager"
 ! grep -Fq 'disable' "$log" || fail "second run disabled again"
 grep -Fq 'enable --now' "$log" || fail "chrony not enabled"
-# A boat client (the Orin) switches from timesyncd to chrony the same way; a public client does not.
-for mode in boat time.google.com; do
+# A LAN client switches from timesyncd to chrony the same way; a public client does not.
+for mode in lan time.google.com; do
     rm -f "$stubs/chronyd"; touch "$state/timesyncd"
     : > "$log"
     PATH="$stubs:$safe" ASTRO_NTP_SERVER=$mode ASTRO_CHRONY_CONF="$etc/chrony.conf" \
         "$root/setup.linux.sh" --non-interactive --yes --dry-run --components clock >"$tmp/out.txt" 2>&1 || fail "$mode client run failed"
-    if [[ $mode == boat ]]; then
-        grep -Eq '^ +\$ sudo (pacman|apt-get|dnf)' "$tmp/out.txt" || fail "boat client: chrony not installed"
-        grep -Fq 'disable --now systemd-timesyncd' "$tmp/out.txt" || fail "boat client: timesyncd not disabled"
+    if [[ $mode == lan ]]; then
+        grep -Eq '^ +\$ sudo (pacman|apt-get|dnf)' "$tmp/out.txt" || fail "LAN client: chrony not installed"
+        grep -Fq 'disable --now systemd-timesyncd' "$tmp/out.txt" || fail "LAN client: timesyncd not disabled"
     else
         ! grep -Eq 'sudo (pacman|apt-get|dnf)|disable' "$tmp/out.txt" || fail "public client switched to chrony"
     fi
@@ -169,7 +173,7 @@ clock >/dev/null
 ! grep -q 'rm -f' "$dlog" && [[ -e "$legacy" ]] || fail "removed an astro_clock container of another image"
 
 # Without a network env (an unmatched machine, or generic mode without the profiles submodule) the
-# plain clock stage still runs; only the boat and operator modes need the env, and they say so.
+# plain clock stage still runs; only the lan and operator modes need the env, and they say so.
 generic="$tmp/generic"
 mkdir -p "$generic/profiles"
 git -C "$root" ls-files -z | grep -zv '^profiles$' | tar -C "$root" --null -T - -cf - | tar -C "$generic" -xf -
@@ -183,8 +187,8 @@ for mode in unmatched generic; do
     }
     unclock --dry-run >/dev/null || fail "$mode: plain clock stage failed"
     unclock >/dev/null || fail "$mode: plain clock stage failed"
-    out="$(ASTRO_NTP_ALLOW=boat unclock --dry-run)" && fail "$mode: boat mode ran without a network env"
-    grep -q "need the vessel's network env" <<<"$out" || fail "$mode: boat mode error unclear"
+    out="$(ASTRO_NTP_ALLOW=lan unclock --dry-run)" && fail "$mode: lan mode ran without a network env"
+    grep -q "need the vessel's network env" <<<"$out" || fail "$mode: lan mode error unclear"
     out="$(env -u ASTRO_VESSEL "${vars[@]}" ASTRO_NETWORK_ENV="$tmp/missing.env" python3 "$dir/.devcontainer/astro-clock.py" 2>&1)" \
         && fail "$mode: astro-clock.py ran without a network env"
     [[ $(wc -l <<<"$out") == 1 && $out == astro-clock:* ]] || fail "$mode: astro-clock.py did not print one error line: $out"

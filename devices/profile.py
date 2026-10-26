@@ -41,7 +41,7 @@ KINDS = ('vessel', 'station')
 NOT_KINDS = ('profile', 'topology')
 IGNORED_HOSTNAMES = ('local', 'localhost')    # placeholders; prebuild names a dev container after its host
 VIRTUAL = re.compile(r'(lo|docker.*|veth.*|br-.*)$')
-DT_MODEL = '/proc/device-tree/model'                     # Jetson, ODROID: a board computer, never a station
+DT_MODEL = '/proc/device-tree/model'                     # Jetson and other boards: a board computer, never a station
 
 
 class Error(Exception):
@@ -384,12 +384,17 @@ def local_addrs():
     return out
 
 
+def lan_subnet(env):
+    """A vessel network env's LAN_SUBNET, else BOAT_SUBNET (its old name, for one release)."""
+    return env.get('LAN_SUBNET') or env.get('BOAT_SUBNET', '')
+
+
 def boat_lan(root, vessels, addrs):
-    """[(vessel, address, subnet)] for each local address inside a vessel's BOAT_SUBNET."""
+    """[(vessel, address, subnet)] for each local address inside a vessel's LAN_SUBNET (lan_subnet)."""
     out = []
     for vessel in vessels:
         try:
-            subnet = ipaddress.ip_network(root.envs[vessel].get('BOAT_SUBNET', ''), strict=False)
+            subnet = ipaddress.ip_network(lan_subnet(root.envs[vessel]), strict=False)
         except ValueError:
             continue
         out += [(vessel, a, subnet) for a in addrs if a in subnet]
@@ -403,7 +408,7 @@ def resolve(root_path):
     Host: --host, else the registry host named like the hostname or whose STATIC_LEASES MAC is a local
     permanent MAC. A host with the operator role is a control station (HW_SELF_MEMBER: the fleet's station
     member). Any other machine joins as a generic control station (roles: operator) by --host NAME, or by
-    an address inside exactly one vessel's BOAT_SUBNET (that vessel). A boat computer (a device-tree
+    an address inside exactly one vessel's LAN_SUBNET (that vessel). A boat computer (a device-tree
     model, a leased MAC or hostname of a non-operator host, a reserved or registry boat address) never
     joins as a station."""
     root = Root(root_path)

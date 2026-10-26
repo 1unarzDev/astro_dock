@@ -35,7 +35,7 @@ usage() {
     printf '       %s secrets check        the secrets file and the missing key names (never values)\n\n' "$HW_PROGRAM"
     printf 'Without a match, --vessel V (or ASTRO_VESSEL) picks the vessel; --host H (or ASTRO_HOST) the host.\n'
     printf 'An operator laptop is a control station: a registry host with the operator role, --host NAME\n'
-    printf 'of no registry, or an address on one vessel'"'"'s BOAT_SUBNET (never a boat computer).\n'
+    printf 'of no registry, or an address on one vessel'"'"'s LAN_SUBNET (never a boat computer).\n'
     if [[ -z $HW_PROFILES_ROOT ]]; then
         printf 'Generic mode: no profile root (ASTRO_PROFILES or the profiles/ submodule), so no device kinds.\n'
         return

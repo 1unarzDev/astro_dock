@@ -119,7 +119,7 @@ grep -qF "$(cat "$keydir/id_router.pub")" "$NV/sshd_authorized_keys" || fail "ro
 echo "router rollback ok"
 
 # stage_boat: the gateway host keeps its network even when GATEWAY_IP is not the first address.
-read -r gw subnet < <(. "$root/config/boat-network.env"; echo "$GATEWAY_IP $BOAT_SUBNET")
+read -r gw subnet < <(. "$root/config/boat-network.env"; echo "$GATEWAY_IP $LAN_SUBNET")
 other="${gw%.*}.77"
 mkdir -p "$tmp/host"
 cat >"$tmp/host/nmcli" <<'EOF'

@@ -3,7 +3,7 @@
 
     astro-clock.py [HOST ...]
 
-Without hosts it asks BOAT_TIME_SERVER and every STATIC_LEASES host from the
+Without hosts it asks TIME_SERVER and every STATIC_LEASES host from the
 vessel's network env (ASTRO_NETWORK_ENV, else `hw.sh env`, else the legacy
 config/boat-network.env). Hosts set up by `setup.linux.sh --components clock`
 with chrony answer; others show "no reply". Containers share the host clock,
@@ -41,7 +41,7 @@ def lan_hosts(path=None):
         key, sep, value = line.partition('=')
         if sep and not line.lstrip().startswith('#'):
             values[key.strip()] = ' '.join(shlex.split(value, comments=True))
-    hosts = [('time server', values['BOAT_TIME_SERVER'])] if values.get('BOAT_TIME_SERVER') else []
+    hosts = [('time server', values['TIME_SERVER'])] if values.get('TIME_SERVER') else []
     for lease in values.get('STATIC_LEASES', '').split():
         _, name, address = lease.split('=')
         hosts.append((name, address))

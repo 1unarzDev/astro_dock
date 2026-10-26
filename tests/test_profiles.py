@@ -5,6 +5,7 @@ hostname, a fake /sys/class/net and a fake driver. Nothing is contacted.
 """
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -84,6 +85,17 @@ class Profiles(unittest.TestCase):
         self.assertTrue(me['host'].startswith('none (no match'))
         self.assertTrue(me['vessel'].startswith('none'))
 
+    def test_an_unlisted_laptop_gets_the_vessel_domain_by_lan_subnet_or_its_old_name(self):
+        """LAN_SUBNET attaches the laptop; a network env that still says BOAT_SUBNET does too, for one release."""
+        for key in ('LAN_SUBNET', 'BOAT_SUBNET'):
+            with self.subTest(key=key):
+                env = self.root / 'a/network.env'
+                env.write_text(re.sub(r'^(LAN|BOAT)_SUBNET=', key + '=', env.read_text(), flags=re.M))
+                me = self.whoami(HW_ADDRS='10.0.1.57/24')
+                self.assertEqual((me['station'], me['vessel']), ('s', 'a (boat LAN 10.0.1.57 in 10.0.1.0/24)'))
+                run = self.hw('env', 'ROS_DOMAIN_ID', HW_ADDRS='10.0.1.57/24')
+                self.assertEqual((run.returncode, run.stdout.strip()), (0, '7'), run.stderr)
+
     def test_a_boat_computer_is_never_a_station(self):
         for extra, why in (({'HW_ADDRS': '10.0.1.10/24'}, 'address 10.0.1.10 belongs to a-pc'),     # a reservation
                            ({'HW_ADDRS': '10.0.1.1/24'}, 'address 10.0.1.1 belongs to a-router'),   # a registry address
@@ -98,7 +110,7 @@ class Profiles(unittest.TestCase):
                 self.assertNotEqual(run.returncode, 0)
                 self.assertIn('pass --vessel', run.stderr)
         self.nic('enp1s0', '02:aa:00:00:00:02')                                 # a-cam's MAC: the host, no station
-        me = self.whoami(hostname='roboboat', HW_ADDRS='10.0.1.57/24')
+        me = self.whoami(hostname='devcontainer', HW_ADDRS='10.0.1.57/24')
         self.assertTrue(me['host'].startswith('a-cam (MAC'))
         self.assertNotIn('station', me)
         me = self.whoami('--host', 'a-pc', HW_ADDRS='10.0.1.57/24')             # a named boat host stays one

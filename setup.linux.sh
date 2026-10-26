@@ -412,39 +412,42 @@ stage_operator_key() {
 }
 
 stage_clock() {
-    local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service boat_server boat_subnet peers=""
-    local chrony=false boat=false local_servers=() sources=/etc/chrony/astro-sources operators=() stratum=true
-    # "boat" names the boat time server and subnet from the profile network env, read only for
-    # the boat and operator modes: generic mode and an unmatched machine have none.
-    if [[ "${ASTRO_NTP_SERVER:-}" == boat || "$allow" == boat || "$allow" == operator ]]; then
+    local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service lan_server lan_subnet peers=""
+    local chrony=false lan=false local_servers=() sources=/etc/chrony/astro-sources operators=() stratum=true serve_lan=false
+    # "lan" names the vessel's time server and subnet (TIME_SERVER, LAN_SUBNET of the profile network
+    # env), read only for the lan and operator modes: generic mode and an unmatched machine have none.
+    # "boat" is lan's old name, for one release.
+    [[ "${ASTRO_NTP_SERVER:-}" != boat ]] || { echo "ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan" >&2; ASTRO_NTP_SERVER=lan; }
+    [[ "$allow" != boat ]] || { echo "ASTRO_NTP_ALLOW=boat is now ASTRO_NTP_ALLOW=lan" >&2; allow=lan; }
+    if [[ "${ASTRO_NTP_SERVER:-}" == lan || "$allow" == lan || "$allow" == operator ]]; then
         local env
-        env="$(network_env)" || { echo "ASTRO_NTP_SERVER/ASTRO_NTP_ALLOW boat and operator need the vessel's network env (hw.sh env)." >&2; exit 1; }
-        read -r boat_server boat_subnet < <(. "$env"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
-        read -r -a operators < <(. "$env"; printf '%s\n' "${BOAT_OPERATOR_TIME_SERVERS:-}")
+        env="$(network_env)" || { echo "ASTRO_NTP_SERVER/ASTRO_NTP_ALLOW lan and operator need the vessel's network env (hw.sh env)." >&2; exit 1; }
+        read -r lan_server lan_subnet < <(. "$env"; printf '%s %s\n' "$TIME_SERVER" "$LAN_SUBNET")
+        read -r -a operators < <(. "$env"; printf '%s\n' "${OPERATOR_TIME_SERVERS:-}")
     fi
     servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
-    # A client of the boat server also answers the boat subnet, so astro-clock.py sees every host.
-    [[ "${servers[*]}" == boat ]] && servers=("$boat_server") peers="$boat_subnet" boat=true
-    # The boat server also follows an operator laptop that has internet time; "operator" serves the
+    # A client of the LAN server also answers the LAN subnet, so astro-clock.py sees every host.
+    [[ "${servers[*]}" == lan ]] && servers=("$lan_server") peers="$lan_subnet" lan=true
+    # The LAN server also follows an operator laptop that has internet time; "operator" serves the
     # subnet from such a laptop, only while it is itself synchronized (no local stratum).
-    [[ "$allow" == boat ]] && allow="$boat_subnet"
-    [[ "$allow" == operator ]] && allow="$boat_subnet" stratum=false
-    # Only a time server on the boat (or another private address) is preferred and polled fast.
+    [[ "$allow" == lan ]] && allow="$lan_subnet" serve_lan=true
+    [[ "$allow" == operator ]] && allow="$lan_subnet" stratum=false
+    # Only a time server on the LAN (or another private address) is preferred and polled fast.
     for server in "${servers[@]}"; do
-        if $boat || [[ "$server" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]]; then
+        if $lan || [[ "$server" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]]; then
             local_servers+=("$server")
         fi
     done
     # Listed after the loop: an operator laptop is a source, never preferred over the internet.
-    [[ "${ASTRO_NTP_ALLOW:-}" == boat ]] && servers=("${operators[@]}" "${servers[@]}")
+    $serve_lan && servers=("${operators[@]}" "${servers[@]}")
     command -v chronyd >/dev/null && ! systemctl is-active --quiet systemd-timesyncd && chrony=true
-    # Serving time or following the boat server needs chrony (the boat query asks chrony): install it if missing and replace systemd-timesyncd with it.
+    # Serving time or following the LAN server needs chrony (the LAN query asks chrony): install it if missing and replace systemd-timesyncd with it.
     local switch=false
-    if { [[ -n "$allow" ]] || $boat; } && ! $IMMUTABLE; then
+    if { [[ -n "$allow" ]] || $lan; } && ! $IMMUTABLE; then
         switch=true chrony=true
     fi
     heading "Automatic host time synchronization"
-    $switch && echo "Installs chrony if missing and disables systemd-timesyncd, which cannot serve time or answer the boat query."
+    $switch && echo "Installs chrony if missing and disables systemd-timesyncd, which cannot serve time or answer the LAN query."
     echo "Points the host's existing NTP client (chrony or systemd-timesyncd) at: ${servers[*]}."
     echo "Containers share the host clock. Set ASTRO_NTP_SERVER only when a local time server is available."
     if $chrony && ((${#local_servers[@]})); then
@@ -499,7 +502,7 @@ stage_clock() {
         run sudo install -D -m 0644 "$file" "$sources/boat.sources"
         # Step (not slew) the first 3 updates after a start, so a cold boot converges at once.
         printf 'makestep 1 3\n' > "$file"
-        # The single boat server keeps serving with no upstream. Not orphan: it can hold off
+        # The single LAN server keeps serving with no upstream. Not orphan: it can hold off
         # serving for about 300 s after boot while it looks for orphan peers.
         [[ -z "$allow" ]] || printf 'allow %s\n' "$allow" >> "$file"
         [[ -z "$allow" ]] || ! $stratum || printf 'local stratum 10\n' >> "$file"
@@ -547,11 +550,11 @@ stage_clock() {
 stage_gateway() {
     local subnet gateway_ip unit hook device
     needs_profile gateway || return 0
-    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP")
+    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "$LAN_SUBNET" "$GATEWAY_IP")
     heading "Boat LAN internet gateway"
     echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
     echo "persisted as astro-gateway.service. Run it only on the device that serves as the boat gateway."
-    [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || { echo "Invalid BOAT_SUBNET in $(network_env): $subnet" >&2; exit 2; }
+    [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || { echo "Invalid LAN_SUBNET in $(network_env): $subnet" >&2; exit 2; }
     approve "Share this host's internet with $subnet?" || { SKIPPED+=(gateway); return; }
     # The boat routes internet back through us; accepting its default route loops.
     # A NetworkManager dispatcher claims the gateway address on whichever link joins the boat LAN.
@@ -612,7 +615,7 @@ EOF
 stage_boat() {
     local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
     needs_profile boat || return 0
-    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
+    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "$LAN_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
     echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"

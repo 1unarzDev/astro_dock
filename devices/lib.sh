@@ -66,7 +66,7 @@ hw_profiles_missing() {
 # the root loads and is checked; resolution picks this machine's host (--host/ASTRO_HOST, else hostname or
 # a permanent MAC in a registry's STATIC_LEASES) and vessel (--vessel/ASTRO_VESSEL, else the host's). A host
 # with the operator role, an unlisted --host NAME, or an unlisted machine with an address on exactly one
-# vessel's BOAT_SUBNET is a control station (HW_SELF_MEMBER, the fleet's station member; HW_SELF_ROLES);
+# vessel's LAN_SUBNET (BOAT_SUBNET, its old name) is a control station (HW_SELF_MEMBER, the fleet's station member; HW_SELF_ROLES);
 # a boat computer never is.
 # ASTRO_PROFILE is the vessel's old name, for one release. ASTRO_PROFILE_DIR (a directory) is for tests.
 # Sets HW_PROFILE (the vessel's directory, else the fleet's), HW_PROFILE_CHAIN, HW_PROFILE_KINDS,
