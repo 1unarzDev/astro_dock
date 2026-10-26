@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# The active profile's network env (config/profiles/<profile>/profile.env; for RoboBoat config/boat-network.env).
+network_env() { "$SCRIPT_DIR/hw.sh" env; }
 
 DRY_RUN=false
 ASSUME_YES=false
@@ -321,18 +323,18 @@ stage_compose() {
 stage_operator_key() {
     heading "Operator ssh key"
     echo "The TUI starts and reads parts on the other boat hosts over ssh with ~/.config/mhseals/ssh/id_ed25519."
-    echo "Creates it if missing and installs it on each config/devices.yaml host the TUI cannot reach yet."
+    echo "Creates it if missing and installs it on each registry host (./hw.sh hosts keys) the TUI cannot reach yet."
     approve "Provision the operator key on the boat hosts?" || { SKIPPED+=(operator-key); return; }
-    run "$SCRIPT_DIR/boat_hosts.sh" keys || { echo "Some hosts were not reached; rerun when they are up." >&2; SKIPPED+=(operator-key); return; }
+    run "$SCRIPT_DIR/hw.sh" hosts keys || { echo "Some hosts were not reached; rerun when they are up." >&2; SKIPPED+=(operator-key); return; }
     COMPLETED+=(operator-key)
 }
 
 stage_clock() {
     local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service boat_server boat_subnet peers=""
     local chrony=false boat=false local_servers=() sources=/etc/chrony/astro-sources operators=() stratum=true
-    # "boat" names the boat time server and subnet from config/boat-network.env.
-    read -r boat_server boat_subnet < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
-    read -r -a operators < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s\n' "${BOAT_OPERATOR_TIME_SERVERS:-}")
+    # "boat" names the boat time server and subnet from the profile network env.
+    read -r boat_server boat_subnet < <(. "$(network_env)"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
+    read -r -a operators < <(. "$(network_env)"; printf '%s\n' "${BOAT_OPERATOR_TIME_SERVERS:-}")
     servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
     # A client of the boat server also answers the boat subnet, so astro-clock.py sees every host.
     [[ "${servers[*]}" == boat ]] && servers=("$boat_server") peers="$boat_subnet" boat=true
@@ -452,11 +454,11 @@ stage_clock() {
 
 stage_gateway() {
     local subnet gateway_ip unit hook device
-    read -r subnet gateway_ip < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP")
+    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP")
     heading "Boat LAN internet gateway"
     echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
     echo "persisted as astro-gateway.service. Run it only on the device that serves as the boat gateway."
-    [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || { echo "Invalid BOAT_SUBNET in config/boat-network.env: $subnet" >&2; exit 2; }
+    [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || { echo "Invalid BOAT_SUBNET in $(network_env): $subnet" >&2; exit 2; }
     approve "Share this host's internet with $subnet?" || { SKIPPED+=(gateway); return; }
     # The boat routes internet back through us; accepting its default route loops.
     # A NetworkManager dispatcher claims the gateway address on whichever link joins the boat LAN.
@@ -516,7 +518,7 @@ EOF
 
 stage_boat() {
     local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
-    read -r subnet gateway_ip leases < <(. "$SCRIPT_DIR/config/boat-network.env"; printf '%s %s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
+    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
     echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"
@@ -570,7 +572,7 @@ stage_boat() {
             fi
             run sudo systemctl stop astro-boat-revert.timer
         fi
-        [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in config/boat-network.env for a fixed address." >&2
+        [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in $(network_env) for a fixed address." >&2
     fi
     if [[ -z "$device" ]]; then
         echo "Leaving Wi-Fi on: no wired boat link."

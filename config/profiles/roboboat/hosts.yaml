@@ -1,0 +1,6 @@
+# The boat computers of ASTRO_REGISTRY (config/devices.yaml, every host with ssh on): deploy and keys.
+driver: hosts/fleet
+repos: [mhseals_hardware, mhseals_nav, mhseals_testing]   # under src/, fast-forwarded with astro_dock
+compose_project: astro_dock_devcontainer
+operator_key: mhseals/ssh       # under XDG_CONFIG_HOME: the key and known_hosts the testing TUI uses
+operator_registry: mhseals/devices.yaml   # under XDG_CONFIG_HOME: this computer's `self:` for keys
