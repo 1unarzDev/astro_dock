@@ -438,6 +438,11 @@ stage_clock() {
         exit 1
     fi
     rm -f "$file"
+    # The retired astro_clock container (chronyd as PID 1, host network) loops on its stale
+    # /run/chronyd.pid after a power loss and holds UDP 123 against the host chrony: remove it.
+    if $chrony && command -v docker >/dev/null && sudo docker container inspect astro_clock >/dev/null 2>&1; then
+        run sudo docker rm -f astro_clock
+    fi
     run sudo systemctl enable --now "$service"
     run sudo systemctl restart "$service"
     if ! $DRY_RUN; then
