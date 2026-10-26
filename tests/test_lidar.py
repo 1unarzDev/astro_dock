@@ -87,15 +87,13 @@ class LidarSetupTest(unittest.TestCase):
             state['settings'][name].update(values)
         self.set_sensor(state)
 
-    def run_script(self, verb, stdin='', **extra):
+    def run_script(self, verb, stdin='', script='hw.sh', *args, **extra):
         env = {'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'HOME': str(self.tmp),
                'XDG_STATE_HOME': str(self.tmp / 'state'), 'FAKE_LIDAR': str(self.state), 'LIDAR_JUMP': '',
-               'EXPECT_IP': ENV['LIDAR_IP']}
-        if any(key.startswith('LIDAR_') and key != 'LIDAR_JUMP' for key in extra):
-            # BOAT_SUBNET set means the script keeps these values instead of sourcing the file.
-            env.update({key: value for key, value in ENV.items() if key.startswith(('LIDAR_', 'BOAT_SUBNET'))})
+               'EXPECT_IP': ENV['LIDAR_IP'], 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
         env.update(extra)
-        return subprocess.run(['bash', str(ROOT / 'lidar_setup.sh'), verb], input=stdin, env=env,
+        command = ['lidar', verb] if script == 'hw.sh' else [verb]
+        return subprocess.run(['bash', str(ROOT / script), *command, *args], input=stdin, env=env,
                               capture_output=True, text=True, timeout=120)
 
     def posts(self):
@@ -105,10 +103,10 @@ class LidarSetupTest(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(self.posts(), ['setting/host addr=' + ENV['LIDAR_DATA_HOST'], *net_posts,
                                         'save submit', 'reset reset_system'])
-        self.assertIn('Matches config/boat-network.env', run.stdout)
+        self.assertIn('Matches the profile', run.stdout)
 
     def test_script_parses(self):
-        subprocess.run(['bash', '-n', str(ROOT / 'lidar_setup.sh')], check=True)
+        subprocess.run(['bash', '-n', str(ROOT / 'devices/lidar/vlp16.sh')], check=True)
 
     def test_verify_reports_only_differing_keys(self):
         run = self.run_script('verify')
@@ -178,11 +176,11 @@ class LidarSetupTest(unittest.TestCase):
         self.assertEqual(self.posts(), [])
 
     def test_apply_refuses_invalid_values(self):
-        for key, value in (('LIDAR_RPM', '610'), ('LIDAR_RPM', '600&laser=off'), ('LIDAR_RETURNS', 'Dual&rpm=0'),
-                           ('LIDAR_DATA_HOST', '192.168.0.300'), ('LIDAR_DATA_PORT', '70000'),
-                           ('LIDAR_FOV_END', '360'), ('LIDAR_GATEWAY', '10.0.0.1'),
-                           ('LIDAR_NETMASK', '255.0.255.0'), ('LIDAR_NETMASK', '255.255.255.252'),
-                           ('LIDAR_DATA_HOST', '192.168.1.153')):
+        for key, value in (('HW_RPM', '610'), ('HW_RPM', '600&laser=off'), ('HW_RETURNS', 'Dual&rpm=0'),
+                           ('HW_DATA_HOST', '192.168.0.300'), ('HW_DATA_PORT', '70000'),
+                           ('HW_FOV_END', '360'), ('HW_GATEWAY', '10.0.0.1'),
+                           ('HW_NETMASK', '255.0.255.0'), ('HW_NETMASK', '255.255.255.252'),
+                           ('HW_DATA_HOST', '192.168.1.153')):
             with self.subTest(key=key, value=value):
                 run = self.run_script('apply', 'APPLY\n', **{key: value})
                 self.assertNotEqual(run.returncode, 0)
@@ -195,6 +193,27 @@ class LidarSetupTest(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn('Cancelled', run.stdout)
         self.assertEqual(self.posts(), [])
+
+    def test_plan_and_status_post_nothing(self):
+        run = self.run_script('plan')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertRegex(run.stdout, r'data_host +host\.addr +192\.168\.0\.152 -> ' + ENV['LIDAR_DATA_HOST'])
+        self.assertEqual(self.run_script('status').returncode, 0)
+        self.assertEqual(self.posts(), [])
+        self.assertFalse((self.tmp / 'state').exists())
+
+    def test_rollback_reapplies_a_snapshot(self):
+        self.assertEqual(self.run_script('apply', 'APPLY\n').returncode, 0)
+        self.log.unlink()
+        run = self.run_script('rollback', 'APPLY\n')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(self.posts(), ['setting/host addr=192.168.0.152', 'setting/net gateway=192.168.0.3',
+                                        'save submit', 'reset reset_system'])
+
+    def test_old_command_still_works(self):
+        run = self.run_script('verify', script='lidar_setup.sh')
+        self.assertEqual(run.returncode, 3, run.stderr)
+        self.assertIn('use: ./hw.sh lidar verify', run.stderr)
 
     def test_apply_refuses_unreachable_lidar(self):
         Path(str(self.state) + '.down').write_text('999')
