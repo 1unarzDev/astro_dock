@@ -10,7 +10,7 @@ Usage: $HW_PROGRAM $HW_KIND status|verify [HOST...]
        $HW_PROGRAM $HW_KIND plan|apply [--image REF] [HOST...]
        $HW_PROGRAM $HW_KIND rollback IMAGE [HOST...]
        $HW_PROGRAM $HW_KIND keys [HOST...]
-       $HW_PROGRAM $HW_KIND repos [HOST]
+       $HW_PROGRAM $HW_KIND repos
 
 status    Read-only: each repository's branch, head and dirty state, and the container's image.
 plan      Read-only: what apply would do (heads against origin/main via ls-remote; no fetch).
@@ -20,17 +20,15 @@ verify    Read-only: every repository is at its origin/main and the container ru
 rollback  Recreate the container on IMAGE (an astro-rollback:STAMP that apply printed), then build.
 keys      Create the operator key (XDG_CONFIG_HOME/$(cfg operator_key)/id_ed25519) if missing, install
           it where the TUI is refused (your own ssh may ask once) and record each host key. Idempotent.
-repos     Read-only, local: "NAME URL BRANCH" per repository clone: lists for HOST (default this
-          computer's name); ./setup.linux.sh --components repos clones and builds them.
+repos     Read-only, local: "NAME URL BRANCH" per repository of the profile (from its sources);
+          ./setup.linux.sh --components repos clones and builds them on this computer.
 Without HOST: every ssh host of $ASTRO_REGISTRY. HW_REPOS overrides the repos.
 EOF
 }
 
 driver_repos() {
-    local host=${1:-$(uname -n)} name url branch
-    [[ " $(cfg_keys clone) " == *" $host "* ]] \
-        || die "$HW_KIND.yaml lists no repositories for $host (clone: $(cfg_keys clone))"
-    for name in $(cfg "clone.$host"); do
+    local name url branch
+    for name in $(cfg repos); do
         [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "$HW_KIND.yaml: '$name' is not a directory name"
         url=$(cfg "sources.$name.url") branch=$(cfg "sources.$name.branch")
         [[ -n $url ]] || die "$HW_KIND.yaml: sources.$name has no url"

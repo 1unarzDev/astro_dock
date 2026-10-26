@@ -112,13 +112,13 @@ class LidarSetupTest(unittest.TestCase):
         run = self.run_script('verify')
         self.assertEqual(run.returncode, 3, run.stderr)
         self.assertRegex(run.stderr, r'host\.addr +192\.168\.0\.152 -> ' + ENV['LIDAR_DATA_HOST'])
-        self.assertRegex(run.stderr, r'net\.gateway +192\.168\.0\.3 -> ' + ENV['LIDAR_GATEWAY'])
+        self.assertRegex(run.stderr, r'net\.gateway +192\.168\.0\.3 -> ' + ENV['ROUTER_IP'])
         self.assertNotIn('rpm', run.stderr.split('Differs')[1])
         self.assertEqual(self.posts(), [])
 
     def test_apply_posts_diffs_network_last_then_one_save_and_reset(self):
         run = self.run_script('apply', 'APPLY\n')
-        self.assert_net_apply(run, 'setting/net gateway=' + ENV['LIDAR_GATEWAY'])
+        self.assert_net_apply(run, 'setting/net gateway=' + ENV['ROUTER_IP'])
         snapshots = list((self.tmp / 'state/astro_dock/lidar').iterdir())
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(snapshots[0].stat().st_mode & 0o777, 0o600)
@@ -127,33 +127,33 @@ class LidarSetupTest(unittest.TestCase):
         self.assertEqual(len(self.posts()), 4)
 
     def test_apply_without_network_change_saves_once_without_reset(self):
-        self.edit_sensor('net', gateway=ENV['LIDAR_GATEWAY'])
+        self.edit_sensor('net', gateway=ENV['ROUTER_IP'])
         run = self.run_script('apply', 'APPLY\n')
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(self.posts(), ['setting/host addr=' + ENV['LIDAR_DATA_HOST'], 'save submit'])
 
     def test_apply_through_jump_host(self):
         run = self.run_script('apply', 'APPLY\n', LIDAR_JUMP='tranquility')
-        self.assert_net_apply(run, 'setting/net gateway=' + ENV['LIDAR_GATEWAY'])
+        self.assert_net_apply(run, 'setting/net gateway=' + ENV['ROUTER_IP'])
         self.assertEqual(set(Path(str(self.state) + '.ssh').read_text().split()), {'tranquility'})
 
     def test_apply_changes_mask_and_gateway(self):
         self.edit_sensor('net', mask='255.255.0.0')
         run = self.run_script('apply', 'APPLY\n')
-        self.assert_net_apply(run, 'setting/net mask=' + ENV['LIDAR_NETMASK'],
-                              'setting/net gateway=' + ENV['LIDAR_GATEWAY'])
+        self.assert_net_apply(run, 'setting/net mask=' + ENV['NETMASK'],
+                              'setting/net gateway=' + ENV['ROUTER_IP'])
 
     def test_apply_waits_for_a_slow_reset(self):
         run = self.run_script('apply', 'APPLY\n', FAKE_DOWN_POLLS='4')
-        self.assert_net_apply(run, 'setting/net gateway=' + ENV['LIDAR_GATEWAY'])
+        self.assert_net_apply(run, 'setting/net gateway=' + ENV['ROUTER_IP'])
 
     def test_apply_tolerates_reset_connection_drop(self):
         run = self.run_script('apply', 'APPLY\n', FAKE_RESET_RC='52')
-        self.assert_net_apply(run, 'setting/net gateway=' + ENV['LIDAR_GATEWAY'])
+        self.assert_net_apply(run, 'setting/net gateway=' + ENV['ROUTER_IP'])
 
     def test_apply_dies_when_reset_leaves_old_network_active(self):
         state = sensor()
-        state['settings']['net']['gateway'] = ENV['LIDAR_GATEWAY']  # saved, never activated by our fake
+        state['settings']['net']['gateway'] = ENV['ROUTER_IP']  # saved, never activated by our fake
         self.set_sensor(state)
         fake = self.tmp / 'bin/curl'
         fake.write_text(fake.read_text().replace("settings['active_net'] = dict(settings['net'])", 'pass'))

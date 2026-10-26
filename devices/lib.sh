@@ -18,32 +18,32 @@ hw_load_env() {
     done <"$1"
 }
 
-# hw_init: layers environment > .env (secrets, per machine) > the profile. Sets HW_PROFILE, and
-# ASTRO_NETWORK_ENV / ASTRO_REGISTRY (absolute) from the profile's profile.env.
+# hw_init: layers environment > .env (secrets, per machine) > the profile chain (devices/profile.py).
+# Selection: hw.sh --profile > ASTRO_PROFILE (environment, then .env) > the one profile naming a
+# network env; ASTRO_PROFILE_DIR (a directory) is for tests. Sets HW_PROFILE, HW_PROFILE_CHAIN,
+# HW_PROFILE_KINDS, and ASTRO_NETWORK_ENV / ASTRO_REGISTRY (absolute, or empty when no layer names one).
 hw_init() {
-    local dirs name
+    local profiles=$HW_ROOT/config/profiles out
     hw_load_env "${ASTRO_ENV_FILE:-$HW_ROOT/.env}"
-    name=${ASTRO_PROFILE:-}
     if [[ -n ${ASTRO_PROFILE_DIR:-} ]]; then
         HW_PROFILE=$ASTRO_PROFILE_DIR
-    elif [[ -n $name ]]; then
-        HW_PROFILE=$HW_ROOT/config/profiles/$name
     else
-        dirs=("$HW_ROOT"/config/profiles/*/)
-        ((${#dirs[@]} == 1)) && [[ -d ${dirs[0]} ]] || die "Set ASTRO_PROFILE to one of config/profiles/*"
-        HW_PROFILE=${dirs[0]%/}
+        [[ -n ${ASTRO_PROFILE:-} ]] || ASTRO_PROFILE=$(python3 -I "$HW_ROOT/devices/profile.py" default "$profiles") || exit 1
+        [[ $ASTRO_PROFILE =~ ^[a-z0-9][a-z0-9_-]*$ && -d $profiles/$ASTRO_PROFILE ]] \
+            || die "No profile '$ASTRO_PROFILE' in config/profiles"
+        HW_PROFILE=$profiles/$ASTRO_PROFILE
     fi
-    [[ -r $HW_PROFILE/profile.env ]] || die "No profile at $HW_PROFILE (profile.env missing)"
-    hw_load_env "$HW_PROFILE/profile.env"
-    [[ ${ASTRO_NETWORK_ENV:-} == /* ]] || ASTRO_NETWORK_ENV=$HW_ROOT/${ASTRO_NETWORK_ENV:?profile.env sets no ASTRO_NETWORK_ENV}
-    [[ -z ${ASTRO_REGISTRY:-} || $ASTRO_REGISTRY == /* ]] || ASTRO_REGISTRY=$HW_ROOT/$ASTRO_REGISTRY
+    out=$(python3 -I "$HW_ROOT/devices/profile.py" meta "$HW_PROFILE") || exit 1
+    eval "$out"
+    [[ -z $ASTRO_NETWORK_ENV || $ASTRO_NETWORK_ENV == /* ]] || ASTRO_NETWORK_ENV=$HW_ROOT/$ASTRO_NETWORK_ENV
+    [[ -z $ASTRO_REGISTRY || $ASTRO_REGISTRY == /* ]] || ASTRO_REGISTRY=$HW_ROOT/$ASTRO_REGISTRY
 }
 
-# hw_load_kind KIND: the profile's KIND.yaml as HW_* variables (devices/profile.py); set HW_* win.
+# hw_load_kind KIND: the merged KIND.yaml of the profile chain as HW_* variables; set HW_* win.
 hw_load_kind() {
-    local file=$HW_PROFILE/$1.yaml out
-    [[ -r $file ]] || die "Profile $(basename -- "$HW_PROFILE") has no $1.yaml"
-    out=$(python3 -I "$HW_ROOT/devices/profile.py" "$file" "$ASTRO_NETWORK_ENV") || die "Cannot read $file"
+    local out
+    [[ " $HW_PROFILE_KINDS " == *" $1 "* ]] || die "Profile $(basename -- "$HW_PROFILE") has no $1.yaml"
+    out=$(python3 -I "$HW_ROOT/devices/profile.py" kind "$HW_PROFILE" "$1" "$ASTRO_NETWORK_ENV") || exit 1
     eval "$out"
 }
 

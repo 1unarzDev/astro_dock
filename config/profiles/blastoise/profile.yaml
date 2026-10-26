@@ -1,0 +1,5 @@
+# Blastoise. Its LAN addresses and host registry stay at these fixed paths: dev.bashrc, astro-clock,
+# mhseals_nav and mhseals_testing read them there.
+extends: roboboat
+network_env: config/boat-network.env
+registry: config/devices.yaml

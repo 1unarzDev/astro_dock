@@ -1,9 +1,9 @@
-# Velodyne VLP16 over its HTTP API. mhseals_nav's lidar.yaml rpm must match rpm here.
+# Velodyne VLP16 over its HTTP API, on the boat's network env. mhseals_nav's lidar.yaml rpm must match rpm here.
 driver: lidar/vlp16
 address: $LIDAR_IP              # checked, never posted
-mac: 60:76:88:38:35:85
-netmask: $LIDAR_NETMASK
-gateway: $LIDAR_GATEWAY
+mac:                            # the boat's sensor
+netmask: $NETMASK
+gateway: $ROUTER_IP
 data_host: $LIDAR_DATA_HOST
 data_port: 2368
 telemetry_port: 8308

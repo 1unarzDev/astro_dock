@@ -1,0 +1,4 @@
+ssid: blastoise
+devices:
+  rocket: {address: $UBNT_ROCKET_IP, mac: ac:8b:a9:c8:aa:f9, role: ap, cfg: ""}
+  bullet: {address: $UBNT_BULLET_IP, mac: ac:8b:a9:c8:ca:18, role: station, cfg: ""}

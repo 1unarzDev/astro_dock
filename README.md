@@ -193,12 +193,12 @@ sudo reboot
 | `rollback` | back to the saved or previous state | yes |
 
 - **Drivers:** `devices/<kind>/<driver>.sh` must define `driver_status`, `driver_plan`, `driver_apply`, `driver_verify` and `driver_rollback`; `hw.sh` refuses a driver missing one. Other `driver_<verb>` functions are extra verbs.
-- **Profiles:** `config/profiles/<profile>/`. `profile.env` names the network env and the host registry; each `<kind>.yaml` picks a driver and holds its settings (`$KEY` reads the network env). `ASTRO_PROFILE` picks one when there are several.
+- **Profiles:** `config/profiles/<profile>/`. `profile.yaml` may name a parent (`extends:`), the network env and the host registry; each `<kind>.yaml` picks a driver and holds its settings (`$KEY` reads the network env). A child's YAML merges over its parent's: mappings key by key, lists and scalars replace; it may set only keys a parent defines, except under a parent's empty mapping (`{}`) or null key. Duplicate keys, anchors, cycles and unknown keys fail with file and line. Selection: `--profile NAME` (hw.sh, setup.linux.sh) > `ASTRO_PROFILE` (environment, then `.env`) > the one profile naming a network env. `./hw.sh profile show [NAME]` prints the merged result (never a `.env` value).
 - **Layers:** environment > `.env` (per machine, secrets; [`.env.example`](.env.example)) > profile. `HW_<PATH>` overrides a YAML value (`HW_MEASURE_SECONDS=3`). A YAML names its secrets' `.env` keys under `credentials:`, never the values.
 
 #### Boat network
 
-Everything boat-specific is here; the rest of this README is project-agnostic. The RoboBoat profile is [`config/profiles/roboboat/`](config/profiles/roboboat); its device YAMLs read the boat LAN from [`config/boat-network.env`](config/boat-network.env): subnet, router, gateway device, DHCP range, reservations, DNS and device addresses.
+Everything boat-specific is here; the rest of this README is project-agnostic. [`config/profiles/roboboat/`](config/profiles/roboboat) holds what every boat shares (repositories, drivers, defaults); [`blastoise`](config/profiles/blastoise) extends it with this boat's radios, lidar MAC and Jetson gateway, and names its LAN, [`config/boat-network.env`](config/boat-network.env) (subnet, router, gateway device, DHCP range, reservations, DNS and device addresses), and registry, [`config/devices.yaml`](config/devices.yaml). `squirtle` is a stub until its values are known.
 
 The operator laptop (tranquility) is the gateway and reaches the boat over a bridged Ubiquiti link, so every device below is on one flat layer-2 LAN, `192.168.0.0/24`:
 

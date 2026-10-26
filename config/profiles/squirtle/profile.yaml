@@ -1,0 +1,2 @@
+# Stub: Squirtle's network env, registry, radios, lidar and Jetson are not known yet.
+extends: roboboat

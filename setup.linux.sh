@@ -2,14 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-# The active profile's network env (config/profiles/<profile>/profile.env; for RoboBoat config/boat-network.env).
+# The active profile's network env (profile.yaml network_env; for Blastoise config/boat-network.env).
 network_env() { "$SCRIPT_DIR/hw.sh" env; }
 
 DRY_RUN=false
 ASSUME_YES=false
 NON_INTERACTIVE=false
 COMPONENTS="clock,docker,gpu,devices,devtools,compose"
-REPOS_HOST="$(uname -n)"
 OS_ID=unknown
 OS_LIKE=""
 OS_VERSION=""
@@ -28,7 +27,7 @@ Usage: ./setup.linux.sh [options]
 Options:
   --dry-run                 Print commands without running them
   --components LIST         clock,docker,gpu,devices,devtools,compose,repos,gateway,boat,jetson,operator-key
-  --host NAME               Profile host whose repositories `repos` clones and builds (default: uname -n)
+  --profile NAME            config/profiles/NAME (default: ASTRO_PROFILE from the environment or .env)
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -45,10 +44,11 @@ while (($#)); do
             [[ $# -gt 0 ]] || { echo "--components requires a value" >&2; exit 2; }
             COMPONENTS="$1"
             ;;
-        --host)
+        --profile)
             shift
-            [[ $# -gt 0 ]] || { echo "--host requires a value" >&2; exit 2; }
-            REPOS_HOST="$1"
+            [[ $# -gt 0 ]] || { echo "--profile requires a value" >&2; exit 2; }
+            export ASTRO_PROFILE="$1"
+            unset ASTRO_PROFILE_DIR
             ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -327,13 +327,13 @@ stage_compose() {
     COMPLETED+=(compose)
 }
 
-# The profile's repositories for REPOS_HOST (./hw.sh hosts repos): clone the missing ones under src/,
-# keep them out of git status, then build them here when colcon is on PATH, else in the dev container.
+# The profile's repositories (./hw.sh hosts repos): clone the missing ones under src/, keep them out
+# of git status, then build them here when colcon is on PATH, else in the dev container.
 stage_repos() {
     local list name url branch exclude names=() build
     heading "Workspace repositories"
-    list="$("$SCRIPT_DIR/hw.sh" hosts repos "$REPOS_HOST")" || { SKIPPED+=(repos); return; }
-    echo "Clones the profile's repositories for $REPOS_HOST under src/ (existing checkouts are kept) and builds them:"
+    list="$("$SCRIPT_DIR/hw.sh" hosts repos)" || { SKIPPED+=(repos); return; }
+    echo "Clones the profile's repositories under src/ (existing checkouts are kept) and builds them:"
     sed 's/^/  /' <<<"$list"
     approve "Clone and build these repositories?" || { SKIPPED+=(repos); return; }
     exclude="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null || true)"

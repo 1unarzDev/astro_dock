@@ -1,0 +1,2 @@
+# RoboBoat, competition-wide: the repositories, device drivers and defaults every boat shares. A boat
+# profile (blastoise, squirtle) extends it with its network env, host registry, radios, lidar and Jetson.
