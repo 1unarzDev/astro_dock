@@ -34,6 +34,11 @@ check "the transport ip is the route target" "$(cat "$tmp/peer")" 10.0.1.10
 check "override wins" "$(ros_net FAKE_SRC=10.0.1.2 ASTRO_DDS_ADDRESS=10.0.1.157)" 10.0.1.157
 check "off-subnet source falls back to scan" "$(ros_net FAKE_SRC=10.0.0.5)" 10.0.1.157
 check "no route falls back to scan" "$(ros_net FAKE_SRC=10.0.1.2 FAKE_NO_ROUTE=1)" 10.0.1.157
+old="$tmp/old-names.env"                          # BOAT_SUBNET, BOAT_TRANSPORT_IP: read for one release
+sed -E 's/^LAN_SUBNET=/BOAT_SUBNET=/; s/^TRANSPORT_IP=/BOAT_TRANSPORT_IP=/' "$net" > "$old"
+rm -f "$tmp/peer"
+check "old key names: the subnet" "$(ros_net FAKE_SRC=10.0.1.2 ASTRO_NETWORK_ENV="$old")" 10.0.1.2
+check "old key names: the transport ip" "$(cat "$tmp/peer" 2>/dev/null)" 10.0.1.10
 twice="$(env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" ASTRO_NETWORK_ENV="$net" FAKE_PEER="$tmp/peer" \
   FAKE_SRC=10.0.0.5 bash -c 'ros2() { :; }; . "$1"; ros_net; export FAKE_SRC=10.0.1.2; ros_net; echo "$ASTRO_DDS_ADDRESS"' _ "$tmp/ros_net.sh")"
 check "inherited auto-detected address is re-detected" "$twice" 10.0.1.2

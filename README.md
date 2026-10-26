@@ -145,7 +145,7 @@ Containers share the host clock. If a Linux host has the wrong time, `./setup.li
 timedatectl status
 ```
 
-`ASTRO_NTP_SERVER` names the servers to follow and `ASTRO_NTP_ALLOW` a subnet to serve (chrony; the stage installs it and disables `systemd-timesyncd`, and a rerun changes nothing). The value `lan` reads the vessel's network env: `ASTRO_NTP_SERVER=lan` follows `TIME_SERVER`, `ASTRO_NTP_ALLOW=lan` serves `LAN_SUBNET` (also following `OPERATOR_TIME_SERVERS`), and `ASTRO_NTP_ALLOW=operator` serves it only while this host is itself synchronized (`boat` is `lan`'s old name, for one release). `.devcontainer/astro-clock.py` prints every host's offset. Stop control nodes and actuators before clock steps.
+`ASTRO_NTP_SERVER` names the servers to follow and `ASTRO_NTP_ALLOW` a subnet to serve (chrony; the stage installs it and disables `systemd-timesyncd`, and a rerun changes nothing). The value `lan` reads the vessel's network env: `ASTRO_NTP_SERVER=lan` follows `TIME_SERVER`, `ASTRO_NTP_ALLOW=lan` serves `LAN_SUBNET` (also following `OPERATOR_TIME_SERVERS`), and `ASTRO_NTP_ALLOW=operator` serves it only while this host is itself synchronized (`boat` is `lan`'s old name, and the network env's `BOAT_SUBNET`, `BOAT_TIME_SERVER`, `BOAT_OPERATOR_TIME_SERVERS` and `BOAT_TRANSPORT_IP` are still read when the new key is absent, for one release). `lan` refuses an env without `TIME_SERVER`. `.devcontainer/astro-clock.py` prints every host's offset. Stop control nodes and actuators before clock steps.
 
 The `jetson` stage sets a JetPack 6 Jetson's persistent MAXN_SUPER power mode, a 16 GB `/swapfile` and the headless multi-user target; `docker` and `gpu` keep JetPack's Docker and toolkit and add the user to `docker`.
 

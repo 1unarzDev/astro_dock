@@ -41,7 +41,8 @@ def lan_hosts(path=None):
         key, sep, value = line.partition('=')
         if sep and not line.lstrip().startswith('#'):
             values[key.strip()] = ' '.join(shlex.split(value, comments=True))
-    hosts = [('time server', values['TIME_SERVER'])] if values.get('TIME_SERVER') else []
+    server = values.get('TIME_SERVER') or values.get('BOAT_TIME_SERVER')    # the old name, for one release
+    hosts = [('time server', server)] if server else []
     for lease in values.get('STATIC_LEASES', '').split():
         _, name, address = lease.split('=')
         hosts.append((name, address))

@@ -76,6 +76,19 @@ out="$(ASTRO_NTP_SERVER=boat clock 2>&1)"
 grep -q 'ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan' <<<"$out" || fail "boat alias notice missing"
 grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "boat alias did not follow the LAN server"
 
+# The BOAT_ key names are read for one release; lan refuses a network env without a time server.
+old="$tmp/old-profiles"
+cp -r "$root/tests/data/profiles" "$old"
+sed -i -E 's/^(LAN_SUBNET|TIME_SERVER|OPERATOR_TIME_SERVERS|TRANSPORT_IP)=/BOAT_\1=/; s/^BOAT_LAN_SUBNET=/BOAT_SUBNET=/' "$old/a/network.env"
+grep -q '^BOAT_SUBNET=' "$old/a/network.env" && ! grep -q '^LAN_SUBNET=' "$old/a/network.env" || fail "old-name fixture"
+out="$(ASTRO_PROFILES="$old" ASTRO_NTP_SERVER=lan ASTRO_NTP_ALLOW=lan clock)"
+grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "BOAT_TIME_SERVER not read"
+grep -Fxq "server ${operators[0]} iburst" "$sources/boat.sources" || fail "BOAT_OPERATOR_TIME_SERVERS not read"
+grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "BOAT_SUBNET not read"
+sed -i '/^BOAT_TIME_SERVER=/d' "$old/a/network.env"
+if out="$(ASTRO_PROFILES="$old" ASTRO_NTP_SERVER=lan clock)"; then fail "lan accepted an empty TIME_SERVER"; fi
+grep -q 'ASTRO_NTP_SERVER=lan needs TIME_SERVER' <<<"$out" || fail "empty TIME_SERVER message: $out"
+
 # A public server is neither preferred nor polled fast.
 out="$(ASTRO_NTP_SERVER=time.google.com clock)"
 ! grep -q 'Prefers' <<<"$out" || fail "polling message for a public server"
@@ -195,12 +208,15 @@ for mode in unmatched generic; do
 done
 
 python3 "$root/.devcontainer/astro-clock.py" --help >/dev/null
-python3 - "$root" <<'EOF'
+printf 'BOAT_TIME_SERVER=10.0.1.10\nSTATIC_LEASES="02:aa:00:00:00:01=a-pc=10.0.1.10"\n' > "$tmp/old-names.env"
+python3 - "$root" "$tmp/old-names.env" <<'EOF'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location('clock', sys.argv[1] + '/.devcontainer/astro-clock.py')
 clock = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(clock)
 hosts = clock.lan_hosts()
 assert hosts[0][0] == 'time server' and len(hosts) >= 2, hosts
+hosts = clock.lan_hosts(sys.argv[2])                    # BOAT_TIME_SERVER: the old name, for one release
+assert hosts == [('time server', '10.0.1.10'), ('a-pc', '10.0.1.10')], hosts
 EOF
 echo "clock stage ok"

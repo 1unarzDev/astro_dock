@@ -89,7 +89,8 @@ ros_net() {
     mkdir -m 700 "$run" 2>/dev/null
     [[ -d "$run" && ! -L "$run" && -O "$run" && "$(stat -c %a "$run" 2>/dev/null)" == 700 ]] || return 0
   fi
-  subnet="${ASTRO_DDS_SUBNET:-$( . "$(__astro_network_env)" 2>/dev/null && echo "$LAN_SUBNET")}"
+  # BOAT_SUBNET and BOAT_TRANSPORT_IP are the old names, read for one release.
+  subnet="${ASTRO_DDS_SUBNET:-$( . "$(__astro_network_env)" 2>/dev/null && echo "${LAN_SUBNET:-${BOAT_SUBNET:-}}")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
   # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported
   # (remembered in __ASTRO_DDS_AUTO) is not an override and is detected again.
@@ -97,7 +98,7 @@ ros_net() {
   # (a host with Wi-Fi and the vessel link both on the subnet must use the route's
   # one), else the first interface primary address (SIOCGIFADDR) in the subnet;
   # secondaries such as a bridge's own are skipped; the image has no iproute2.
-  transport="$( . "$(__astro_network_env)" 2>/dev/null && echo "$TRANSPORT_IP")"
+  transport="$( . "$(__astro_network_env)" 2>/dev/null && echo "${TRANSPORT_IP:-${BOAT_TRANSPORT_IP:-}}")"
   override="${ASTRO_DDS_ADDRESS:-}"
   [[ "$override" != "${__ASTRO_DDS_AUTO:-}" ]] || override=
   address="${override:-$(python3 -c '

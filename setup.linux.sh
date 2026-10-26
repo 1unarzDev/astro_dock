@@ -422,8 +422,15 @@ stage_clock() {
     if [[ "${ASTRO_NTP_SERVER:-}" == lan || "$allow" == lan || "$allow" == operator ]]; then
         local env
         env="$(network_env)" || { echo "ASTRO_NTP_SERVER/ASTRO_NTP_ALLOW lan and operator need the vessel's network env (hw.sh env)." >&2; exit 1; }
-        read -r lan_server lan_subnet < <(. "$env"; printf '%s %s\n' "$TIME_SERVER" "$LAN_SUBNET")
-        read -r -a operators < <(. "$env"; printf '%s\n' "${OPERATOR_TIME_SERVERS:-}")
+        # The BOAT_ names are the old ones, read for one release. One value per line: an empty
+        # TIME_SERVER must not shift LAN_SUBNET into its place.
+        { read -r lan_server; read -r lan_subnet; } < <(. "$env"
+            printf '%s\n%s\n' "${TIME_SERVER:-${BOAT_TIME_SERVER:-}}" "${LAN_SUBNET:-${BOAT_SUBNET:-}}")
+        read -r -a operators < <(. "$env"; printf '%s\n' "${OPERATOR_TIME_SERVERS:-${BOAT_OPERATOR_TIME_SERVERS:-}}")
+        [[ "${ASTRO_NTP_SERVER:-}" != lan || -n "$lan_server" ]] || {
+            echo "ASTRO_NTP_SERVER=lan needs TIME_SERVER (the vessel's time server) in $env; set it there or name the servers in ASTRO_NTP_SERVER." >&2; exit 1; }
+        [[ "$allow" != lan && "$allow" != operator || -n "$lan_subnet" ]] || {
+            echo "ASTRO_NTP_ALLOW=$allow needs LAN_SUBNET (the subnet to serve) in $env; set it there or name the subnet in ASTRO_NTP_ALLOW." >&2; exit 1; }
     fi
     servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
     # A client of the LAN server also answers the LAN subnet, so astro-clock.py sees every host.
@@ -550,7 +557,7 @@ stage_clock() {
 stage_gateway() {
     local subnet gateway_ip unit hook device
     needs_profile gateway || return 0
-    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "$LAN_SUBNET" "$GATEWAY_IP")
+    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}" "$GATEWAY_IP")
     heading "Boat LAN internet gateway"
     echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
     echo "persisted as astro-gateway.service. Run it only on the device that serves as the boat gateway."
@@ -615,7 +622,7 @@ EOF
 stage_boat() {
     local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
     needs_profile boat || return 0
-    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "$LAN_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
+    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}" "$GATEWAY_IP" "$STATIC_LEASES")
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
     echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"
