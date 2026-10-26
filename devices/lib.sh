@@ -49,6 +49,14 @@ hw_profiles_root() {
     return 0
 }
 
+# hw_profiles_missing: true when .gitmodules declares the profiles submodule but HW_ROOT/profiles
+# holds no profile (a git pull without the submodule). Without it every vessel value is gone: no
+# network env, no registry (generic mode).
+hw_profiles_missing() {
+    [[ -z ${ASTRO_PROFILES:-} ]] && grep -qs '^\[submodule "profiles"\]' "$HW_ROOT/.gitmodules" \
+        && ! compgen -G "$HW_ROOT/profiles/*/profile.yaml" >/dev/null
+}
+
 # hw_init: layers environment > secrets file > the profile chain (devices/profile.py). Every profile of
 # the root loads and is checked; resolution picks this machine's host (--host/ASTRO_HOST, else hostname or
 # a permanent MAC in a registry's STATIC_LEASES) and vessel (--vessel/ASTRO_VESSEL, else the host's).
@@ -74,12 +82,15 @@ hw_init() {
     HW_PROFILES_ROOT=$(hw_profiles_root)
     if [[ -z $HW_PROFILES_ROOT ]]; then
         HW_SCOPE_ERROR="No profile root (generic mode): set ASTRO_PROFILES or run git submodule update --init profiles"
+        ! hw_profiles_missing || warn "The profiles submodule is not initialised: generic mode, without the vessel's network env and registry. Run: git submodule update --init profiles"
         ASTRO_NETWORK_ENV=${ASTRO_NETWORK_ENV:-} ASTRO_REGISTRY=${ASTRO_REGISTRY:-}
-        return
+    else
+        out=$(python3 -I "$HW_ROOT/devices/profile.py" resolve "$HW_PROFILES_ROOT") || exit 1
+        eval "$out"
+        export ASTRO_HOST ASTRO_VESSEL
     fi
-    out=$(python3 -I "$HW_ROOT/devices/profile.py" resolve "$HW_PROFILES_ROOT") || exit 1
-    eval "$out"
-    export ASTRO_HOST ASTRO_VESSEL
+    # An empty ASTRO_NETWORK_ENV would read as "resolved, no network" to the consumers: never exported.
+    [[ -n $ASTRO_NETWORK_ENV ]] || export -n ASTRO_NETWORK_ENV
 }
 
 # hw_load_kind KIND: the merged KIND.yaml of the profile chain as HW_* variables; set HW_* win.

@@ -203,6 +203,21 @@ class Profiles(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(run.stdout.count('Generic mode (no profile root'), 1)
         self.assertIn('Skipped:   repos gateway boat jetson', run.stdout)
+        self.assertNotIn('submodule is not initialised', run.stdout + run.stderr)   # no profiles declared
+
+    def test_a_declared_but_uninitialised_profiles_submodule_warns(self):
+        # A git pull without the submodule: .gitmodules names profiles, the directory is empty.
+        ws = self.tmp / 'ws'
+        (ws / 'profiles').mkdir(parents=True)
+        shutil.copy2(ROOT / 'hw.sh', ws / 'hw.sh')
+        shutil.copy2(ROOT / '.gitmodules', ws / '.gitmodules')
+        shutil.copytree(ROOT / 'devices', ws / 'devices')
+        hint = 'git submodule update --init profiles'
+        for args in (('whoami',), ('env',)):
+            run = self.hw(*args, hw_root=ws, ASTRO_PROFILES=None)
+            self.assertIn('submodule is not initialised', run.stderr)
+            self.assertIn(hint, run.stderr)
+        self.assertNotIn('submodule is not initialised', self.hw('whoami', hw_root=ws).stderr)   # ASTRO_PROFILES set
 
 
 if __name__ == '__main__':

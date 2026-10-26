@@ -56,21 +56,33 @@ fi
 # Set ASTRO_DDS_ADDRESS to force an address. Silent at shell start; ros_net -v
 # prints the choice, and the banner shows it too.
 # The vessel's network env, resolved once per shell tree by `hw.sh env` and exported as
-# ASTRO_NETWORK_ENV; empty without a vessel (generic mode or an unregistered machine without
-# ASTRO_VESSEL). config/boat-network.env is the legacy fallback for one release.
+# ASTRO_NETWORK_ENV; never exported empty (nav and testing would read that as "no network" and
+# stay quiet), so without a vessel (generic mode or an unregistered machine without ASTRO_VESSEL)
+# it stays unset. config/boat-network.env is the legacy fallback for one release.
 __astro_network_env() {
-  if [[ -z "${ASTRO_NETWORK_ENV+x}" && -z "${__ASTRO_NET_RESOLVING:-}" ]]; then
-    ASTRO_NETWORK_ENV="$(__ASTRO_NET_RESOLVING=1 "$ROS_WS/hw.sh" env 2>/dev/null)" || ASTRO_NETWORK_ENV=
-    [[ -n "$ASTRO_NETWORK_ENV" || ! -r "$ROS_WS/config/boat-network.env" ]] || ASTRO_NETWORK_ENV="$ROS_WS/config/boat-network.env"
-    export ASTRO_NETWORK_ENV
+  local env
+  if [[ -z "${ASTRO_NETWORK_ENV:-}" && -z "${__ASTRO_NET_RESOLVED:-}${__ASTRO_NET_RESOLVING:-}" ]]; then
+    __ASTRO_NET_RESOLVED=1    # once per shell, not exported
+    env="$(__ASTRO_NET_RESOLVING=1 "$ROS_WS/hw.sh" env 2>/dev/null)" || env=
+    [[ -n "$env" || ! -r "$ROS_WS/config/boat-network.env" ]] || env="$ROS_WS/config/boat-network.env"
+    if [[ -n "$env" ]]; then export ASTRO_NETWORK_ENV="$env"; else unset ASTRO_NETWORK_ENV; fi
   fi
   printf '%s' "${ASTRO_NETWORK_ENV:-/nonexistent}"
 }
+
+# A clone whose .gitmodules declares the profiles submodule but has none checked out (a git pull
+# without it): generic mode, so ros_net has no subnet to pin and no static peers.
+__astro_profiles_missing() {
+  [[ -z "${ASTRO_PROFILES:-}" ]] && grep -qs '^\[submodule "profiles"\]' "$ROS_WS/.gitmodules" \
+    && ! compgen -G "$ROS_WS/profiles/*/profile.yaml" >/dev/null
+}
+__ASTRO_PROFILES_HINT='profiles submodule not initialised: no vessel network env, DDS not pinned to the boat subnet. Run: git submodule update --init profiles'
 
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
   local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override peers run="${XDG_RUNTIME_DIR:-/tmp}"
   __astro_network_env >/dev/null    # here, not in a subshell, so the export reaches this shell
+  [[ "${1:-}" != -v ]] || ! __astro_profiles_missing || echo "WARNING: $__ASTRO_PROFILES_HINT" >&2
   if [[ ! -d "$run" || ! -w "$run" ]]; then
     # World-writable /tmp: use a private per-user directory, and only if it is ours, a real directory, 0700.
     run="/tmp/astro-$(id -u)"
