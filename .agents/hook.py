@@ -10,6 +10,11 @@ that defines ``agent_event(event)``. Each one gets the same neutral event, which
     {agent: claude|codex, event: start|pre|post, session_id, cwd, source,
      tool, tool_id, command, exit, duration_ms, failed}
 
+plus, before a file edit (Claude Edit, MultiEdit, Write, NotebookEdit; Codex apply_patch, or a shell
+call that carries an apply_patch text), ``edits``: ``[[write|delete, path as given]]`` (relative to
+``cwd``). An edit tool's event has an empty ``command``; a patch no file header names gives ``[]``.
+Only ``pre`` is sent for edit tools.
+
 ``source`` at start is the CLI's (startup, resume, clear, compact) or ``playbook`` for
 ``--playbook``: a package can keep its session-start text short and give the whole of it on demand.
 
@@ -33,6 +38,9 @@ ROOT = Path(__file__).resolve().parents[1]
 EVENTS = {'SessionStart': 'start', 'PreToolUse': 'pre', 'PostToolUse': 'post', 'PostToolUseFailure': 'post'}
 SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports Bash; older builds the rest
 SHELLS = ('bash', 'sh', 'zsh')
+EDIT_TOOLS = {'Edit': 'file_path', 'MultiEdit': 'file_path', 'Write': 'file_path', 'NotebookEdit': 'notebook_path'}
+PATCH_TOOLS = ('apply_patch',)      # Codex: tool_input.command is the patch text (matched as apply_patch|Edit|Write)
+PATCH = re.compile(r'^\*\*\* (Add File|Update File|Delete File|Move to): *(.+?) *$', re.M)
 EXIT = re.compile(r'^Exit code:?\s*(-?\d+)', re.M)
 BUDGET_S = 2.0      # all packages together; the CLIs' hook timeout is 5 s
 
@@ -69,6 +77,17 @@ def _exit_of(response):
     return None
 
 
+def patch_edits(text):
+    """``[[write|delete, path]]`` of an apply_patch text: Add and Update write, Delete deletes, and a
+    Move deletes the updated file and writes the new one."""
+    edits = []
+    for verb, path in PATCH.findall(text):
+        if verb == 'Move to':
+            edits[-1:] = [['delete', edits[-1][1]]] if edits else []
+        edits.append(['delete' if verb == 'Delete File' else 'write', path])
+    return edits
+
+
 def normalize(agent, raw):
     """The neutral event of one CLI hook payload, or None when no package cares about it."""
     kind = EVENTS.get(raw.get('hook_event_name'))
@@ -80,6 +99,17 @@ def normalize(agent, raw):
              'failed': False}
     if kind == 'start':
         return event
+    given = raw.get('tool_input')
+    if raw.get('tool_name') in EDIT_TOOLS or raw.get('tool_name') in PATCH_TOOLS:
+        if kind != 'pre':
+            return None
+        if raw['tool_name'] in EDIT_TOOLS:
+            event['edits'] = [['write', str((given or {}).get(EDIT_TOOLS[raw['tool_name']]) or '')]]
+        else:       # a dict with command (or patch/input), or the freeform patch text itself
+            text = given if isinstance(given, str) else next(
+                (str(given[k]) for k in ('command', 'patch', 'input') if isinstance(given, dict) and given.get(k)), '')
+            event['edits'] = patch_edits(text)
+        return event
     if raw.get('tool_name') not in SHELL_TOOLS:
         return None
     command = (raw.get('tool_input') or {}).get('command') or (raw.get('tool_input') or {}).get('cmd')
@@ -87,6 +117,8 @@ def normalize(agent, raw):
             and command[1] in ('-c', '-lc'):
         command = command[2]            # Codex's ['bash', '-lc', script]: the script is the command
     event['command'] = shlex.join(map(str, command)) if isinstance(command, list) else str(command or '')
+    if kind == 'pre' and '*** Begin Patch' in event['command']:     # Codex's apply_patch through the shell
+        event['edits'] = patch_edits(event['command'])
     if kind == 'post':
         took = raw.get('duration_ms')
         event['duration_ms'] = took if isinstance(took, (int, float)) else None

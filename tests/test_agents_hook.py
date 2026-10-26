@@ -104,10 +104,31 @@ class Dispatcher(unittest.TestCase):
                          ['ros2 topic list | head', "ros2 topic echo '/a b'", 'ros2 node list'])
 
     def test_other_tools_and_events_are_ignored(self):
-        edit = claude('PreToolUse', tool_name='Edit', tool_input={'file_path': 'x'})
-        self.assertIsNone(self.run_hook('claude', edit))
+        self.assertIsNone(self.run_hook('claude', claude('PreToolUse', tool_name='Read', tool_input={'file_path': 'x'})))
+        self.assertIsNone(self.run_hook('claude', claude('PostToolUse', tool_name='Edit', tool_input={'file_path': 'x'})))
+        self.assertIsNone(self.run_hook('codex', codex('PostToolUse', tool_name='apply_patch', tool_input={'command': ''})))
         self.assertIsNone(self.run_hook('claude', claude('Stop')))
         self.assertEqual(self.events(), [])
+
+    def test_edit_tools_reach_the_package_with_their_files(self):
+        for tool, field in (('Edit', 'file_path'), ('Write', 'file_path'), ('MultiEdit', 'file_path'),
+                            ('NotebookEdit', 'notebook_path')):
+            self.run_hook('claude', claude('PreToolUse', tool_name=tool, tool_input={field: 'a/b.py', 'content': 'x'}))
+        patch = ('*** Begin Patch\n*** Add File: new.py\n+x\n*** Update File: old.py\n*** Move to: moved.py\n@@\n-a\n+b\n'
+                 '*** Delete File: gone.py\n*** End Patch\n')
+        self.run_hook('codex', codex('PreToolUse', tool_name='apply_patch', tool_input={'command': patch}))
+        self.run_hook('codex', codex('PreToolUse', tool_name='apply_patch', tool_input=patch))          # freeform
+        self.run_hook('codex', codex('PreToolUse', tool_input={'command': "apply_patch <<'EOF'\n" + patch + 'EOF'}))
+        self.run_hook('claude', claude('PreToolUse', tool_name='Write', tool_input={}))
+        seen = self.events()
+        self.assertEqual([e['edits'] for e in seen[:4]], [[['write', 'a/b.py']]] * 4)
+        self.assertTrue(all(e['command'] == '' and e['event'] == 'pre' for e in seen[:6]))
+        whole = [['write', 'new.py'], ['delete', 'old.py'], ['write', 'moved.py'], ['delete', 'gone.py']]
+        self.assertEqual([e['edits'] for e in seen[4:7]], [whole] * 3)
+        self.assertTrue(seen[6]['command'].startswith('apply_patch'))        # the shell rules still see it
+        self.assertEqual(seen[7]['edits'], [['write', '']])                     # no path: the package fails closed
+        self.assertNotIn('edits', self.run_hook('claude', claude('PreToolUse')) or {})
+        self.assertNotIn('edits', self.events()[-1])
 
     def test_a_missing_or_broken_package_is_a_no_op(self):
         payload = claude('PreToolUse', tool_input={'command': 'rm -rf /'})
@@ -162,6 +183,8 @@ class Dispatcher(unittest.TestCase):
         codex_hooks = json.loads((ROOT / '.codex' / 'hooks.json').read_text())['hooks']
         self.assertEqual(set(claude_hooks), {'SessionStart', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'})
         self.assertEqual(set(codex_hooks), {'SessionStart', 'PreToolUse', 'PostToolUse'})
+        self.assertEqual([g['matcher'] for g in claude_hooks['PreToolUse']], ['Bash', 'Edit|MultiEdit|Write|NotebookEdit'])
+        self.assertEqual([g['matcher'] for g in codex_hooks['PreToolUse']], ['^Bash$', '^apply_patch$'])
         for hooks, agent in ((claude_hooks, 'claude'), (codex_hooks, 'codex')):
             for groups in hooks.values():
                 for handler in (h for g in groups for h in g['hooks']):
@@ -219,6 +242,43 @@ class WorkspaceHooks(unittest.TestCase):
                     self.assertEqual(decision == 'deny', blocked, out)
         took.sort()
         self.assertLess(took[len(took) // 2], 0.15, 'median hook latency per tool call')
+
+    def test_edit_tools_are_denied_on_live_safety_files_only(self):
+        """Sample Claude Edit/Write and Codex apply_patch payloads end to end: a live agent.yaml (a main
+        checkout), launch file or hold file is denied; the same files in a linked git worktree are allowed."""
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base)
+        live, wt = base / 'live', base / 'wt'
+        git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-C']
+        (live / 'config').mkdir(parents=True)
+        (live / 'config' / 'agent.yaml').write_text('hook: {}\n')
+        for args in (['init', '-q'], ['add', '.'], ['commit', '-qm', 'x'], ['worktree', 'add', '-q', str(wt)]):
+            subprocess.run(git + [str(live)] + args, check=True, capture_output=True)
+        env = dict(os.environ, XDG_STATE_HOME=str(base), XDG_RUNTIME_DIR=str(base), MHSEALS_DATA=str(base))
+        env.pop('BOAT_AGENT_TARGET', None)
+
+        def patch(path):
+            return '*** Begin Patch\n*** Update File: %s\n@@\n-a\n+b\n*** End Patch\n' % path
+        for blocked, agent, payload in (
+                (True, 'claude', claude('PreToolUse', tool_name='Edit', cwd=str(live), tool_input={
+                    'file_path': str(live / 'config' / 'agent.yaml'), 'old_string': 'false', 'new_string': 'true'})),
+                (True, 'claude', claude('PreToolUse', tool_name='Write', tool_input={
+                    'file_path': str(base / 'run' / 'command_mux_7.json'), 'content': '{}'})),
+                (True, 'codex', codex('PreToolUse', tool_name='apply_patch', cwd=str(live),
+                                      tool_input={'command': patch('config/agent.yaml')})),
+                (True, 'codex', codex('PreToolUse', tool_name='apply_patch', cwd=str(base),
+                                      tool_input={'command': patch('share/launch/arm.launch.py')})),
+                (False, 'claude', claude('PreToolUse', tool_name='Edit', tool_input={
+                    'file_path': str(wt / 'config' / 'agent.yaml'), 'old_string': 'false', 'new_string': 'true'})),
+                (False, 'claude', claude('PreToolUse', tool_name='Write', tool_input={
+                    'file_path': str(base / 'agent' / 'stop'), 'content': ''})),          # creating the stop file
+                (False, 'codex', codex('PreToolUse', tool_name='apply_patch', cwd=str(wt),
+                                       tool_input={'command': patch('config/agent.yaml')}))):
+            done = subprocess.run([sys.executable, '-I', str(ROOT / '.agents' / 'hook.py'), agent],
+                                  input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=10)
+            out = json.loads(done.stdout) if done.stdout.strip() else {}
+            with self.subTest(agent=agent, payload=payload['tool_input']):
+                self.assertEqual(out.get('hookSpecificOutput', {}).get('permissionDecision') == 'deny', blocked, out)
 
 
 if __name__ == '__main__':
