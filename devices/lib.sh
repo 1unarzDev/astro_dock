@@ -19,13 +19,18 @@ hw_load_env() {
 }
 
 # hw_secrets: the secrets file (ASTRO_SECRETS, default ~/.config/astro/secrets.env), refused unless
-# private (mode 600 or 400), then a legacy astro_dock/.env (ASTRO_ENV_FILE) with a warning, for one release.
+# private (mode 600 or 400) and outside every git work tree (a symlink is followed: one commit or
+# `git add -f` away from a remote), then a legacy astro_dock/.env (ASTRO_ENV_FILE) with a warning, for one release.
 hw_secrets() {
-    local legacy=${ASTRO_ENV_FILE:-$HW_ROOT/.env} mode
+    local legacy=${ASTRO_ENV_FILE:-$HW_ROOT/.env} mode real
     HW_SECRETS=${ASTRO_SECRETS:-${XDG_CONFIG_HOME:-$HOME/.config}/astro/secrets.env}
     if [[ -e $HW_SECRETS ]]; then
         mode=$(stat -L -c %a -- "$HW_SECRETS") || die "Cannot stat $HW_SECRETS"
         [[ $mode == [46]00 ]] || die "$HW_SECRETS is mode $mode; secrets must be private: chmod 600 $HW_SECRETS"
+        real=$(realpath -e -- "$HW_SECRETS") || die "Cannot resolve $HW_SECRETS"
+        if [[ $(git -C "$(dirname -- "$real")" rev-parse --is-inside-work-tree 2>/dev/null) == true ]]; then
+            die "$HW_SECRETS resolves to $real, inside a git work tree; move it to ~/.config/astro/secrets.env (mode 600)"
+        fi
         hw_load_env "$HW_SECRETS"
     fi
     if [[ -f $legacy && -s $legacy ]]; then

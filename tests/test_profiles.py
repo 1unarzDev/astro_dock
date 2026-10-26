@@ -172,6 +172,21 @@ class Profiles(unittest.TestCase):
         self.assertIn('password: THING_PASSWORD', self.hw('--vessel', 'a', 'profile', 'show',
                                                           ASTRO_SECRETS=str(secrets)).stdout)
 
+    def test_secrets_inside_a_git_work_tree_are_refused_even_through_a_symlink(self):
+        repo = self.tmp / 'repo'
+        (repo / '.handoff').mkdir(parents=True)
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        inside = repo / '.handoff/secrets.env'
+        inside.write_text('THING_PASSWORD=x\n')
+        inside.chmod(0o600)
+        link = self.tmp / 'config/secrets.env'
+        link.parent.mkdir()
+        link.symlink_to(inside)
+        for path in (inside, link):
+            run = self.hw('secrets', 'check', ASTRO_SECRETS=str(path))
+            self.assertNotEqual(run.returncode, 0)
+            self.assertIn('inside a git work tree; move it to ~/.config/astro/secrets.env', run.stderr)
+
     def test_a_legacy_dotenv_is_read_with_a_warning(self):
         legacy = self.tmp / 'legacy.env'
         legacy.write_text('THING_PASSWORD=x\n')
