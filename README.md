@@ -176,7 +176,7 @@ hw.sh secrets check        the secrets file and the missing key names (never val
 
 #### Device profiles
 
-A profile root holds one directory per profile. Root: `$ASTRO_PROFILES`, else the pinned submodule `profiles/` once initialised (setup's repos stage and `hosts apply` initialise it), else the legacy `config/profiles/` for one release. With none, astro_dock runs in generic mode: `hw.sh` lists no kinds, and setup skips the repos, gateway, boat and jetson stages with one note.
+A profile root holds one directory per profile. Root: `$ASTRO_PROFILES`, else the pinned submodule `profiles/` once initialised (setup's repos stage and `hosts apply` initialise it). With none, astro_dock runs in generic mode: `hw.sh` lists no kinds, and setup skips the repos, gateway, boat and jetson stages with one note.
 
 - **Layout:** the fleet is the one profile without `extends:`; each other profile is a member (`kind: vessel` or `kind: station`) that extends it. `profile.yaml` may name the network env (`network_env:`) and the host registry (`registry:`), paths relative to its directory. Each `<kind>.yaml` picks a driver and holds its settings (`$KEY` reads the network env); the fleet's `hosts.yaml` lists repositories by role, `topology.yaml` the members and links, and the optional `secrets.keys` the secret key names.
 - **Merging:** a child's YAML merges over its parent's: mappings key by key, lists and scalars replace; it may set only keys a parent defines, except under a parent's empty mapping (`{}`) or null key. Every profile loads and is checked on every run; duplicate keys, anchors, cycles and unknown keys fail with file and line. `./hw.sh profile show [NAME]` prints the merged result.

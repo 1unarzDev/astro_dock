@@ -2,3 +2,6 @@
 	path = src/ros_tcp_endpoint
 	url = https://github.com/MHSeals/ROS-TCP-Endpoint.git
 	branch = main-ros2
+[submodule "profiles"]
+	path = profiles
+	url = https://github.com/MHSeals/mhseals_profile.git

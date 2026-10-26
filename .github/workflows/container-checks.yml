@@ -7,7 +7,8 @@ on:
       - "setup.linux.sh"
       - "hw.sh"
       - "devices/**"
-      - "config/profiles/**"
+      - "profiles"
+      - ".gitmodules"
       - "config/boat-network.env"
       - "tests/**"
       - "fetch_bags.sh"
@@ -22,6 +23,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the pinned profiles (public submodule)
+        run: git submodule update --init profiles
       - name: Validate shell scripts
         run: |
           for script in setup.linux.sh hw.sh devices/*/*.sh .devcontainer/*.sh .github/scripts/*.sh tests/*.sh; do
@@ -44,7 +47,7 @@ jobs:
       - name: Validate the bag fetch fallback
         run: .github/scripts/test-fetch-bags.sh
       - name: Validate the device drivers (contract, fakes only)
-        run: python3 -m unittest tests.test_hw_contract tests.test_radio tests.test_router tests.test_lidar tests.test_hosts tests.test_setup_repos
+        run: python3 -m unittest tests.test_hw_contract tests.test_profiles tests.test_readme tests.test_radio tests.test_router tests.test_lidar tests.test_hosts tests.test_setup_repos
       - name: Validate the boat revert
         run: if [ -f tests/test_boat_revert.sh ]; then bash tests/test_boat_revert.sh; fi
       - name: Check dependency locks, Compose and Jetson image policy

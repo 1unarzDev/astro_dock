@@ -20,7 +20,7 @@ socket.socket.connect = connect
 socket.socket.getsockname = lambda self: (os.environ['FAKE_SRC'], 0)
 PY
 
-sed -n '/^ros_net() {/,/^}/p' "$root/.devcontainer/dev.bashrc" > "$tmp/ros_net.sh"
+sed -n -e '/^__astro_network_env() {/,/^}/p' -e '/^ros_net() {/,/^}/p' "$root/.devcontainer/dev.bashrc" > "$tmp/ros_net.sh"
 ros_net() {
   env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" \
     FAKE_PEER="$tmp/peer" "$@" bash -c 'ros2() { :; }; . "$1"; ros_net; echo "${ASTRO_DDS_ADDRESS-unset}"' _ "$tmp/ros_net.sh"

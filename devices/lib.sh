@@ -34,8 +34,8 @@ hw_secrets() {
     fi
 }
 
-# hw_profiles_root: ASTRO_PROFILES > HW_ROOT/profiles (the submodule, once initialised) >
-# HW_ROOT/config/profiles (legacy, until the submodule lands) > empty (generic mode).
+# hw_profiles_root: ASTRO_PROFILES > HW_ROOT/profiles (the pinned submodule, once initialised) >
+# empty (generic mode).
 hw_profiles_root() {
     local dir
     if [[ -n ${ASTRO_PROFILES:-} ]]; then
@@ -43,7 +43,7 @@ hw_profiles_root() {
         printf '%s\n' "$ASTRO_PROFILES"
         return
     fi
-    for dir in "$HW_ROOT/profiles" "$HW_ROOT/config/profiles"; do
+    for dir in "$HW_ROOT/profiles"; do
         compgen -G "$dir/*/profile.yaml" >/dev/null && { printf '%s\n' "$dir"; return; }
     done
     return 0

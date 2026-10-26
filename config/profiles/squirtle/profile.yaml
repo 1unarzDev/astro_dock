@@ -1,5 +1,0 @@
-# Squirtle, the second boat. Stub: its network env, registry, radios, lidar and Jetson are not known yet.
-# Its legacy Jetson (Xavier NX, JetPack 5 / Foxy, 48:b0:2d:51:44:32) is squirtle-jetson; it was borrowed by
-# blastoise and its old .153 lease there moved to blastoise-jetson.
-extends: roboboat
-kind: vessel

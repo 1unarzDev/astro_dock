@@ -11,8 +11,8 @@ import unittest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-# The shipped profile root: the profiles/ submodule when initialised, else the legacy config/profiles.
-SHIPPED = next((p for p in (ROOT / 'profiles', ROOT / 'config/profiles') if any(p.glob('*/profile.yaml'))), None)
+# The shipped profile root: the profiles/ submodule when initialised (else those tests skip).
+SHIPPED = ROOT / 'profiles' if any((ROOT / 'profiles').glob('*/profile.yaml')) else None
 REQUIRED = ('status', 'plan', 'apply', 'verify', 'rollback')
 VERBS = ''.join('driver_%s() { echo "%s $*"; touch "$MARK"; }\n' % (v, v) for v in REQUIRED)
 

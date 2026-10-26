@@ -1,6 +1,0 @@
-# Blastoise: the boat with the DD-WRT router, Orin Nano Super, ODROID, ZED 2i, VLP16, CubeOrange FCU and
-# Ubiquiti radios. Paths are relative to this directory.
-extends: roboboat
-kind: vessel
-network_env: ../../boat-network.env
-registry: ../../devices.yaml

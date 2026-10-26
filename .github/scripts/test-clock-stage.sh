@@ -3,6 +3,9 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
+# The shipped vessel (the profiles submodule), named, so the runner's hostname does not matter.
+export ASTRO_VESSEL=blastoise ASTRO_SECRETS=/nonexistent ASTRO_ENV_FILE=/dev/null
+network_env="$("$root/hw.sh" env)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 stubs="$tmp/bin" etc="$tmp/etc"
@@ -31,7 +34,7 @@ clock() {
         "$root/setup.linux.sh" --non-interactive --yes --components clock "$@" 2>&1
 }
 
-read -r server subnet < <(. "$root/config/boat-network.env"; echo "$BOAT_TIME_SERVER $BOAT_SUBNET")
+read -r server subnet < <(. "$network_env"; echo "$BOAT_TIME_SERVER $BOAT_SUBNET")
 
 # The boat server (ODROID): serves the subnet at local stratum 10, not orphan.
 out="$(ASTRO_NTP_ALLOW=boat clock)"
@@ -46,7 +49,7 @@ grep -Fxq "confdir $sources" "$etc/chrony.conf" || fail "confdir not added"
 grep -Fxq "sourcedir $sources" "$etc/chrony.conf" || fail "sourcedir not added"
 
 # The boat server also follows the operator laptops, listed first and never preferred.
-read -r -a operators < <(. "$root/config/boat-network.env"; echo "$BOAT_OPERATOR_TIME_SERVERS")
+read -r -a operators < <(. "$network_env"; echo "$BOAT_OPERATOR_TIME_SERVERS")
 ((${#operators[@]})) || fail "no operator time servers in boat-network.env"
 for op in "${operators[@]}"; do
     grep -Fxq "server $op iburst" "$sources/boat.sources" || fail "operator $op not a source"
