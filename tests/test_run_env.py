@@ -73,15 +73,31 @@ class RunEnvTest(unittest.TestCase):
             compose = ['docker', 'compose', '-f', str(root / '.devcontainer/docker-compose.yml'),
                        '-f', str(root / '.devcontainer/docker-compose.override.yml'), 'config', '--format', 'json']
 
+            warnings = []
+
             def domain(vessel, **extra):
                 run = subprocess.run(['bash', prebuild], env={**env, **vessel}, capture_output=True, text=True)
                 self.assertEqual(run.returncode, 0, run.stderr)
+                warnings.append(run.stderr)
                 result = subprocess.run(compose, env={**env, **extra}, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(result.stdout)['services']['dev']['environment']['ROS_DOMAIN_ID']
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}), '7')
+            self.assertNotIn('WARNING', warnings[-1])
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
-            self.assertEqual(domain({}), '0')                       # no vessel: the generic default
+            self.assertEqual(domain({'ASTRO_VESSEL': 'b'}), '0')     # a vessel env without ROS_DOMAIN_ID: no warning
+            self.assertNotIn('WARNING', warnings[-1])
+            # No vessel (an operator laptop off the LAN): 0, said loudly, and ASTRO_ROS_DOMAIN_ID still wins.
+            self.assertEqual(domain({}), '0')
+            self.assertIn('WARNING: This host resolves no vessel (see ./hw.sh whoami): [ERROR] No vessel for this machine', warnings[-1])
+            self.assertIn('ASTRO_ROS_DOMAIN_ID', warnings[-1])
+            self.assertIn('ASTRO_VESSEL', warnings[-1])
+            self.assertEqual(domain({}, ASTRO_ROS_DOMAIN_ID='42'), '42')
+            # The profiles submodule declared but not initialised: a loud banner, generic 0.
+            (root / '.gitmodules').write_text('[submodule "profiles"]\n\tpath = profiles\n\turl = https://example.invalid/p\n')
+            self.assertEqual(domain({'ASTRO_PROFILES': ''}), '0')
+            self.assertIn('WARNING: The profiles submodule is declared but not initialised', warnings[-1])
+            self.assertIn('ASTRO_ROS_DOMAIN_ID', warnings[-1])
 
     def resolve(self, text, env=None):
         with tempfile.TemporaryDirectory() as tmp:
