@@ -187,8 +187,9 @@ REGRESSION = [
     (False, 'kill 12345'),
     (False, "grep -rn 'ros2 topic pub /cmd_vel' src/"),
     (False, "rg -n 'pkill|killall' src | head"),
-    (False, "git commit -m \"$(cat <<'EOF'\ndeny ros2 topic pub /cmd_vel and pkill\nEOF\n)\""),
-    (False, "cat > test_x.py <<'EOF'\ndef test_kill():\n    proc.kill()  # watchdog\nEOF"),
+    (True, "git commit -m \"$(cat <<'EOF'\ndeny ros2 topic pub /cmd_vel and pkill\nEOF\n)\""),   # $(...)
+    (True, "cat > test_x.py <<'EOF'\ndef test_kill():\n    proc.kill()  # watchdog\nEOF"),   # writes a file
+    (False, "git commit -F - <<'EOF'\ndeny ros2 topic pub /cmd_vel and pkill\nEOF"),
     (False, 'ros2 topic echo /cmd_vel --once'),
     (False, 'git status')]
 
