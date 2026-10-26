@@ -16,9 +16,9 @@ printf '#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 0\n' > "$stubs/systemctl
 printf '#!/bin/sh\nexec "$@"\n' > "$stubs/sudo"
 printf '#!/bin/sh\necho yes\n' > "$stubs/timedatectl"
 chmod +x "$stubs"/*
-# docker: records calls; "inspect astro_clock" succeeds only while the legacy container exists.
+# docker: records calls; "inspect" prints the image of the astro_clock container held in $legacy (fails when absent).
 dlog="$tmp/docker.log" legacy="$tmp/legacy-container"
-printf '#!/bin/sh\necho "docker $*" >> "%s"\ncase "$*" in\n  "container inspect astro_clock") [ -e "%s" ];;\n  "rm -f astro_clock") rm -f "%s";;\nesac\n' "$dlog" "$legacy" "$legacy" > "$stubs/docker"
+printf '#!/bin/sh\necho "docker $*" >> "%s"\ncase "$*" in\n  "inspect -f {{.Config.Image}} astro_clock") cat "%s";;\n  "rm -f astro_clock") rm -f "%s";;\nesac\n' "$dlog" "$legacy" "$legacy" > "$stubs/docker"
 chmod +x "$stubs/docker"
 
 fail() { echo "FAIL: $*"; exit 1; }
@@ -151,7 +151,7 @@ grep -q 'timesyncd.conf.d/60-astro.conf' <<<"$out" || fail "timesyncd path not t
 # The retired astro_clock container is removed once when the host runs chrony, never on a dry run.
 printf '#!/bin/sh\nexit 0\n' > "$stubs/chronyd"
 printf '#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 0\n' > "$stubs/systemctl"
-: > "$legacy" && : > "$dlog"
+echo astro:clock-local > "$legacy" && : > "$dlog"
 clock --dry-run >/dev/null
 ! grep -q 'rm -f' "$dlog" && [[ -e "$legacy" ]] || fail "dry run removed the legacy container"
 clock >/dev/null
@@ -160,6 +160,10 @@ grep -Fxq 'docker rm -f astro_clock' "$dlog" || fail "legacy astro_clock contain
 : > "$dlog"
 clock >/dev/null
 ! grep -q 'rm -f' "$dlog" || fail "second run removed a container again"
+# A container named astro_clock from another image is not ours: kept.
+echo other:image > "$legacy" && : > "$dlog"
+clock >/dev/null
+! grep -q 'rm -f' "$dlog" && [[ -e "$legacy" ]] || fail "removed an astro_clock container of another image"
 
 python3 "$root/.devcontainer/astro-clock.py" --help >/dev/null
 python3 - "$root" <<'EOF'
