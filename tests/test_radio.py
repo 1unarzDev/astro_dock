@@ -24,7 +24,7 @@ cmd=${cmd//\/usr\/www\//$dir/www/}
 cmd=${cmd//\/proc\/uptime/$dir/uptime}
 cd "$dir" && PATH="$dir/bin:$PATH" exec bash -c "$cmd"
 '''
-# One canned result per test kind; to-boat TCP 40 Mbit/s, from-boat 30.
+# One canned result per test kind; to-target TCP 40 Mbit/s, from-target 30.
 FAKE_IPERF = r'''#!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
@@ -102,24 +102,33 @@ class LinkMeasureTest(unittest.TestCase):
         env = {'PATH': ':'.join([*map(str, path_extra), str(self.tmp / 'bin'), os.environ['PATH']]),
                'HOME': str(self.tmp), 'XDG_STATE_HOME': str(self.tmp / 'state'), 'FAKE': str(self.tmp),
                'UBNT_PASSWORD': '', 'UBNT_JUMP': '', 'BOAT_HOST_USER': 'crew', 'BOAT_HOST_PASSWORD': '',
-               'LINK_SECONDS': '3'}
+               'HW_MEASURE_SECONDS': '3', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
         env.update(extra)
         return subprocess.run(['bash', str(ROOT / script), *args], input=stdin, env=env,
                               capture_output=True, text=True, timeout=120)
+
+    def hw(self, *args, **kwargs):
+        return self.run_script('hw.sh', 'radio', *args, **kwargs)
 
     def ssh_log(self):
         path = self.tmp / 'ssh.log'
         return path.read_text().splitlines() if path.exists() else []
 
     def test_scripts_parse(self):
-        for script in ('link_measure.sh', 'ubiquiti_setup.sh'):
-            subprocess.run(['bash', '-n', str(ROOT / script)], check=True)
+        subprocess.run(['bash', '-n', str(ROOT / 'devices/radio/airmax.sh')], check=True)
+
+    def test_old_commands_still_work(self):
+        run = self.run_script('ubiquiti_setup.sh', 'status', 'rocket')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('wlanPollingQuality=92', run.stdout)
+        run = self.run_script('link_measure.sh', 'propose', self.write_measurement(), LINK_FREQ='5300')
+        self.assertRegex(run.stdout, r'radio.1.freq +5180 -> 5300')
 
     def test_measure_reads_radios_runs_iperf_both_ways_and_saves(self):
-        run = self.run_script('link_measure.sh', 'measure')
+        run = self.hw('measure')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertRegex(run.stdout, r'tcp to-boat +40 Mbit/s +retrans 12 +\| ping avg 72.5 max 118.9 mdev 11.2')
-        self.assertRegex(run.stdout, r'udp from-boat +20 Mbit/s +jitter 2.5 ms, lost 0.4%')
+        self.assertRegex(run.stdout, r'tcp to-target +40 Mbit/s +retrans 12 +\| ping avg 72.5 max 118.9 mdev 11.2')
+        self.assertRegex(run.stdout, r'udp from-target +20 Mbit/s +jitter 2.5 ms, lost 0.4%')
         self.assertRegex(run.stdout, r'rocket +-58 +-95 +30/29 +92 +150000/140000 7/6')
         iperf = (self.tmp / 'iperf.log').read_text()
         self.assertIn('-u -b 28M', iperf)  # 70% of the 40 Mbit/s TCP rate
@@ -133,7 +142,7 @@ class LinkMeasureTest(unittest.TestCase):
         summary = json.loads(raw.with_suffix('.json').read_text())
         self.assertEqual(summary['radios']['bullet']['width'], 40)
         self.assertEqual(summary['radios']['rocket']['uptime_s'], 86400.12)
-        self.assertEqual(summary['iperf']['tcp from-boat']['mbps'], 30)
+        self.assertEqual(summary['iperf']['tcp from-target']['mbps'], 30)
         # Radios get status reads only, never a write, reboot or scan.
         radio_cmds = [l for l in self.ssh_log() if l.startswith((ROCKET + ' ', BULLET + ' '))]
         self.assertEqual(len(radio_cmds), 2)
@@ -143,27 +152,27 @@ class LinkMeasureTest(unittest.TestCase):
     def test_measure_uses_the_container_iperf3_and_never_installs_one(self):
         (self.tmp / 'bin/iperf3').rename(self.tmp / 'container-iperf3')
         executable(self.tmp / 'bin/docker', FAKE_DOCKER)
-        run = self.run_script('link_measure.sh', 'measure')
+        run = self.hw('measure')
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('iperf3: not on', run.stderr)
         self.assertIn('install it (astro-ros-install iperf3)', run.stderr)
         self.assertNotIn('astro-ros-install', (self.tmp / 'docker.log').read_text())
         executable(self.tmp / 'container/iperf3', (self.tmp / 'container-iperf3').read_text())
         (self.tmp / 'installed').touch()
-        run = self.run_script('link_measure.sh', 'measure')
+        run = self.hw('measure')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertRegex(run.stdout, r'tcp to-boat +40 Mbit/s')
+        self.assertRegex(run.stdout, r'tcp to-target +40 Mbit/s')
         self.assertNotIn('astro-ros-install', (self.tmp / 'docker.log').read_text())
 
     def test_measure_needs_the_boat_login(self):
-        run = self.run_script('link_measure.sh', 'measure', BOAT_HOST_USER='')
+        run = self.hw('measure', BOAT_HOST_USER='')
         self.assertNotEqual(run.returncode, 0)
-        self.assertIn('BOAT_HOST_USER (the boat login) is unset', run.stderr)
+        self.assertIn('BOAT_HOST_USER (the login on', run.stderr)
         self.assertEqual(self.ssh_log(), [])
 
     def test_measure_needs_a_route_to_the_boat(self):
         executable(self.tmp / 'bin/ip', '#!/bin/sh\nexit 2\n')
-        run = self.run_script('link_measure.sh', 'measure')
+        run = self.hw('measure')
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('No route', run.stderr)
         self.assertEqual(self.ssh_log(), [])
@@ -184,7 +193,7 @@ class LinkMeasureTest(unittest.TestCase):
         return str(path)
 
     def test_propose_widens_a_quiet_link_and_tunes_both_radios(self):
-        run = self.run_script('link_measure.sh', 'propose', self.write_measurement())
+        run = self.hw('propose', self.write_measurement())
         self.assertEqual(run.returncode, 0, run.stderr)
         out = run.stdout
         for line in ('radio.1.chanbw +20 -> 40', r'radio.1.center.1.freq +5180 -> 5190', 'radio.1.ieee_mode +11acvht20 -> 11acvht40',
@@ -193,47 +202,47 @@ class LinkMeasureTest(unittest.TestCase):
             self.assertRegex(out, line)
         self.assertRegex(out.split('bullet (station)')[1], r'radio.1.txpower +25 -> 20')
         self.assertNotIn('chanbw', out.split('bullet (station)')[1].split('note:')[0])
-        self.assertIn('apply rocket --dry-run radio.1.center.1.freq=5190 radio.1.chanbw=40 radio.1.ieee_mode=11acvht40\n', out)
+        self.assertIn('plan rocket radio.1.center.1.freq=5190 radio.1.chanbw=40 radio.1.ieee_mode=11acvht40\n', out)
         self.assertIn('bullet: tshaper.status is not in its config', out)
-        self.assertLess(out.index('apply rocket --dry-run radio.1.center'), out.index('apply bullet'))
+        self.assertLess(out.index('plan rocket radio.1.center'), out.index('plan bullet'))
 
     def test_propose_narrows_a_noisy_link_and_never_raises_power_unasked(self):
         weak = {'signal': -72, 'noise': -82, 'radio.1.chanbw': '40', 'radio.1.center.1.freq': '5190',
                 'radio.1.ieee_mode': '11acvht40'}
         path = self.write_measurement(rocket=weak, bullet={'signal': -72, 'noise': -82})
-        run = self.run_script('link_measure.sh', 'propose', path)
+        run = self.hw('propose', path)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertRegex(run.stdout, 'radio.1.chanbw +40 -> 20')
         self.assertRegex(run.stdout, r'radio.1.center.1.freq +5190 -> 5180')
         self.assertNotIn('txpower', run.stdout.split('note:')[0])
-        self.assertIn('raise power only with LINK_TXPOWER_MAX', run.stdout)
-        run = self.run_script('link_measure.sh', 'propose', path, LINK_TXPOWER_MAX='26')
+        self.assertIn('raise power only with propose.txpower_max', run.stdout)
+        run = self.hw('propose', path, HW_PROPOSE_TXPOWER_MAX='26')
         self.assertRegex(run.stdout, r'radio.1.txpower +24 -> 26')
 
     def test_propose_guards_channel_choices(self):
-        run = self.run_script('link_measure.sh', 'propose', self.write_measurement(), LINK_FREQ='5300')
+        run = self.hw('propose', self.write_measurement(), HW_PROPOSE_FREQ='5300')
         self.assertRegex(run.stdout, r'radio.1.freq +5180 -> 5300')
         self.assertIn('DFS channel', run.stdout)
         off_grid = self.write_measurement(rocket={'radio.1.freq': '5165', 'radio.1.center.1.freq': '5165'})
-        run = self.run_script('link_measure.sh', 'propose', off_grid)
+        run = self.hw('propose', off_grid)
         self.assertNotIn('chanbw', run.stdout.split('note:')[0])
         self.assertIn('off the 802.11 grid', run.stdout)
-        for key, value in (('LINK_FREQ', '2412'), ('LINK_RANGE_M', '50'), ('LINK_WIDTH_MAX', '60'), ('LINK_FREQ', '5180;x')):
+        for key, value in (('HW_PROPOSE_FREQ', '2412'), ('HW_PROPOSE_RANGE_M', '50'), ('HW_PROPOSE_WIDTH_MAX', '60'), ('HW_PROPOSE_FREQ', '5180;x')):
             with self.subTest(key=key):
-                run = self.run_script('link_measure.sh', 'propose', self.write_measurement(), **{key: value})
+                run = self.hw('propose', self.write_measurement(), **{key: value})
                 self.assertNotEqual(run.returncode, 0)
                 self.assertIn('link proposal', run.stderr)
 
     def test_propose_without_measurement(self):
-        run = self.run_script('link_measure.sh', 'propose')
+        run = self.hw('propose')
         self.assertNotEqual(run.returncode, 0)
-        self.assertIn('run link_measure.sh measure first', run.stderr)
+        self.assertIn('run hw.sh radio measure first', run.stderr)
 
     def radio_files(self, ip):
         return sorted(p.name for p in (self.tmp / 'hosts' / ip / 'tmp').iterdir())
 
     def test_apply_dry_run_shows_the_diff_and_changes_nothing(self):
-        run = self.run_script('ubiquiti_setup.sh', 'apply', 'rocket', '--dry-run', 'radio.1.chanbw=40',
+        run = self.hw('apply', 'rocket', '--dry-run', 'radio.1.chanbw=40',
                               'radio.1.txpower=20')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('radio.1.chanbw: 20 -> 40', run.stdout)
@@ -246,16 +255,16 @@ class LinkMeasureTest(unittest.TestCase):
         self.assertEqual(len(list((self.state / 'ubiquiti').glob('rocket-*.cfg'))), 1)
 
     def test_apply_refuses_channel_keys_on_the_station(self):
-        run = self.run_script('ubiquiti_setup.sh', 'apply', 'bullet', '--dry-run', 'radio.1.chanbw=20')
+        run = self.hw('apply', 'bullet', '--dry-run', 'radio.1.chanbw=20')
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('link-shared key', run.stderr)
 
     def test_apply_refuses_a_channel_outside_the_station_scan_list(self):
         self.radio(BULLET, {**CFG, 'wireless.1.scan_list.status': 'enabled', 'wireless.1.scan_list.channels': '5180,5200'})
-        run = self.run_script('ubiquiti_setup.sh', 'apply', 'rocket', '--dry-run', 'radio.1.freq=5745')
+        run = self.hw('apply', 'rocket', '--dry-run', 'radio.1.freq=5745')
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('scan list does not include 5745', run.stderr)
-        run = self.run_script('ubiquiti_setup.sh', 'apply', 'rocket', '--dry-run', 'radio.1.freq=5200')
+        run = self.hw('apply', 'rocket', '--dry-run', 'radio.1.freq=5200')
         self.assertEqual(run.returncode, 0, run.stderr)
 
     def test_keep_is_refused_when_the_peer_is_lost_on_the_trial_channel(self):
@@ -269,14 +278,26 @@ class LinkMeasureTest(unittest.TestCase):
             subprocess.run(['pkill', '-P', pid])
             subprocess.run(['kill', pid])
         self.addCleanup(stop_timer)
-        run = self.run_script('ubiquiti_setup.sh', 'apply', 'rocket', 'radio.1.chanbw=40', stdin='APPLY\nKEEP\n')
+        run = self.hw('apply', 'rocket', 'radio.1.chanbw=40', stdin='APPLY\nKEEP\n')
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('bullet radio is unreachable on the trial channel/width; not saved', run.stderr)
         self.assertFalse(any('cfgmtd' in l for l in self.ssh_log()))
         self.assertTrue((rocket / 'tmp/astro-trial.pid').exists())      # the revert timer still runs
 
+    def test_rollback_reboots_only_a_radio_with_a_pending_trial(self):
+        run = self.hw('rollback', 'rocket', stdin='ROLLBACK\n')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('no pending trial', run.stderr)
+        self.assertFalse(any('reboot' in l for l in self.ssh_log()))
+        rocket = self.tmp / 'hosts' / ROCKET
+        executable(rocket / 'bin/reboot', '#!/bin/sh\ntouch "$FAKE/rebooted"\n')
+        (rocket / 'tmp/astro-trial.pid').write_text(str(os.getpid()))
+        run = self.hw('rollback', 'rocket', stdin='ROLLBACK\n')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertTrue((self.tmp / 'rebooted').exists())
+
     def test_status_is_read_only_and_drops_secrets(self):
-        run = self.run_script('ubiquiti_setup.sh', 'status', 'rocket')
+        run = self.hw('status', 'rocket')
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn('wlanPollingQuality=92', run.stdout)
         self.assertIn('"center1_freq": 5180', run.stdout)
