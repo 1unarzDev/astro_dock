@@ -3,7 +3,7 @@
 
 # System packages
 geographiclib-tools
-rsync  # boat_test sends bags to tranquility, fetch_bags.sh pulls them
+rsync  # bag transfers to the operator station; fetch_bags.sh pulls them
 openssh-client
 iperf3  # hw.sh radio measure throughput between the operator laptop and the boat
 python3-scipy
@@ -27,7 +27,7 @@ nav2_mppi_controller
 nav2_smac_planner
 spatio_temporal_voxel_layer
 nmea_msgs
-py_trees  # mhseals_nav task trees
+py_trees  # behaviour trees for robot tasks
 rmw_cyclonedds_cpp
 robot_localization
 ros2_control

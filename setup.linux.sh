@@ -404,7 +404,7 @@ stage_repos() {
 
 stage_operator_key() {
     heading "Operator ssh key"
-    echo "The TUI starts and reads parts on the other boat hosts over ssh with ~/.config/mhseals/ssh/id_ed25519."
+    echo "The TUI starts and reads parts on the other boat hosts over ssh with the operator key (~/.config/<the profile's operator_key>/id_ed25519)."
     echo "Creates it if missing and installs it on each registry host (./hw.sh hosts keys) the TUI cannot reach yet."
     approve "Provision the operator key on the boat hosts?" || { SKIPPED+=(operator-key); return; }
     run "$SCRIPT_DIR/hw.sh" hosts keys || { echo "Some hosts were not reached; rerun when they are up." >&2; SKIPPED+=(operator-key); return; }

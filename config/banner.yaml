@@ -31,5 +31,5 @@ ttl: {repos: 60, nodes: 30, lan: 30}
 disk: ''
 
 # LAN hosts to probe by TCP, as name: host[:port] (port 22 by default).
-# The stat is hidden while this is empty, e.g. {router: '192.168.0.1:80'}.
+# The stat is hidden while this is empty, e.g. {router: '10.0.1.1:80'}.
 lan: {}
