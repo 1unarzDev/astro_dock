@@ -53,10 +53,12 @@ fi
 # discovery still lists the topics. Detected again by each new shell and by
 # rviz2, so a changed adapter or address only needs the process restarted.
 # Off the boat subnet (simulation, home) the static profile applies unchanged.
-# Set ASTRO_DDS_ADDRESS to force an address.
+# Set ASTRO_DDS_ADDRESS to force an address. Silent at shell start; ros_net -v
+# prints the choice, and the banner shows it too.
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
-  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override peers
+  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override peers run="${XDG_RUNTIME_DIR:-/tmp}"
+  [[ -d "$run" && -w "$run" ]] || run=/tmp
   subnet="${ASTRO_DDS_SUBNET:-$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
   # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported
@@ -90,7 +92,7 @@ for _, name in socket.if_nameindex():
   # Loopback stays allowed so localhost-only discovery, whose peers are 127.0.0.1,
   # still works; Fast DDS never announces loopback beside a whitelisted address.
   if [[ -n "$address" ]]; then
-    pinned="${XDG_RUNTIME_DIR:-/tmp}/astro-fastdds-$address.xml"
+    pinned="$run/astro-fastdds-$address.xml"
     python3 - "$profile" "$pinned" "$address" <<'EOF' || return 1
 import sys, xml.etree.ElementTree as ET
 ns = 'http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles'
@@ -121,7 +123,7 @@ EOF
   fi
   # The ros2 CLI daemon is shared by every shell and keeps the transport it
   # started with: restart it when the address or the peers differ from the last seen.
-  local state="${XDG_RUNTIME_DIR:-/tmp}/astro-dds-address-$(id -u)"
+  local state="$run/astro-dds-address-$(id -u)"
   if [[ "$(cat "$state" 2>/dev/null)" != "$address ${ROS_STATIC_PEERS:-}" ]]; then
     ros2 daemon stop >/dev/null 2>&1 || true
     printf '%s' "$address ${ROS_STATIC_PEERS:-}" > "$state" 2>/dev/null || true
@@ -129,7 +131,7 @@ EOF
   export ASTRO_DDS_ADDRESS="$address"
   [[ -n "$override" ]] || export __ASTRO_DDS_AUTO="$address"
   export FASTRTPS_DEFAULT_PROFILES_FILE="$profile" FASTDDS_DEFAULT_PROFILES_FILE="$profile"
-  [[ $- == *i* ]] && echo "DDS: ${address:-all interfaces (not on ${subnet:-the boat subnet})}"
+  [[ "${1:-}" != -v ]] || echo "DDS: ${address:-all interfaces (not on ${subnet:-the boat subnet})}"
   return 0
 }
 ros_net

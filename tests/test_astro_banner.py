@@ -79,6 +79,12 @@ class BannerTest(unittest.TestCase):
         self.assertTrue(stats.stale(cache, 'nodes', '7//', 30, 120))
         self.assertTrue(stats.stale(cache, 'repos', str(ROOT), 30, 120))
 
+    def test_cache_dir_falls_back_when_runtime_dir_is_unusable(self):
+        # A missing $XDG_RUNTIME_DIR left the refresher unable to write: rows stayed pending for good.
+        self.assertEqual(stats.cache_path({'XDG_RUNTIME_DIR': '/nonexistent/run'}).parent, Path('/tmp'))
+        with tempfile.TemporaryDirectory() as run:
+            self.assertEqual(stats.cache_path({'XDG_RUNTIME_DIR': run}).parent, Path(run))
+
     def test_only_stale_probes_refresh_and_cached_values_show(self):
         calls = []
         real = stats.refresh
@@ -90,7 +96,7 @@ class BannerTest(unittest.TestCase):
             rows = dict(stats.collect(self.env, dict(self.config, stats=['repos', 'nodes']), ROOT, time.time()))
             self.assertEqual(calls, [['nodes']])
             self.assertIn(('✗ dock', 'warn'), rows['repos'])
-            self.assertEqual(rows['nodes'], [('probing…', 'dim')])
+            self.assertEqual(rows['nodes'], [('pending', 'dim')])
         finally:
             stats.refresh = real
 

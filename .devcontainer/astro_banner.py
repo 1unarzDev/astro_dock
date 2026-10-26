@@ -14,12 +14,13 @@ sys.path.insert(0, str(HERE))  # python3 -I leaves the script's directory off th
 from astro_banner_stats import collect, read  # noqa: E402
 
 CONFIGS = (HERE.parent / 'config' / 'banner.yaml', Path.home() / '.config' / 'astro' / 'banner.yaml')
-# Star glyphs by brightness: near, mid and distant.
-STARS = {'✦': 'star', '⋆': 'faint', '+': 'faint', '·': 'dim', '.': 'dim'}
-# 16-colour code and soft truecolour per tone (cx: 16 ANSI colours, cyan accent).
-TONES = {'accent': (36, (125, 196, 228)), 'ok': (32, (166, 218, 149)), 'warn': (33, (238, 212, 159)),
-         'bad': (31, (237, 135, 150)), 'dim': (90, (110, 115, 141)), 'star': (37, (244, 219, 214)),
-         'faint': (37, (183, 189, 222))}
+# Star glyphs: bright ones in the star tone, the rest grey.
+STARS = {'✦': 'star', '⋆': 'dim', '+': 'dim', '·': 'dim', '.': 'dim'}
+# One small palette, as in cx: a cyan accent for labels and the title, grey for
+# separators and secondary text, and warn/bad only where something needs a look.
+# Healthy values stay in the terminal's own colour. 16-colour code, then soft truecolour.
+TONES = {'accent': (36, (125, 196, 228)), 'warn': (33, (238, 212, 159)),
+         'bad': (31, (237, 135, 150)), 'dim': (90, (110, 115, 141)), 'star': (37, (202, 211, 245))}
 # One-for-one so widths, and with them the layout, survive the ASCII fallback;
 # braille shading becomes a density ramp by its dot count.
 ASCII = str.maketrans('█▓▒░▄▀▟▙▛▜▁▔─━═│║╭╮╰╯╗╔╝╚·✦⋆…↑✓✗±▰▱',

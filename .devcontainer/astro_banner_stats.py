@@ -13,7 +13,12 @@ import time
 # ---------------------------------------------------------------- cache
 
 def cache_path(env):
-    return Path(env.get('XDG_RUNTIME_DIR') or '/tmp') / ('astro-banner-%d.json' % os.getuid())
+    # $XDG_RUNTIME_DIR can name a directory that does not exist (a container, su, ssh):
+    # a refresher that cannot write there would leave every probe row pending for good.
+    run = env.get('XDG_RUNTIME_DIR') or '/tmp'
+    if not (os.path.isdir(run) and os.access(run, os.W_OK)):
+        run = '/tmp'
+    return Path(run) / ('astro-banner-%d.json' % os.getuid())
 
 
 def read_cache(path):
@@ -36,8 +41,11 @@ def probe_repos(ws):
     for root in roots:
         if not (root / '.git').exists():
             continue
-        out = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-b'],
-                             capture_output=True, text=True, timeout=10).stdout.splitlines()
+        try:
+            out = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-b'],
+                                 capture_output=True, text=True, timeout=3).stdout.splitlines()
+        except subprocess.TimeoutExpired:
+            continue  # a huge repo costs its own row, not the rest
         head = out[0] if out else ''
         ahead = re.search(r'ahead (\d+)', head)
         repos.append({'name': root.name, 'dirty': len(out) - 1 if out else 0,
@@ -48,7 +56,7 @@ def probe_repos(ws):
 def probe_nodes(env):
     import subprocess
     try:
-        out = subprocess.run(['ros2', 'node', 'list'], capture_output=True, text=True, timeout=15, env=env)
+        out = subprocess.run(['ros2', 'node', 'list'], capture_output=True, text=True, timeout=5, env=env)
     except FileNotFoundError:
         return -1
     return len(set(line for line in out.stdout.splitlines() if line.startswith('/')))
@@ -100,9 +108,9 @@ def refresh(path, jobs):
                 cache[name] = {'t': time.time(), 'key': key, 'value': probe()}
             except Exception:
                 cache[name] = {'t': time.time(), 'key': key, 'value': None}
-        tmp = Path('%s.%d' % (path, os.getpid()))
-        tmp.write_text(json.dumps(cache))
-        os.replace(str(tmp), str(path))
+            tmp = Path('%s.%d' % (path, os.getpid()))  # per job: a slow probe holds back no other row
+            tmp.write_text(json.dumps(cache))
+            os.replace(str(tmp), str(path))
     finally:
         try:
             lock.unlink()
@@ -139,7 +147,7 @@ def stat_ros(c):
         return [('ROS not sourced', 'bad')]
     rmw = env.get('RMW_IMPLEMENTATION') or 'rmw_fastrtps_cpp'
     rmw = rmw.replace('rmw_', '').replace('_cpp', '')
-    return [(env['ROS_DISTRO'], 'accent'), ('domain %s' % env.get('ROS_DOMAIN_ID', '0'), None), (rmw, None),
+    return [(env['ROS_DISTRO'], None), ('domain %s' % env.get('ROS_DOMAIN_ID', '0'), None), (rmw, None),
             (env.get('ROS_AUTOMATIC_DISCOVERY_RANGE', 'SUBNET').lower(), 'dim')]
 
 
@@ -148,14 +156,14 @@ def stat_dds(c):
     if env.get('ROS_AUTOMATIC_DISCOVERY_RANGE', '').upper() == 'LOCALHOST':
         return [('localhost only', 'warn')]
     if env.get('ASTRO_DDS_ADDRESS'):
-        return [('pinned %s' % env['ASTRO_DDS_ADDRESS'], 'ok')]
+        return [('pinned %s' % env['ASTRO_DDS_ADDRESS'], None)]
     return [('all interfaces', 'warn'), ('not pinned to a subnet address', 'dim')]
 
 
 def stat_host(c):
     u = os.uname()
     where = 'container' if os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv') else 'host'
-    return [(u.nodename, 'accent'), (u.machine, None), (u.release.split('-')[0], None), (where, 'dim')]
+    return [(u.nodename, None), (u.machine, None), (u.release.split('-')[0], None), (where, 'dim')]
 
 
 def stat_hw(c):
@@ -166,7 +174,7 @@ def stat_hw(c):
         mode = re.search(r'pmode:(\d+)', read('/var/lib/nvpmodel/status'))
         if mode:
             names = dict(re.findall(r'POWER_MODEL\s+ID=(\d+)\s+NAME=(\S+)', read('/etc/nvpmodel.conf')))
-            segments.append(('power %s' % names.get(str(int(mode.group(1))), mode.group(1)), 'accent'))
+            segments.append(('power %s' % names.get(str(int(mode.group(1))), mode.group(1)), None))
     else:
         cpu = re.search(r'model name\s*:\s*(.+)', read('/proc/cpuinfo'))
         if cpu:
@@ -175,7 +183,7 @@ def stat_hw(c):
         for info in sorted(Path('/proc/driver/nvidia/gpus').glob('*/information')):
             gpu = re.search(r'Model:\s*(.+)', read(info))
             if gpu:
-                segments.append((gpu.group(1).strip().replace('NVIDIA ', ''), 'accent'))
+                segments.append((gpu.group(1).strip().replace('NVIDIA ', ''), None))
     segments.append(('%d cpus' % (os.cpu_count() or 0), 'dim'))
     return segments
 
@@ -206,8 +214,8 @@ def stat_workspace(c):
     install = ws / 'install'
     built = sum(1 for n in names if (install / n).is_dir() or (install / 'share' / n).is_dir())
     label = str(ws).replace(home, '~', 1) if str(ws).startswith(home) else str(ws)
-    segments = [(label, 'accent'), ('%d pkgs' % len(names), None),
-                ('%d built' % built, 'ok' if built == len(names) else 'warn')]
+    segments = [(label, None), ('%d pkgs' % len(names), None),
+                ('%d built' % built, None if built == len(names) else 'warn')]
     try:
         segments.append(('built %s ago' % ago(c['now'] - (ws / 'log' / 'latest_build').stat().st_mtime), 'dim'))
     except OSError:
@@ -223,30 +231,30 @@ def cached(c, name):
 def stat_repos(c):
     entry = cached(c, 'repos')
     if entry is None:
-        return [('probing…', 'dim')]
+        return [('pending', 'dim')]
     repos = entry.get('value') or []
     dirty = [r['name'] for r in repos if r['dirty']]
     ahead = [r['name'] for r in repos if r['ahead']]
     segments = [('%d repo%s' % (len(repos), '' if len(repos) == 1 else 's'), None)]
     if not dirty and not ahead:
-        segments.append(('clean', 'ok'))
+        segments.append(('clean', None))
     if dirty:
         segments.append(('✗ ' + ' '.join(dirty), 'warn'))
     if ahead:
-        segments.append(('↑ ' + ' '.join(ahead), 'warn'))
+        segments.append(('↑ ' + ' '.join(ahead), None))
     return segments
 
 
 def stat_nodes(c):
     entry = cached(c, 'nodes')
     if entry is None or entry.get('key') != c['keys']['nodes']:
-        return [('probing…', 'dim')] if c['env'].get('ROS_DISTRO') else None
+        return [('pending', 'dim')] if c['env'].get('ROS_DISTRO') else None
     if entry.get('value') is None:
         return [('graph unavailable', 'dim')]
     count = entry['value']
     if count < 0:
         return None
-    return [('%d nodes' % count if count else 'no nodes', 'ok' if count else 'dim'),
+    return [('%d nodes' % count if count else 'no nodes', None if count else 'dim'),
             ('domain %s' % c['env'].get('ROS_DOMAIN_ID', '0'), None),
             ('%s ago' % ago(c['now'] - entry.get('t', 0)), 'dim')]
 
@@ -265,7 +273,7 @@ def stat_time(c):
     if state == 5 or tx.status & 0x40:  # TIME_ERROR or STA_UNSYNC
         return [('unsynchronized', 'bad'), ('max error %d ms' % (tx.maxerror // 1000), 'dim')]
     offset = abs(tx.offset) / (1e6 if tx.status & 0x2000 else 1e3)  # STA_NANO: ns, else us
-    return [('synced', 'ok'), ('offset %.2f ms' % offset, None), ('est ±%.1f ms' % (tx.esterror / 1e3), 'dim')]
+    return [('synced', None), ('offset %.2f ms' % offset, None), ('est ±%.1f ms' % (tx.esterror / 1e3), 'dim')]
 
 
 def stat_disk(c):
@@ -275,9 +283,9 @@ def stat_disk(c):
     fs = os.statvfs(path)
     total, free = fs.f_blocks * fs.f_frsize, fs.f_bavail * fs.f_frsize
     used = 1 - free / float(total or 1)
-    tone = 'bad' if used > 0.9 else 'warn' if used > 0.8 else 'ok'
+    tone = 'bad' if used > 0.9 else 'warn' if used > 0.8 else None
     bar = '▰' * int(round(used * 8)) + '▱' * (8 - int(round(used * 8)))
-    return [(os.path.basename(path.rstrip('/')) or '/', 'accent'),
+    return [(os.path.basename(path.rstrip('/')) or '/', None),
             ('%s free of %s' % (human(free), human(total)), None), (bar + ' %d%%' % (used * 100), tone)]
 
 
@@ -295,8 +303,8 @@ def stat_lan(c):
         return None
     entry = cached(c, 'lan')
     if entry is None or entry.get('key') != c['keys']['lan']:
-        return [('probing…', 'dim')]
-    return [(('✓ ' if up else '✗ ') + name, 'ok' if up else 'bad') for name, up in (entry.get('value') or {}).items()]
+        return [('pending', 'dim')]
+    return [(('✓ ' if up else '✗ ') + name, None if up else 'bad') for name, up in (entry.get('value') or {}).items()]
 
 
 STATS = {'ros': stat_ros, 'dds': stat_dds, 'host': stat_host, 'hw': stat_hw, 'workspace': stat_workspace,
