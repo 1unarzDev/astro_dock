@@ -24,7 +24,8 @@ rollback  Recreate the container on IMAGE (an astro-rollback:STAMP that apply pr
 keys      Create the operator key (XDG_CONFIG_HOME/$(cfg operator_key)/id_ed25519) if missing, install
           it where the TUI is refused (your own ssh may ask once) and record each host key. Idempotent.
 repos     Read-only, local: "NAME URL BRANCH" per repository of this computer (from sources): repos.all
-          and those of its roles (--role ROLE, else this host's registry roles, else none);
+          and those of its roles (--role ROLE, else this host's registry roles, operator for a
+          generic control station, else none);
           ./setup.linux.sh --components repos clones and builds them on this computer.
 project   The Compose project of the dev container (compose_project).
 Without HOST: every ssh host of ${ASTRO_REGISTRY:-the vessel registry}.
@@ -56,7 +57,11 @@ driver_repos() {
         roles+=("$2")
         shift 2
     done
-    ((${#roles[@]})) || mapfile -t roles < <(host_roles "${ASTRO_HOST:-}")
+    # This machine's resolved roles (a generic control station has none in a registry: operator).
+    if ((${#roles[@]} == 0)); then
+        if [[ -v HW_SELF_ROLES ]]; then read -ra roles <<<"$HW_SELF_ROLES"
+        else mapfile -t roles < <(host_roles "${ASTRO_HOST:-}"); fi
+    fi
     for name in $(role_repos "${roles[@]}"); do
         [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "$HW_KIND.yaml: '$name' is not a directory name"
         url=$(cfg "sources.$name.url") branch=$(cfg "sources.$name.branch")

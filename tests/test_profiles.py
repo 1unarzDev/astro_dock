@@ -39,6 +39,7 @@ class Profiles(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         env.update(ASTRO_PROFILES=str(self.root), ASTRO_SECRETS=str(self.tmp / 'no-secrets'),
                    ASTRO_ENV_FILE='/dev/null', HW_HOSTNAME=hostname, HW_SYSFS_NET=str(self.sys),
+                   HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
                    HW_DRIVERS=str(self.tmp / 'drivers'), XDG_STATE_HOME=str(self.tmp / 'state'))
         env.update(extra)
         env = {k: v for k, v in env.items() if v is not None}
@@ -51,12 +52,79 @@ class Profiles(unittest.TestCase):
         return dict(line.split(None, 1) for line in run.stdout.splitlines())
 
     # Resolution
-    def test_hostname_finds_the_station_and_its_vessel(self):
-        me = self.whoami(hostname='s')
-        self.assertEqual(me['host'], 's (hostname s)')
+    def test_an_operator_host_is_the_station_by_its_role(self):
+        me = self.whoami(hostname='op')
+        self.assertEqual(me['host'], 'op (hostname op)')
         self.assertEqual(me['station'], 's')
-        self.assertEqual(me['vessel'], 'a (registry of a lists s)')
+        self.assertEqual(me['vessel'], 'a (registry of a lists op)')
         self.assertEqual(me['network'], str(self.root / 'a/network.env'))
+        self.assertNotIn('station', self.whoami(hostname='a-pc'))           # no operator role
+        self.assertNotIn('station', self.whoami(hostname='op', HW_DT_MODEL='/proc/self/status'))  # a board
+
+    def test_a_named_unlisted_laptop_is_a_generic_station_without_a_vessel(self):
+        me = self.whoami('--host', 'somelaptop')
+        self.assertEqual(me['host'], 'somelaptop (--host/ASTRO_HOST; no registry lists it: a generic control station)')
+        self.assertEqual(me['station'], 's')
+        self.assertTrue(me['vessel'].startswith('none'))
+        self.assertEqual(self.repos('--host', 'somelaptop', 'hosts', 'repos'), ['alpha', 'gamma'])
+        self.assertTrue(self.whoami('--host', 'somelaptop', '--vessel', 'b')['vessel'].startswith('b (--vessel'))
+        me = self.whoami('--host', 'somelaptop', HW_ADDRS='10.0.1.57/24')       # on a's LAN: a
+        self.assertEqual(me['vessel'], 'a (boat LAN 10.0.1.57 in 10.0.1.0/24)')
+        run = self.hw('--host', 'somelaptop', 'whoami', HW_DT_MODEL='/proc/self/status')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('is a boat computer (device-tree model', run.stderr)
+
+    def test_an_unlisted_laptop_on_one_boat_lan_is_its_generic_station(self):
+        me = self.whoami(HW_ADDRS='172.17.0.1/16 10.0.1.57/24')
+        self.assertEqual(me['host'], 'innovation (boat LAN 10.0.1.57 in 10.0.1.0/24: a generic control station)')
+        self.assertEqual(me['station'], 's')
+        self.assertEqual(me['vessel'], 'a (boat LAN 10.0.1.57 in 10.0.1.0/24)')
+        self.assertEqual(self.repos('hosts', 'repos', HW_ADDRS='10.0.1.57/24'), ['alpha', 'gamma'])
+        me = self.whoami(HW_ADDRS='10.0.9.57/24')                               # on no boat LAN
+        self.assertTrue(me['host'].startswith('none (no match'))
+        self.assertTrue(me['vessel'].startswith('none'))
+
+    def test_a_boat_computer_is_never_a_station(self):
+        for extra, why in (({'HW_ADDRS': '10.0.1.10/24'}, 'address 10.0.1.10 belongs to a-pc'),     # a reservation
+                           ({'HW_ADDRS': '10.0.1.1/24'}, 'address 10.0.1.1 belongs to a-router'),   # a registry address
+                           ({'HW_ADDRS': '10.0.1.57/24', 'HW_DT_MODEL': '/proc/self/status'}, 'device-tree model')):
+            with self.subTest(why=why):
+                me = self.whoami(**extra)
+                self.assertNotIn('station', me)
+                self.assertIn('no match: hostname innovation', me['host'])
+                self.assertIn(why, me['host'])
+                self.assertTrue(me['vessel'].startswith('none'))
+                run = self.hw('env', **extra)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertIn('pass --vessel', run.stderr)
+        self.nic('enp1s0', '02:aa:00:00:00:02')                                 # a-cam's MAC: the host, no station
+        me = self.whoami(hostname='roboboat', HW_ADDRS='10.0.1.57/24')
+        self.assertTrue(me['host'].startswith('a-cam (MAC'))
+        self.assertNotIn('station', me)
+        me = self.whoami('--host', 'a-pc', HW_ADDRS='10.0.1.57/24')             # a named boat host stays one
+        self.assertEqual(me['host'], 'a-pc (--host/ASTRO_HOST)')
+        self.assertNotIn('station', me)
+
+    def test_two_vessels_on_one_subnet_need_vessel(self):
+        env = self.root / 'b/network.env'
+        env.write_text(env.read_text().replace('10.0.2.0/24', '10.0.1.0/24'))
+        me = self.whoami(HW_ADDRS='10.0.1.57/24')
+        self.assertIn('on the boat LAN of several vessels (a b): pass --vessel', me['host'])
+        self.assertNotIn('station', me)
+        self.assertTrue(me['vessel'].startswith('none'))
+        me = self.whoami('--vessel', 'b', HW_ADDRS='10.0.1.57/24')
+        self.assertEqual(me['station'], 's')
+        self.assertTrue(me['vessel'].startswith('b (--vessel'))
+
+    def test_several_stations_need_a_link_to_pick_one(self):
+        shutil.copytree(self.root / 's', self.root / 't')
+        (self.root / 'fleet/topology.yaml').write_text(
+            'nodes: {a: vessel, b: vessel, s: station, t: station}\nlinks:\n  - {between: [s, a]}\n')
+        self.assertEqual(self.whoami(hostname='op')['station'], 's')            # s is linked to a
+        run = self.hw('--host', 'somelaptop', 'whoami')                         # no vessel: ambiguous
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('several station members (s t)', run.stderr)
+        self.assertTrue(self.whoami()['host'].startswith('none (no match'))       # not a station: fine
 
     def test_a_permanent_mac_finds_the_host_and_the_container_hostname_is_ignored(self):
         self.nic('enp1s0', '02:AA:00:00:00:02')
@@ -67,15 +135,14 @@ class Profiles(unittest.TestCase):
         self.assertTrue(me['vessel'].startswith('a '))
 
     def test_flags_and_environment_override(self):
-        self.assertTrue(self.whoami('--host', 'b-pc', hostname='s')['vessel'].startswith('b '))
+        self.assertTrue(self.whoami('--host', 'b-pc', hostname='op')['vessel'].startswith('b '))
         self.assertTrue(self.whoami(ASTRO_HOST='b-pc')['vessel'].startswith('b '))
-        self.assertTrue(self.whoami('--vessel', 'b', hostname='s')['vessel'].startswith('b (--vessel'))
+        self.assertTrue(self.whoami('--vessel', 'b', hostname='op')['vessel'].startswith('b (--vessel'))
         self.assertTrue(self.whoami(ASTRO_VESSEL='b')['vessel'].startswith('b '))
         run = self.hw('--profile', 'b', 'whoami')                   # the old name, one release
         self.assertIn('--profile is now --vessel', run.stderr)
         self.assertIn('vessel    b ', run.stdout)
-        for args, error in ((('--host', 'nobody'), 'no registry lists it'), (('--vessel', 's'), 'not a vessel'),
-                            (('--vessel', 'fleet'), 'not a vessel')):
+        for args, error in ((('--vessel', 's'), 'not a vessel'), (('--vessel', 'fleet'), 'not a vessel')):
             run = self.hw(*args, 'whoami')
             self.assertNotEqual(run.returncode, 0)
             self.assertIn(error, run.stderr)
@@ -99,13 +166,17 @@ class Profiles(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('more than one host: a-cam by MAC 02:aa:00:00:00:02 (enp1s0), a-pc by hostname a-pc', run.stderr)
 
-    def test_a_station_on_two_vessels_needs_vessel(self):
+    def test_a_station_on_two_vessels_needs_vessel_or_one_boat_lan(self):
         with open(self.root / 'b/devices.yaml', 'a') as f:
-            f.write('  s: {roles: [operator]}\n')
-        run = self.hw('whoami', hostname='s')
+            f.write('  op: {roles: [operator]}\n')
+        run = self.hw('whoami', hostname='op')
         self.assertNotEqual(run.returncode, 0)
-        self.assertIn('s is on vessels a b; pass --vessel', run.stderr)
-        self.assertTrue(self.whoami('--vessel', 'b', hostname='s')['vessel'].startswith('b '))
+        self.assertIn('op is on vessels a b; pass --vessel', run.stderr)
+        me = self.whoami('--vessel', 'b', hostname='op')
+        self.assertTrue(me['vessel'].startswith('b '))
+        self.assertEqual(me['station'], 's')
+        me = self.whoami(hostname='op', HW_ADDRS='10.0.2.2/24')
+        self.assertEqual(me['vessel'], 'b (registry of b lists op; on its boat LAN)')
 
     # Every member loads on every run
     def test_a_broken_member_fails_every_command_with_file_and_line(self):
@@ -141,7 +212,7 @@ class Profiles(unittest.TestCase):
     def test_a_host_gets_all_and_its_roles_repos_and_a_vessel_replaces_one_role(self):
         self.assertEqual(self.repos('--host', 'a-cam', 'hosts', 'repos'), ['alpha', 'beta', 'delta'])
         self.assertEqual(self.repos('--host', 'a-pc', 'hosts', 'repos'), ['alpha'])
-        self.assertEqual(self.repos('--host', 's', 'hosts', 'repos'), ['alpha', 'gamma'])
+        self.assertEqual(self.repos('--host', 'op', 'hosts', 'repos'), ['alpha', 'gamma'])
         self.assertEqual(self.repos('--vessel', 'b', 'hosts', 'repos', '--role', 'camera'), ['alpha', 'beta'])
         self.assertEqual(self.repos('hosts', 'repos'), ['alpha'])               # no self, no role: all
         self.assertEqual(self.repos('hosts', 'repos', '--role', 'operator', '--role', 'camera'),

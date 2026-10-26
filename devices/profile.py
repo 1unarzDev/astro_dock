@@ -23,11 +23,13 @@ errors name FILE:LINE.
 Kind keys join with '_' under HW_ (upper case, other characters become '_'): devices.rocket.address is
 HW_DEVICES_ROCKET_ADDRESS. Lists join with spaces; each mapping also gets HW_<PATH>__KEYS.
 """
+import ipaddress
 import os
 from pathlib import Path
 import re
 import shlex
 import socket
+import subprocess
 import sys
 
 import yaml
@@ -39,6 +41,7 @@ KINDS = ('vessel', 'station')
 NOT_KINDS = ('profile', 'topology')
 IGNORED_HOSTNAMES = ('roboboat', 'local', 'localhost')    # the dev container's hostname, and placeholders
 VIRTUAL = re.compile(r'(lo|docker.*|veth.*|br-.*)$')
+DT_MODEL = '/proc/device-tree/model'                     # Jetson, ODROID: a board computer, never a station
 
 
 class Error(Exception):
@@ -275,6 +278,7 @@ class Root:
 
     def topology(self):
         file = self.root / self.fleet / 'topology.yaml'
+        self.links = []
         if not file.exists():
             return
         data = load(file)
@@ -293,6 +297,8 @@ class Root:
                 if member not in self.members or kind not in kinds(self.chains[member][0]):
                     raise Error(f'{where}: via {via!r} must be MEMBER.KIND of an existing member and kind')
 
+        self.links = [link['between'] for link in data.get('links') or []]
+
     def leases(self, member):
         """STATIC_LEASES of a member's network env: {hostname: mac}."""
         out = {}
@@ -300,6 +306,45 @@ class Root:
             mac, _, rest = entry.partition('=')
             out[rest.partition('=')[0]] = mac.lower()
         return out
+
+    def roles(self, host):
+        """A host's registry roles, over every registry that lists it."""
+        out = []
+        for hosts in self.hosts.values():
+            for role in ((hosts.get(host) or {}).get('roles') or []) if host in hosts else []:
+                out += [] if str(role) in out else [str(role)]
+        return out
+
+    def boat_addresses(self, member):
+        """Addresses a boat computer holds on a member's LAN: {address: host}, from its STATIC_LEASES
+        reservations and the registry addresses ($KEY or literal) of its hosts without the operator role."""
+        env, out = self.envs[member], {}
+        for entry in env.get('STATIC_LEASES', '').split():
+            parts = entry.split('=')
+            if len(parts) == 3:
+                out[parts[2]] = parts[1]
+        for name, spec in (self.hosts.get(member) or {}).items():
+            spec = spec or {}
+            if 'operator' in (spec.get('roles') or []) or not isinstance(spec.get('address'), str):
+                continue
+            address = spec['address']
+            address = env.get(address[1:], '') if address.startswith('$') else address
+            if address:
+                out.setdefault(address, name)
+        return out
+
+    def station(self, vessel):
+        """The fleet's station member a control station resolves to: the only one, else the only one
+        linked to the vessel in topology.yaml. None when the fleet has none."""
+        stations = [n for n, k in self.members.items() if k == 'station']
+        if len(stations) > 1:
+            linked = [s for s in stations if any(s in ends and vessel in ends for ends in self.links)]
+            if len(linked) != 1:
+                raise Error(f'this machine is a control station, but the fleet has several station members '
+                            f'({" ".join(stations)}) and no single one is linked to '
+                            f'{vessel or "a vessel (none resolved; pass --vessel)"} in {self.fleet}/topology.yaml')
+            stations = linked
+        return stations[0] if stations else ''
 
 
 def local_macs(sysfs):
@@ -318,22 +363,96 @@ def local_macs(sysfs):
     return out
 
 
+def local_addrs():
+    """This machine's IPv4 interface addresses: HW_ADDRS (tests: "ADDR/PREFIX ..."), else `ip -o -4 addr`."""
+    if 'HW_ADDRS' in os.environ:
+        words = os.environ['HW_ADDRS'].split()
+    else:
+        try:
+            run = subprocess.run(['ip', '-o', '-4', 'addr', 'show'], capture_output=True, text=True, timeout=5)
+            words = [line.split()[3] for line in run.stdout.splitlines() if len(line.split()) > 3]
+        except (OSError, subprocess.SubprocessError):
+            words = []
+    out = []
+    for word in words:
+        try:
+            address = ipaddress.ip_interface(word).ip
+        except ValueError:
+            continue
+        if address.version == 4 and not address.is_loopback and address not in out:
+            out.append(address)
+    return out
+
+
+def boat_lan(root, vessels, addrs):
+    """[(vessel, address, subnet)] for each local address inside a vessel's BOAT_SUBNET."""
+    out = []
+    for vessel in vessels:
+        try:
+            subnet = ipaddress.ip_network(root.envs[vessel].get('BOAT_SUBNET', ''), strict=False)
+        except ValueError:
+            continue
+        out += [(vessel, a, subnet) for a in addrs if a in subnet]
+    return out
+
+
 def resolve(root_path):
-    """Inputs (environment): ASTRO_HOST, ASTRO_VESSEL (overrides), HW_HOSTNAME and HW_SYSFS_NET (tests)."""
+    """Inputs (environment): ASTRO_HOST, ASTRO_VESSEL (overrides); HW_HOSTNAME, HW_SYSFS_NET, HW_ADDRS and
+    HW_DT_MODEL (tests: the hostname, /sys/class/net, the IPv4 addresses, /proc/device-tree/model).
+
+    Host: --host, else the registry host named like the hostname or whose STATIC_LEASES MAC is a local
+    permanent MAC. A host with the operator role is a control station (HW_SELF_MEMBER: the fleet's station
+    member). Any other machine joins as a generic control station (roles: operator) by --host NAME, or by
+    an address inside exactly one vessel's BOAT_SUBNET (that vessel). A boat computer (a device-tree
+    model, a leased MAC or hostname of a non-operator host, a reserved or registry boat address) never
+    joins as a station."""
     root = Root(root_path)
     out = {'HW_PROFILES_ROOT': str(root.root), 'HW_FLEET': root.fleet,
            'HW_MEMBERS': ' '.join(f'{n}:{k}' for n, k in root.members.items())}
     hostname = os.environ.get('HW_HOSTNAME') or socket.gethostname().split('.')[0]
     macs = local_macs(os.environ.get('HW_SYSFS_NET', '/sys/class/net'))
+    addrs = local_addrs()
+    vessels = [n for n, k in root.members.items() if k == 'vessel']
     owners = {}                                                  # host -> members listing it
     for member, hosts in root.hosts.items():
         for host in hosts:
             owners.setdefault(host, []).append(member)
-    host, how = os.environ.get('ASTRO_HOST', ''), ''
+
+    def operator(name):
+        return 'operator' in root.roles(name)
+
+    boat = []                                                    # why this machine is a boat computer
+    model = Path(os.environ.get('HW_DT_MODEL', DT_MODEL))
+    if model.exists():
+        boat.append(f'device-tree model {model}')
+    for member in root.envs:
+        for name, mac in root.leases(member).items():
+            if mac in macs and not operator(name):
+                boat.append(f'MAC {mac} is leased to {name}')
+            if name == hostname and not operator(name):
+                boat.append(f'hostname {hostname} has a lease')
+    if hostname in owners and not operator(hostname):
+        boat.append(f'hostname {hostname} is a registry host without the operator role')
+    for member in root.envs:
+        for address, name in root.boat_addresses(member).items():
+            if any(str(a) == address for a in addrs):
+                boat.append(f'address {address} belongs to {name}')
+    boat = list(dict.fromkeys(boat))
+    vessel = os.environ.get('ASTRO_VESSEL', '')
+    if vessel and root.members.get(vessel) != 'vessel':
+        raise Error(f'ASTRO_VESSEL/--vessel {vessel}: not a vessel (vessels: {" ".join(vessels)})')
+    lan = [] if boat else boat_lan(root, [vessel] if vessel else vessels, addrs)
+    lan_vessels = sorted({v for v, _, _ in lan})
+
+    host, how, generic = os.environ.get('ASTRO_HOST', ''), '', False
     if host:
-        if host not in owners:
-            raise Error(f'ASTRO_HOST/--host {host}: no registry lists it (hosts: {" ".join(sorted(owners))})')
         how = '--host/ASTRO_HOST'
+        if host not in owners:
+            if boat:
+                raise Error(f'ASTRO_HOST/--host {host}: no registry lists it, and this machine is a boat computer '
+                            f'({"; ".join(boat)}), so it cannot join as a control station '
+                            f'(hosts: {" ".join(sorted(owners))})')
+            generic, how = True, '--host/ASTRO_HOST; no registry lists it: a generic control station'
     else:
         found = {}
         if hostname not in IGNORED_HOSTNAMES and hostname in owners:
@@ -347,25 +466,38 @@ def resolve(root_path):
                         + ', '.join(f'{h} by {w}' for h, w in sorted(found.items())) + '; pass --host')
         if found:
             host, how = next(iter(found.items()))
-    out.update(ASTRO_HOST=host, HW_SELF_HOW=how or f'no match: hostname {hostname}; MACs checked: '
-               f'{" ".join(sorted(macs)) or "none"}')
-    out['HW_SELF_MEMBER'] = host if root.members.get(host) == 'station' else ''
-    vessel = os.environ.get('ASTRO_VESSEL', '')
+        elif len(lan_vessels) == 1:                             # an unlisted laptop on one boat LAN
+            _, address, subnet = lan[0]
+            host, how, generic = hostname, f'boat LAN {address} in {subnet}: a generic control station', True
+    checked = (f'hostname {hostname}; MACs checked: {" ".join(sorted(macs)) or "none"}; '
+               f'addresses: {" ".join(map(str, addrs)) or "none"}')
+    if not how:
+        how = f'no match: {checked}'
+        if boat:
+            how += f'; a boat computer ({"; ".join(boat)}), never a control station'
+        elif len(lan_vessels) > 1:
+            how += f'; on the boat LAN of several vessels ({" ".join(lan_vessels)}): pass --vessel'
+    roles = ['operator'] if generic else root.roles(host)
+    out.update(ASTRO_HOST=host, HW_SELF_HOW=how, HW_SELF_ROLES=' '.join(roles))
+
     scope_how, scope_error = '', ''
     if vessel:
-        if root.members.get(vessel) != 'vessel':
-            raise Error(f'ASTRO_VESSEL/--vessel {vessel}: not a vessel (vessels: '
-                        + ' '.join(n for n, k in root.members.items() if k == 'vessel') + ')')
         scope_how = '--vessel/ASTRO_VESSEL'
     elif host:
-        vessels = [m for m in owners[host] if root.members.get(m) == 'vessel']
-        if len(vessels) > 1:
-            raise Error(f'{host} is on vessels {" ".join(vessels)}; pass --vessel')
-        if vessels:
-            vessel, scope_how = vessels[0], f'registry of {vessels[0]} lists {host}'
+        listed = [m for m in owners.get(host, []) if root.members.get(m) == 'vessel']
+        on_lan = [v for v in listed if v in lan_vessels] if len(listed) > 1 else []
+        if len(on_lan) == 1:                                    # a host of several vessels, on one's LAN
+            vessel, scope_how = on_lan[0], f'registry of {on_lan[0]} lists {host}; on its boat LAN'
+        elif len(listed) > 1:
+            raise Error(f'{host} is on vessels {" ".join(listed)}; pass --vessel')
+        elif listed:
+            vessel, scope_how = listed[0], f'registry of {listed[0]} lists {host}'
+        elif generic and len(lan_vessels) == 1:
+            _, address, subnet = lan[0]
+            vessel, scope_how = lan_vessels[0], f'boat LAN {address} in {subnet}'
     if not vessel:
-        scope_error = (f'No vessel for this machine (hostname {hostname}; MACs checked: '
-                       f'{" ".join(sorted(macs)) or "none"}; members: {out["HW_MEMBERS"]}); pass --vessel')
+        scope_error = f'No vessel for this machine ({checked}; members: {out["HW_MEMBERS"]}); pass --vessel'
+    out['HW_SELF_MEMBER'] = root.station(vessel) if 'operator' in roles and not boat else ''
     dirs, meta = root.chains[vessel or root.fleet]
     out.update(ASTRO_VESSEL=vessel, HW_SCOPE_HOW=scope_how, HW_SCOPE_ERROR=scope_error,
                HW_PROFILE=str(dirs[-1]), HW_PROFILE_CHAIN=' '.join(d.name for d in dirs),

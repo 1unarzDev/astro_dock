@@ -1,1 +1,2 @@
-# Test fleet: vessels a and b, station s (tests/test_profiles.py). No device is ever contacted.
+# Test fleet: vessels a and b, station s (tests/test_profiles.py); a's registry host op (operator role)
+# resolves to s. No device is ever contacted.

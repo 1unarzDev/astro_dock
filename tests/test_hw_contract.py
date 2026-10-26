@@ -243,13 +243,42 @@ class ShippedProfiles(unittest.TestCase):
         (self.sys / 'eth0/address').write_text(mac + '\n')
         (self.sys / 'eth0/addr_assign_type').write_text('0\n')
 
-    def show(self, *args, hostname='innovation', **env):
+    def run_hw(self, *args, hostname='innovation', **env):
         environ = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
-        run = subprocess.run(['bash', str(ROOT / 'hw.sh'), *args, 'profile', 'show'], capture_output=True,
-                             text=True, env={**environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent',
-                                             'HW_HOSTNAME': hostname, 'HW_SYSFS_NET': str(self.sys), **env})
+        run = subprocess.run(['bash', str(ROOT / 'hw.sh'), *args], capture_output=True, text=True,
+                             env={**environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent',
+                                  'HW_HOSTNAME': hostname, 'HW_SYSFS_NET': str(self.sys), 'HW_ADDRS': '',
+                                  'HW_DT_MODEL': str(self.sys / 'no-model'), **env})
         self.assertEqual(run.returncode, 0, run.stderr)
-        return run.stdout.splitlines()[0]
+        return run.stdout
+
+    def show(self, *args, **env):
+        return self.run_hw(*args, 'profile', 'show', **env).splitlines()[0]
+
+    def whoami(self, *args, **env):
+        return dict(line.split(None, 1) for line in self.run_hw(*args, 'whoami', **env).splitlines())
+
+    def test_operator_laptops_are_the_control_station_and_boat_computers_never(self):
+        me = self.whoami(hostname='tranquility')
+        self.assertEqual(me['host'], 'tranquility (hostname tranquility)')
+        self.assertEqual((me['station'], me['vessel']), ('control_station', 'blastoise (registry of blastoise lists tranquility)'))
+        me = self.whoami('--host', 'somelaptop')
+        self.assertEqual(me['station'], 'control_station')
+        self.assertTrue(me['vessel'].startswith('none'))
+        me = self.whoami(hostname='somelaptop', HW_ADDRS='192.168.0.57/24')
+        self.assertEqual(me['host'], 'somelaptop (boat LAN 192.168.0.57 in 192.168.0.0/24: a generic control station)')
+        self.assertEqual((me['station'], me['vessel']), ('control_station', 'blastoise (boat LAN 192.168.0.57 in 192.168.0.0/24)'))
+        for env in ({'HW_ADDRS': '192.168.0.152/24'},                                  # the ODROID's reservation
+                    {'HW_ADDRS': '192.168.0.57/24', 'HW_DT_MODEL': '/proc/self/status'}):   # a board
+            with self.subTest(env=env):
+                me = self.whoami(hostname='somelaptop', **env)
+                self.assertNotIn('station', me)
+                self.assertTrue(me['host'].startswith('none (no match'), me['host'])
+                self.assertTrue(me['vessel'].startswith('none'))
+        me = self.whoami('--host', 'blastoise-odroid', HW_ADDRS='192.168.0.57/24')
+        self.assertEqual(me['host'], 'blastoise-odroid (--host/ASTRO_HOST)')
+        self.assertNotIn('station', me)
+        self.assertTrue(me['vessel'].startswith('blastoise '))
 
     def test_the_boat_hosts_and_the_station_find_blastoise_and_flags_override(self):
         self.assertEqual(self.show(), 'profile: roboboat')                     # no match: the fleet

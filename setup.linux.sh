@@ -53,7 +53,8 @@ Options:
   --dry-run                 Print commands without running them
   --components LIST         clock,docker,gpu,devices,devtools,compose,repos,gateway,boat,jetson,operator-key
   --vessel NAME             The vessel profile (default: this machine's, as ./hw.sh whoami finds it)
-  --host NAME               This machine's registry host (default: found by hostname or MAC)
+  --host NAME               This machine's registry host, or any other name for a generic control
+                            station (default: found by hostname, MAC or boat-LAN address)
   --role ROLE               Repos stage: the role whose repositories to add to repos.all (repeatable;
                             default: this host's registry roles)
   --non-interactive         Disable prompts (requires --yes)

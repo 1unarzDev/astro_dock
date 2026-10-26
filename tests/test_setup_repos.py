@@ -66,7 +66,8 @@ class SetupRepos(unittest.TestCase):
         env.update(PATH=':'.join(path + [os.environ['PATH']]), LOG=str(self.log), RUNNING=running,
                    PROJECT='fixture_project', FIXTURE=str(FIXTURE), ASTRO_ENV_FILE='/dev/null',
                    ASTRO_SECRETS=str(self.tmp / 'none'), HW_HOSTNAME='innovation',
-                   HW_SYSFS_NET=str(self.tmp / 'nosys'), **extra)
+                   HW_SYSFS_NET=str(self.tmp / 'nosys'), HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
+                   **extra)
         if profiles:
             env['ASTRO_PROFILES'] = str(profiles)
         run = subprocess.run(['bash', str(self.ws / 'setup.linux.sh'), '--components', 'repos', '--yes',
@@ -126,7 +127,9 @@ class SetupRepos(unittest.TestCase):
         self.assertEqual(listed(run), ['alpha', 'gamma'])
         run, _ = self.setup('--dry-run', '--vessel', 'b', '--role', 'camera')  # the fleet's camera list
         self.assertEqual(listed(run), ['alpha', 'beta'])
-        run, _ = self.setup('--dry-run', '--host', 's')                     # the station: operator
+        run, _ = self.setup('--dry-run', '--host', 'op')                    # the station: operator
+        self.assertEqual(listed(run), ['alpha', 'gamma'])
+        run, _ = self.setup('--dry-run', '--host', 'somelaptop')            # a generic control station
         self.assertEqual(listed(run), ['alpha', 'gamma'])
         run, _ = self.setup('--dry-run', '--profile', 'a', '--role', 'camera')   # the old flag, one release
         self.assertIn('--profile is now --vessel', run.stderr)
