@@ -7,13 +7,15 @@
 A package opts in with an ``agent_hook.py`` module at ``src/<repo>/<package>/agent_hook.py``
 that defines ``agent_event(event)``. Each one gets the same neutral event, whichever CLI sent it:
 
-    {agent: claude|codex, event: start|pre|post, session_id, cwd, source,
+    {agent: claude|codex, event: start|pre|post, session_id, agent_id, cwd, source,
      tool, tool_id, command, exit, duration_ms, failed}
 
 plus, before a file edit (Claude Edit, MultiEdit, Write, NotebookEdit; Codex apply_patch, or a shell
 call that carries an apply_patch text), ``edits``: ``[[write|delete, path as given]]`` (relative to
 ``cwd``). An edit tool's event has an empty ``command``; a patch no file header names gives ``[]``.
 Only ``pre`` is sent for edit tools.
+
+``agent_id`` is the payload's (a Claude subagent's own id; its ``session_id`` is the parent's), else ''.
 
 ``source`` at start is the CLI's (startup, resume, clear, compact) or ``playbook`` for
 ``--playbook``: a package can keep its session-start text short and give the whole of it on demand.
@@ -40,7 +42,7 @@ SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports
 SHELLS = ('bash', 'sh', 'zsh')
 EDIT_TOOLS = {'Edit': 'file_path', 'MultiEdit': 'file_path', 'Write': 'file_path', 'NotebookEdit': 'notebook_path'}
 PATCH_TOOLS = ('apply_patch',)      # Codex: tool_input.command is the patch text (matched as apply_patch|Edit|Write)
-PATCH = re.compile(r'^\*\*\* (Add File|Update File|Delete File|Move to): *(.+?) *$', re.M)
+PATCH = re.compile(r'^\*\*\* (Add File|Update File|Delete File|Move to): *([^\r\n]+?)\s*$', re.M)   # CRLF too
 EXIT = re.compile(r'^Exit code:?\s*(-?\d+)', re.M)
 BUDGET_S = 2.0      # all packages together; the CLIs' hook timeout is 5 s
 
@@ -94,6 +96,7 @@ def normalize(agent, raw):
     if kind is None:
         return None
     event = {'agent': agent, 'event': kind, 'session_id': str(raw.get('session_id') or ''),
+             'agent_id': str(raw.get('agent_id') or ''),
              'cwd': raw.get('cwd'), 'source': raw.get('source'), 'tool': raw.get('tool_name'),
              'tool_id': raw.get('tool_use_id'), 'command': '', 'exit': None, 'duration_ms': None,
              'failed': False}

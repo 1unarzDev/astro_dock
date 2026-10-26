@@ -130,6 +130,16 @@ class Dispatcher(unittest.TestCase):
         self.assertNotIn('edits', self.run_hook('claude', claude('PreToolUse')) or {})
         self.assertNotIn('edits', self.events()[-1])
 
+    def test_a_crlf_patch_gives_clean_paths(self):
+        patch = '*** Begin Patch\r\n*** Update File: config/agent.yaml\r\n@@\r\n-a\r\n+b\r\n*** End Patch\r\n'
+        self.assertEqual(hook.patch_edits(patch), [['write', 'config/agent.yaml']])
+        self.assertEqual(hook.patch_edits('*** Add File: a b.py  \n'), [['write', 'a b.py']])
+
+    def test_a_subagent_id_reaches_the_package(self):
+        self.run_hook('claude', claude('PreToolUse', agent_id='sub-1', agent_type='Explore'))
+        self.run_hook('claude', claude('PreToolUse'))
+        self.assertEqual([e['agent_id'] for e in self.events()[-2:]], ['sub-1', ''])
+
     def test_a_missing_or_broken_package_is_a_no_op(self):
         payload = claude('PreToolUse', tool_input={'command': 'rm -rf /'})
         script = self.root / 'src' / 'robot_tools' / 'robot_tools' / 'agent_hook.py'
@@ -266,6 +276,14 @@ class WorkspaceHooks(unittest.TestCase):
                     'file_path': str(base / 'run' / 'command_mux_7.json'), 'content': '{}'})),
                 (True, 'codex', codex('PreToolUse', tool_name='apply_patch', cwd=str(live),
                                       tool_input={'command': patch('config/agent.yaml')})),
+                (True, 'codex', codex('PreToolUse', tool_name='apply_patch', cwd=str(live),        # CRLF
+                                      tool_input={'command': patch('config/agent.yaml').replace('\n', '\r\n')})),
+                (True, 'claude', claude('PreToolUse', tool_name='Edit', tool_input={
+                    'file_path': str(live / '.agents' / 'hook.py'), 'old_string': 'a', 'new_string': 'b'})),
+                (True, 'claude', claude('PreToolUse', tool_input={
+                    'command': 'printf x | uniq - %s' % (live / 'config' / 'agent.yaml')})),
+                (False, 'claude', claude('PreToolUse', tool_name='Edit', tool_input={
+                    'file_path': str(wt / '.agents' / 'hook.py'), 'old_string': 'a', 'new_string': 'b'})),
                 (True, 'codex', codex('PreToolUse', tool_name='apply_patch', cwd=str(base),
                                       tool_input={'command': patch('share/launch/arm.launch.py')})),
                 (False, 'claude', claude('PreToolUse', tool_name='Edit', tool_input={
