@@ -32,6 +32,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 EVENTS = {'SessionStart': 'start', 'PreToolUse': 'pre', 'PostToolUse': 'post', 'PostToolUseFailure': 'post'}
 SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports Bash; older builds the rest
+SHELLS = ('bash', 'sh', 'zsh')
 EXIT = re.compile(r'^Exit code:?\s*(-?\d+)', re.M)
 BUDGET_S = 2.0      # all packages together; the CLIs' hook timeout is 5 s
 
@@ -81,7 +82,10 @@ def normalize(agent, raw):
         return event
     if raw.get('tool_name') not in SHELL_TOOLS:
         return None
-    command = (raw.get('tool_input') or {}).get('command')
+    command = (raw.get('tool_input') or {}).get('command') or (raw.get('tool_input') or {}).get('cmd')
+    if isinstance(command, list) and len(command) == 3 and os.path.basename(str(command[0])) in SHELLS \
+            and command[1] in ('-c', '-lc'):
+        command = command[2]            # Codex's ['bash', '-lc', script]: the script is the command
     event['command'] = shlex.join(map(str, command)) if isinstance(command, list) else str(command or '')
     if kind == 'post':
         took = raw.get('duration_ms')

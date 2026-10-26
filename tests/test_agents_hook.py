@@ -96,9 +96,12 @@ class Dispatcher(unittest.TestCase):
         self.assertEqual(self.events()[0]['duration_ms'], 4187)
 
     def test_agent_is_detected_when_not_named_and_argv_commands_are_joined(self):
-        self.run_hook('', codex('PreToolUse', tool_input={'command': ['bash', '-lc', 'ros2 topic list']}))
+        self.run_hook('', codex('PreToolUse', tool_input={'command': ['bash', '-lc', 'ros2 topic list | head']}))
+        self.run_hook('codex', codex('PreToolUse', tool_input={'command': ['ros2', 'topic', 'echo', '/a b']}))
+        self.run_hook('codex', codex('PreToolUse', tool_name='exec_command', tool_input={'cmd': 'ros2 node list'}))
         self.assertEqual(self.events()[0]['agent'], 'codex')
-        self.assertEqual(self.events()[0]['command'], "bash -lc 'ros2 topic list'")
+        self.assertEqual([e['command'] for e in self.events()],       # Codex's bash -lc script is the command
+                         ['ros2 topic list | head', "ros2 topic echo '/a b'", 'ros2 node list'])
 
     def test_other_tools_and_events_are_ignored(self):
         edit = claude('PreToolUse', tool_name='Edit', tool_input={'file_path': 'x'})
@@ -177,9 +180,13 @@ REGRESSION = [
     (True, 'kill -9 $(pgrep -f fence_watchdog)'),
     (True, 'ssh blastoise pkill -f boat_test'),
     (True, 'ssh blastoise docker stop roboboat_dev'),
-    (False, 'pkill -P 12345'),
-    (False, 'killall -u me codex'),
+    (True, 'pkill -P 12345'),                     # kill by exact PID
+    (True, 'killall -u me codex'),
+    (True, 'setsid -f ros2 topic pub /cmd_vel x y'),        # not a text-only command: whole-text search
+    (True, 'ros2 run mavros mavsafety arm'),
+    (False, 'kill 12345'),
     (False, "grep -rn 'ros2 topic pub /cmd_vel' src/"),
+    (False, "rg -n 'pkill|killall' src | head"),
     (False, "git commit -m \"$(cat <<'EOF'\ndeny ros2 topic pub /cmd_vel and pkill\nEOF\n)\""),
     (False, "cat > test_x.py <<'EOF'\ndef test_kill():\n    proc.kill()  # watchdog\nEOF"),
     (False, 'ros2 topic echo /cmd_vel --once'),
