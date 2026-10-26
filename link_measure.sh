@@ -25,7 +25,7 @@ die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 LINK_SECONDS=${LINK_SECONDS:-10}
 LINK_PORT=${LINK_PORT:-5201}
 LINK_CONTAINER=${LINK_CONTAINER:-roboboat_dev}
-BOAT_SSH=${BOAT_HOST_USER:-roboboat}@${BOAT_TRANSPORT_IP:?BOAT_TRANSPORT_IP is unset in config/boat-network.env}
+: "${BOAT_TRANSPORT_IP:?BOAT_TRANSPORT_IP is unset in config/boat-network.env}"
 
 usage() {
     cat <<EOF
@@ -38,7 +38,7 @@ measure   Read-only. Reads both radios' airOS status (ubiquiti_setup.sh status),
           saves the raw output and the summary under $STATE_DIR (mode 600).
           No site survey: on airOS it leaves the channel and drops the link.
           iperf3 runs from each host, else from its $LINK_CONTAINER container,
-          and is installed there (astro-ros-install) when missing.
+          and fails when neither has it (it installs nothing).
 propose   Offline. From the latest (or the given) summary, print the setting
           changes per radio with reasons and the ubiquiti_setup.sh commands
           that dry-run and then trial them. Nothing is applied.
@@ -51,12 +51,11 @@ each test's length (default $LINK_SECONDS); BOAT_HOST_USER is the boat login.
 EOF
 }
 
-# One line, so it survives ssh quoting: the host's iperf3, else the container's, installed on
-# first use through the image's own installer. timeout ends a server whose client never came.
+# One line, so it survives ssh quoting: the host's iperf3, else the container's; measure installs
+# nothing. timeout ends a server whose client never came.
 IPERF="t=\$((${LINK_SECONDS} + 60)); if command -v iperf3 >/dev/null 2>&1; then exec timeout \$t iperf3 \"\$@\"; fi; \
 docker exec $LINK_CONTAINER sh -c 'command -v iperf3' >/dev/null 2>&1 \
-|| docker exec -u root $LINK_CONTAINER astro-ros-install iperf3 >&2 \
-|| { echo 'iperf3: not on this host and not installable in $LINK_CONTAINER' >&2; exit 127; }; \
+|| { echo \"iperf3: not on \$(hostname) or in its $LINK_CONTAINER container; install it (astro-ros-install iperf3) and rerun\" >&2; exit 127; }; \
 exec docker exec $LINK_CONTAINER timeout \$t iperf3 \"\$@\""
 
 local_iperf() { sh -c "$IPERF" iperf3 "$@"; }
@@ -428,7 +427,8 @@ PY
 }
 
 case ${1:-} in
-    measure) measure ;;
+    measure) BOAT_SSH=${BOAT_HOST_USER:?BOAT_HOST_USER (the boat login) is unset; set it in .env, see .env.example}@$BOAT_TRANSPORT_IP
+        measure ;;
     propose) propose "${2:-}" ;;
     -h|--help|'') usage ;;
     *) die "Unknown command: $1" ;;

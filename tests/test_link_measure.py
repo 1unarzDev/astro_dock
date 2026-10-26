@@ -45,7 +45,7 @@ echo "25 packets transmitted, 25 received, 0% packet loss, time 4800ms"
 echo "rtt min/avg/max/mdev = 61.0/72.5/118.9/11.2 ms"
 '''
 FAKE_IP = '#!/bin/sh\necho "$4 dev lan0 src 192.168.0.2 uid 1000"\n'
-# The container: iperf3 only after astro-ros-install ran.
+# The container: iperf3 only once $FAKE/installed exists; an astro-ros-install call is logged.
 FAKE_DOCKER = r'''#!/usr/bin/env bash
 echo "docker $*" >>"$FAKE/docker.log"
 [[ $1 == exec ]] || exit 1
@@ -101,7 +101,8 @@ class LinkMeasureTest(unittest.TestCase):
     def run_script(self, script, *args, stdin='', path_extra=(), **extra):
         env = {'PATH': ':'.join([*map(str, path_extra), str(self.tmp / 'bin'), os.environ['PATH']]),
                'HOME': str(self.tmp), 'XDG_STATE_HOME': str(self.tmp / 'state'), 'FAKE': str(self.tmp),
-               'UBNT_PASSWORD': '', 'UBNT_JUMP': '', 'BOAT_HOST_PASSWORD': '', 'LINK_SECONDS': '3'}
+               'UBNT_PASSWORD': '', 'UBNT_JUMP': '', 'BOAT_HOST_USER': 'crew', 'BOAT_HOST_PASSWORD': '',
+               'LINK_SECONDS': '3'}
         env.update(extra)
         return subprocess.run(['bash', str(ROOT / script), *args], input=stdin, env=env,
                               capture_output=True, text=True, timeout=120)
@@ -139,15 +140,26 @@ class LinkMeasureTest(unittest.TestCase):
         for word in ('softrestart', 'cfgmtd', 'reboot', 'iwlist', 'survey', '>/tmp', 'cp '):
             self.assertFalse(any(word in l for l in radio_cmds), word)
 
-    def test_measure_installs_iperf3_in_the_container_when_missing(self):
+    def test_measure_uses_the_container_iperf3_and_never_installs_one(self):
         (self.tmp / 'bin/iperf3').rename(self.tmp / 'container-iperf3')
-        executable(self.tmp / 'container/iperf3', (self.tmp / 'container-iperf3').read_text())
         executable(self.tmp / 'bin/docker', FAKE_DOCKER)
         run = self.run_script('link_measure.sh', 'measure')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('iperf3: not on', run.stderr)
+        self.assertIn('install it (astro-ros-install iperf3)', run.stderr)
+        self.assertNotIn('astro-ros-install', (self.tmp / 'docker.log').read_text())
+        executable(self.tmp / 'container/iperf3', (self.tmp / 'container-iperf3').read_text())
+        (self.tmp / 'installed').touch()
+        run = self.run_script('link_measure.sh', 'measure')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        log = (self.tmp / 'docker.log').read_text()
-        self.assertIn('exec -u root roboboat_dev astro-ros-install iperf3', log)
         self.assertRegex(run.stdout, r'tcp to-boat +40 Mbit/s')
+        self.assertNotIn('astro-ros-install', (self.tmp / 'docker.log').read_text())
+
+    def test_measure_needs_the_boat_login(self):
+        run = self.run_script('link_measure.sh', 'measure', BOAT_HOST_USER='')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('BOAT_HOST_USER (the boat login) is unset', run.stderr)
+        self.assertEqual(self.ssh_log(), [])
 
     def test_measure_needs_a_route_to_the_boat(self):
         executable(self.tmp / 'bin/ip', '#!/bin/sh\nexit 2\n')
@@ -245,6 +257,23 @@ class LinkMeasureTest(unittest.TestCase):
         self.assertIn('scan list does not include 5745', run.stderr)
         run = self.run_script('ubiquiti_setup.sh', 'apply', 'rocket', '--dry-run', 'radio.1.freq=5200')
         self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_keep_is_refused_when_the_peer_is_lost_on_the_trial_channel(self):
+        rocket = self.tmp / 'hosts' / ROCKET
+        executable(rocket / 'bin/reboot', '#!/bin/sh\ntouch "$FAKE/rebooted"\n')
+        # The trial's config copy drops the station, as a channel it cannot follow would.
+        executable(rocket / 'bin/cp', '#!/bin/sh\nrm -rf "$FAKE/hosts/%s"\nexec /bin/cp "$@"\n' % BULLET)
+
+        def stop_timer():
+            pid = (rocket / 'tmp/astro-trial.pid').read_text().strip()
+            subprocess.run(['pkill', '-P', pid])
+            subprocess.run(['kill', pid])
+        self.addCleanup(stop_timer)
+        run = self.run_script('ubiquiti_setup.sh', 'apply', 'rocket', 'radio.1.chanbw=40', stdin='APPLY\nKEEP\n')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('bullet radio is unreachable on the trial channel/width; not saved', run.stderr)
+        self.assertFalse(any('cfgmtd' in l for l in self.ssh_log()))
+        self.assertTrue((rocket / 'tmp/astro-trial.pid').exists())      # the revert timer still runs
 
     def test_status_is_read_only_and_drops_secrets(self):
         run = self.run_script('ubiquiti_setup.sh', 'status', 'rocket')

@@ -218,6 +218,10 @@ apply() {
     fi
     read -r -p "Type KEEP to save the trial to flash; anything else lets it revert: " answer
     [[ $answer == KEEP ]] || { info "Not kept; $name reboots into its saved config when the timer ends"; return; }
+    # A channel/width trial is kept only if the link carries it: the peer must answer through it.
+    if ((channel)) && ! ssh_radio "$(radio_var "$peer" IP)" true </dev/null; then
+        die "The $peer radio is unreachable on the trial channel/width; not saved, $name reverts after the timer"
+    fi
     # Save only a live, unchanged trial, and only after the timer is confirmed dead.
     local rc=0
     ssh_radio "$ip" "p=\$(cat $TRIAL_PID 2>/dev/null) && kill -0 \"\$p\" 2>/dev/null &&
