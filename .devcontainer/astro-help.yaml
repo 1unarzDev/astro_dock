@@ -81,3 +81,33 @@ commands:
         description: Approve the plan and every stage.
     examples:
       - ./setup.linux.sh --components clock --dry-run
+
+  - name: hw.sh
+    run: $ROS_WS/hw.sh
+    summary: Robot device tooling (status, plan, apply, verify, rollback per device kind of the vessel profile).
+    notes: >-
+      Profiles come from ASTRO_PROFILES or the profiles/ submodule; without either it runs in generic
+      mode with no device kinds. The machine finds its own host and vessel (hostname or permanent MAC);
+      --vessel and --host override. Secrets live in ~/.config/astro/secrets.env (mode 600).
+    params:
+      - name: --vessel
+        required: false
+        description: The vessel profile when this machine matches none.
+      - name: --host
+        required: false
+        description: This machine's registry host.
+      - name: command
+        description: whoami, env [KEY], profile show [NAME], secrets check, or KIND VERB.
+    examples:
+      - $ROS_WS/hw.sh whoami
+      - $ROS_WS/hw.sh env ROUTER_IP
+      - $ROS_WS/hw.sh secrets check
+      - $ROS_WS/hw.sh --vessel blastoise radio status
+
+  - name: net/mdns.sh
+    run: $ROS_WS/net/mdns.sh
+    summary: Install and enable Avahi so NAME.local resolves on this host (run on the host, not in the container).
+
+  - name: net/share.sh
+    run: $ROS_WS/net/share.sh
+    summary: Create a Samba network folder advertised over mDNS (interactive; run on the host).

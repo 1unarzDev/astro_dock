@@ -55,16 +55,29 @@ fi
 # Off the boat subnet (simulation, home) the static profile applies unchanged.
 # Set ASTRO_DDS_ADDRESS to force an address. Silent at shell start; ros_net -v
 # prints the choice, and the banner shows it too.
+# The vessel's network env, resolved once per shell tree by `hw.sh env` and exported as
+# ASTRO_NETWORK_ENV; empty without a vessel (generic mode or an unregistered machine without
+# ASTRO_VESSEL). config/boat-network.env is the legacy fallback for one release.
+__astro_network_env() {
+  if [[ -z "${ASTRO_NETWORK_ENV+x}" && -z "${__ASTRO_NET_RESOLVING:-}" ]]; then
+    ASTRO_NETWORK_ENV="$(__ASTRO_NET_RESOLVING=1 "$ROS_WS/hw.sh" env 2>/dev/null)" || ASTRO_NETWORK_ENV=
+    [[ -n "$ASTRO_NETWORK_ENV" || ! -r "$ROS_WS/config/boat-network.env" ]] || ASTRO_NETWORK_ENV="$ROS_WS/config/boat-network.env"
+    export ASTRO_NETWORK_ENV
+  fi
+  printf '%s' "${ASTRO_NETWORK_ENV:-/nonexistent}"
+}
+
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
   local profile="$ROS_WS/config/fastdds.xml" subnet address pinned boat override peers run="${XDG_RUNTIME_DIR:-/tmp}"
+  __astro_network_env >/dev/null    # here, not in a subshell, so the export reaches this shell
   if [[ ! -d "$run" || ! -w "$run" ]]; then
     # World-writable /tmp: use a private per-user directory, and only if it is ours, a real directory, 0700.
     run="/tmp/astro-$(id -u)"
     mkdir -m 700 "$run" 2>/dev/null
     [[ -d "$run" && ! -L "$run" && -O "$run" && "$(stat -c %a "$run" 2>/dev/null)" == 700 ]] || return 0
   fi
-  subnet="${ASTRO_DDS_SUBNET:-$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_SUBNET")}"
+  subnet="${ASTRO_DDS_SUBNET:-$( . "$(__astro_network_env)" 2>/dev/null && echo "$BOAT_SUBNET")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
   # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported
   # (remembered in __ASTRO_DDS_AUTO) is not an override and is detected again.
@@ -72,7 +85,7 @@ ros_net() {
   # (a host with Wi-Fi and the boat link both on the subnet must use the route's
   # one), else the first interface primary address (SIOCGIFADDR) in the subnet;
   # secondaries such as a bridge's own are skipped; the image has no iproute2.
-  boat="$( . "$ROS_WS/config/boat-network.env" 2>/dev/null && echo "$BOAT_TRANSPORT_IP")"
+  boat="$( . "$(__astro_network_env)" 2>/dev/null && echo "$BOAT_TRANSPORT_IP")"
   override="${ASTRO_DDS_ADDRESS:-}"
   [[ "$override" != "${__ASTRO_DDS_AUTO:-}" ]] || override=
   address="${override:-$(python3 -c '
@@ -115,7 +128,7 @@ EOF
     # The boat hosts (the gateway and every reserved address) are static peers: discovery
     # reaches them by unicast even when the radio drops multicast. Multicast stays on, so
     # other hosts still find each other. A user-set ROS_STATIC_PEERS wins, as for the address.
-    peers="$( . "$ROS_WS/config/boat-network.env" 2>/dev/null
+    peers="$( . "$(__astro_network_env)" 2>/dev/null
       for host in "$GATEWAY_IP" ${STATIC_LEASES:-}; do
         host="${host##*=}"; [[ -z "$host" || "$host" == "$address" ]] || printf '%s;' "$host"
       done)"
