@@ -87,6 +87,10 @@ def main(argv=None):
     if argv[:1] in (['-h'], ['--help']):
         print(__doc__.strip())
         return 0
+    if not argv and not network_env().is_file():
+        print(f'astro-clock: no network env at {network_env()}; pass HOST arguments, '
+              'set ASTRO_NETWORK_ENV or --vessel, or run git submodule update --init profiles', file=sys.stderr)
+        return 1
     hosts = [(host, host) for host in argv] or lan_hosts()
     print(f'{"host":<18} {"address":<15} {"offset":>12} {"delay":>10}  vs {socket.gethostname()}')
     healthy = True

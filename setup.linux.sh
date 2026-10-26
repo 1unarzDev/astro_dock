@@ -413,9 +413,14 @@ stage_operator_key() {
 stage_clock() {
     local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service boat_server boat_subnet peers=""
     local chrony=false boat=false local_servers=() sources=/etc/chrony/astro-sources operators=() stratum=true
-    # "boat" names the boat time server and subnet from the profile network env.
-    read -r boat_server boat_subnet < <(. "$(network_env)"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
-    read -r -a operators < <(. "$(network_env)"; printf '%s\n' "${BOAT_OPERATOR_TIME_SERVERS:-}")
+    # "boat" names the boat time server and subnet from the profile network env, read only for
+    # the boat and operator modes: generic mode and an unmatched machine have none.
+    if [[ "${ASTRO_NTP_SERVER:-}" == boat || "$allow" == boat || "$allow" == operator ]]; then
+        local env
+        env="$(network_env)" || { echo "ASTRO_NTP_SERVER/ASTRO_NTP_ALLOW boat and operator need the vessel's network env (hw.sh env)." >&2; exit 1; }
+        read -r boat_server boat_subnet < <(. "$env"; printf '%s %s\n' "$BOAT_TIME_SERVER" "$BOAT_SUBNET")
+        read -r -a operators < <(. "$env"; printf '%s\n' "${BOAT_OPERATOR_TIME_SERVERS:-}")
+    fi
     servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
     # A client of the boat server also answers the boat subnet, so astro-clock.py sees every host.
     [[ "${servers[*]}" == boat ]] && servers=("$boat_server") peers="$boat_subnet" boat=true

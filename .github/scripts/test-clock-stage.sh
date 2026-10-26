@@ -168,6 +168,28 @@ echo other:image > "$legacy" && : > "$dlog"
 clock >/dev/null
 ! grep -q 'rm -f' "$dlog" && [[ -e "$legacy" ]] || fail "removed an astro_clock container of another image"
 
+# Without a network env (an unmatched machine, or generic mode without the profiles submodule) the
+# plain clock stage still runs; only the boat and operator modes need the env, and they say so.
+generic="$tmp/generic"
+mkdir -p "$generic/profiles"
+git -C "$root" ls-files -z | grep -zv '^profiles$' | tar -C "$root" --null -T - -cf - | tar -C "$generic" -xf -
+for mode in unmatched generic; do
+    dir="$root" vars=(ASTRO_HOST=unlisted-host)
+    [[ $mode == generic ]] && dir="$generic" vars=()
+    unclock() {
+        rm -rf "$sources" && mkdir -p "$sources" && : > "$etc/chrony.conf"
+        env -u ASTRO_VESSEL "${vars[@]}" PATH="$stubs:$PATH" ASTRO_CHRONY_CONF="$etc/chrony.conf" \
+            "$dir/setup.linux.sh" --non-interactive --yes --components clock "$@" 2>&1
+    }
+    unclock --dry-run >/dev/null || fail "$mode: plain clock stage failed"
+    unclock >/dev/null || fail "$mode: plain clock stage failed"
+    out="$(ASTRO_NTP_ALLOW=boat unclock --dry-run)" && fail "$mode: boat mode ran without a network env"
+    grep -q "need the vessel's network env" <<<"$out" || fail "$mode: boat mode error unclear"
+    out="$(env -u ASTRO_VESSEL "${vars[@]}" ASTRO_NETWORK_ENV="$tmp/missing.env" python3 "$dir/.devcontainer/astro-clock.py" 2>&1)" \
+        && fail "$mode: astro-clock.py ran without a network env"
+    [[ $(wc -l <<<"$out") == 1 && $out == astro-clock:* ]] || fail "$mode: astro-clock.py did not print one error line: $out"
+done
+
 python3 "$root/.devcontainer/astro-clock.py" --help >/dev/null
 python3 - "$root" <<'EOF'
 import importlib.util, sys
