@@ -9,6 +9,7 @@ DRY_RUN=false
 ASSUME_YES=false
 NON_INTERACTIVE=false
 COMPONENTS="clock,docker,gpu,devices,devtools,compose"
+REPOS_HOST="$(uname -n)"
 OS_ID=unknown
 OS_LIKE=""
 OS_VERSION=""
@@ -26,7 +27,8 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,compose,gateway,boat,jetson,operator-key
+  --components LIST         clock,docker,gpu,devices,devtools,compose,repos,gateway,boat,jetson,operator-key
+  --host NAME               Profile host whose repositories `repos` clones and builds (default: uname -n)
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -42,6 +44,11 @@ while (($#)); do
             shift
             [[ $# -gt 0 ]] || { echo "--components requires a value" >&2; exit 2; }
             COMPONENTS="$1"
+            ;;
+        --host)
+            shift
+            [[ $# -gt 0 ]] || { echo "--host requires a value" >&2; exit 2; }
+            REPOS_HOST="$1"
             ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -318,6 +325,40 @@ stage_compose() {
     approve "Select the Compose adapter now?" || { SKIPPED+=(compose); return; }
     run bash "$SCRIPT_DIR/.devcontainer/prebuild.sh"
     COMPLETED+=(compose)
+}
+
+# The profile's repositories for REPOS_HOST (./hw.sh hosts repos): clone the missing ones under src/,
+# keep them out of git status, then build them here when colcon is on PATH, else in the dev container.
+stage_repos() {
+    local list name url branch exclude names=() build
+    heading "Workspace repositories"
+    list="$("$SCRIPT_DIR/hw.sh" hosts repos "$REPOS_HOST")" || { SKIPPED+=(repos); return; }
+    echo "Clones the profile's repositories for $REPOS_HOST under src/ (existing checkouts are kept) and builds them:"
+    sed 's/^/  /' <<<"$list"
+    approve "Clone and build these repositories?" || { SKIPPED+=(repos); return; }
+    exclude="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null || true)"
+    while read -r name url branch; do
+        names+=("src/$name")
+        if [[ -d "$SCRIPT_DIR/src/$name" ]]; then
+            echo "src/$name exists; keeping it."
+        else
+            run git clone --branch "$branch" "$url" "$SCRIPT_DIR/src/$name"
+        fi
+        [[ -z "$exclude" ]] || git -C "$SCRIPT_DIR" check-ignore -q "src/$name/" && continue
+        quote_command sh -c "echo /src/$name/ >> $exclude"
+        $DRY_RUN || echo "/src/$name/" >>"$exclude"
+    done <<<"$list"
+    build="colcon build --symlink-install --packages-up-to \$(colcon list --names-only --base-paths ${names[*]})"
+    if command -v colcon >/dev/null 2>&1; then
+        (cd "$SCRIPT_DIR" && run bash -c "$build")
+    elif [[ "$(docker inspect -f '{{.State.Running}}' roboboat_dev 2>/dev/null)" == true ]]; then
+        # BASH_ENV gives docker exec's bash the ROS environment.
+        run docker exec roboboat_dev bash -c "cd \"\$ROS_WS\" && $build"
+    else
+        echo "Start the dev container (roboboat_dev), then build inside it: $build" >&2
+        SKIPPED+=(repos-build)
+    fi
+    COMPLETED+=(repos)
 }
 
 stage_operator_key() {
@@ -650,6 +691,7 @@ main() {
     has_component devices && stage_devices
     has_component devtools && stage_devtools
     has_component compose && stage_compose
+    has_component repos && stage_repos
     has_component gateway && stage_gateway
     has_component boat && stage_boat
     has_component jetson && stage_jetson

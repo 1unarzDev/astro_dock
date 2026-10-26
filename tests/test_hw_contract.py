@@ -112,8 +112,9 @@ class Contract(unittest.TestCase):
                 self.assertEqual(run.returncode, 0, run.stderr)
 
 
-# Commands hw.sh replaced: nothing tracked here, nor a checked-out src/mhseals_* repo, may name them.
-REMOVED = re.compile(r'\b(?:router_setup|ubiquiti_setup|link_measure|lidar_setup|promote_jetson|boat_hosts)\.sh\b')
+# Commands hw.sh and the setup repos stage replaced: nothing tracked here, nor a checked-out src/mhseals_* repo, may name them.
+REMOVED = re.compile(r'\b(?:(?:router_setup|ubiquiti_setup|link_measure|lidar_setup|promote_jetson|boat_hosts'
+                     r'|clone_optional)\.sh|optional_repos\.yaml)\b')
 
 
 class RemovedCommands(unittest.TestCase):

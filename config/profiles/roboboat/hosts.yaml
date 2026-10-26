@@ -1,6 +1,19 @@
-# The boat computers of ASTRO_REGISTRY (config/devices.yaml, every host with ssh on): deploy and keys.
+# The boat computers of ASTRO_REGISTRY (config/devices.yaml, every host with ssh on): deploy, keys and
+# the repositories under src/ (the image bakes none of them).
 driver: hosts/fleet
-repos: [mhseals_hardware, mhseals_nav, mhseals_testing]   # under src/, fast-forwarded with astro_dock
+repos: &boat [mhseals_hardware, mhseals_nav, mhseals_testing]   # every host; apply fast-forwards them with astro_dock
+clone:                          # per registry host: what `./setup.linux.sh --components repos` clones and builds there
+  blastoise-odroid: *boat
+  blastoise-jetson: *boat       # mhseals_nav's camera parts; mhseals_testing's unit CLI and host_diagnostic
+  tranquility: *boat
+sources:                        # src/NAME: clone URL, branch (default main)
+  mhseals_hardware: {url: https://github.com/MHSeals/mhseals_hardware.git}
+  mhseals_nav: {url: https://github.com/MHSeals/mhseals_nav.git}
+  mhseals_testing: {url: https://github.com/MHSeals/mhseals_testing.git}
+  direct_lidar_inertial_odometry:   # optional DLIO odometry of mhseals_nav's odom.launch.py
+    {url: https://github.com/vectr-ucla/direct_lidar_inertial_odometry.git, branch: feature/ros2}
+  rviz-plugin-zed-od: {url: https://github.com/mhseals/rviz-plugin-zed-od.git}
+  zed-ros2-wrapper: {url: https://github.com/stereolabs/zed-ros2-wrapper.git, branch: master}   # the Jetson image bakes its own
 compose_project: astro_dock_devcontainer
 operator_key: mhseals/ssh       # under XDG_CONFIG_HOME: the key and known_hosts the testing TUI uses
 operator_registry: mhseals/devices.yaml   # under XDG_CONFIG_HOME: this computer's `self:` for keys

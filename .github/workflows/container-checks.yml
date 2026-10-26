@@ -44,7 +44,7 @@ jobs:
       - name: Validate the bag fetch fallback
         run: .github/scripts/test-fetch-bags.sh
       - name: Validate the device drivers (contract, fakes only)
-        run: python3 -m unittest tests.test_hw_contract tests.test_radio tests.test_router tests.test_lidar tests.test_hosts
+        run: python3 -m unittest tests.test_hw_contract tests.test_radio tests.test_router tests.test_lidar tests.test_hosts tests.test_setup_repos
       - name: Validate the boat revert
         run: if [ -f tests/test_boat_revert.sh ]; then bash tests/test_boat_revert.sh; fi
       - name: Check dependency locks, Compose and Jetson image policy

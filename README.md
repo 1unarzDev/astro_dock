@@ -75,7 +75,7 @@ On native Windows, the setup script generates the Windows adapter; install the C
 
 ### Usage
 
-Add your project's ROS packages under `src/` inside the container. [`optional_repos.yaml`](optional_repos.yaml) lists additional repositories available through `./clone_optional.sh`; choose the ones your project needs. Build from the workspace root:
+Add your project's ROS packages under `src/` inside the container. A profile's `hosts.yaml` lists each host's repositories (`clone:`) and their sources; `./setup.linux.sh --components repos [--host NAME]` clones the missing ones and builds them (`./hw.sh hosts repos [NAME]` previews the list). Build from the workspace root:
 
 ```bash
 colcon build --symlink-install
@@ -178,7 +178,7 @@ ASTRO_NTP_SERVER=boat ./setup.linux.sh --non-interactive --yes \
 sudo reboot
 ```
 
-`jetson` sets the persistent MAXN_SUPER power mode, a 16 GB `/swapfile` and the headless multi-user target; `docker` and `gpu` keep JetPack's Docker and toolkit and add the user to `docker`. After the reboot, start the container as in [Image publishing and deployment](#image-publishing-and-deployment), then run `./clone_optional.sh --profile jetson`: it clones the repositories [`optional_repos.yaml`](optional_repos.yaml) marks for the Jetson (mhseals_hardware, mhseals_nav, mhseals_testing; the image bakes none of them) and builds them inside `roboboat_dev`. The ZED SDK downloads the camera's factory calibration by serial number on first use (through the gateway) and keeps it in the `zed_settings` volume.
+`jetson` sets the persistent MAXN_SUPER power mode, a 16 GB `/swapfile` and the headless multi-user target; `docker` and `gpu` keep JetPack's Docker and toolkit and add the user to `docker`. After the reboot, start the container as in [Image publishing and deployment](#image-publishing-and-deployment), then run `./setup.linux.sh --components repos`: it clones the repositories the profile's `hosts.yaml` lists for this host (mhseals_hardware, mhseals_nav, mhseals_testing; the image bakes none of them) and builds them inside `roboboat_dev`. The ZED SDK downloads the camera's factory calibration by serial number on first use (through the gateway) and keeps it in the `zed_settings` volume.
 
 #### Device tooling
 
