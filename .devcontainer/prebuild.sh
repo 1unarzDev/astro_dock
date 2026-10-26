@@ -41,7 +41,7 @@ if [[ -n "$selection" && "$os_type" != linux ]]; then
 fi
 # Stage every derivation; selected validation never damages the active adapter.
 work_file="$(mktemp "${script_dir}/.adapter.XXXXXX")"
-trap 'rm -f "$work_file" "$work_file.bak" "$script_dir/docker-compose.override.yml.new"' EXIT
+trap 'rm -f "$work_file" "$work_file.bak" "$work_file.domain" "$script_dir/docker-compose.override.yml.new"' EXIT
 cp "$override_file" "$work_file"
 host_name="${ASTRO_HOSTNAME:-$(uname -n)}"
 host_name="${host_name%%.*}"
@@ -68,9 +68,29 @@ if command -v getent >/dev/null; then
 " "$work_file"
     fi
 fi
+# The vessel's ROS domain: ROS_DOMAIN_ID of its network env (hw.sh env), else config/run.yaml's
+# generic default. ASTRO_ROS_DOMAIN_ID still overrides it when Compose starts the container.
+domain="$("$script_dir/../hw.sh" env ROS_DOMAIN_ID 2>/dev/null || true)"
+if [[ -n "$domain" ]]; then
+    [[ "$domain" =~ ^[0-9]+$ ]] && ((domain <= 232)) || { echo "Invalid ROS_DOMAIN_ID in the vessel's network env: $domain" >&2; exit 1; }
+    echo "ROS domain $domain (the vessel's network env)"
+    python3 -I - "$work_file" "$domain" <<'PY'
+import sys, yaml
+path, domain = sys.argv[1], sys.argv[2]
+with open(path) as stream:
+    adapter = yaml.safe_load(stream)
+adapter['services']['dev'].setdefault('environment', {})['ROS_DOMAIN_ID'] = '${ASTRO_ROS_DOMAIN_ID:-%s}' % domain
+with open(path, 'w') as stream:
+    yaml.safe_dump(adapter, stream, sort_keys=False)
+PY
+    printf 'ros:\n  domain_id: %s\n' "$domain" > "$work_file.domain"
+else
+    echo "ROS domain: the generic default of config/run.yaml (no vessel network env names ROS_DOMAIN_ID; see hw.sh whoami)"
+fi
 operator_file="${HOME}/.config/mhseals/run.yaml"
 if [[ "$os_type" == linux && ( -n "$selection" || -f "$operator_file" ) ]]; then
     files=(--file "$script_dir/../config/run.yaml")
+    [[ ! -f "$work_file.domain" ]] || files+=(--file "$work_file.domain")
     [[ ! -f "$operator_file" ]] || files+=(--file "$operator_file")
     [[ -z "$selection" ]] || files+=(--file "$selection")
     python3 -I "$script_dir/run_env.py" "${files[@]}" --adapter "$work_file" \

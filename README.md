@@ -132,7 +132,7 @@ ros2 launch zed_wrapper zed_camera.launch.py \
   camera_model:=zed2i camera_name:=front publish_tf:=false publish_map_tf:=false
 ```
 
-Every host uses DDS domain **42**; `ASTRO_ROS_DOMAIN_ID` overrides it. `/usr/local/zed/tools/ZED_Explorer --all` lists attached cameras.
+The DDS domain is the vessel's `ROS_DOMAIN_ID` (its network env; prebuild prints it), else 0 (`config/run.yaml`); `ASTRO_ROS_DOMAIN_ID` overrides it. `/usr/local/zed/tools/ZED_Explorer --all` lists attached cameras.
 
 Compose and Jazzy shells load [`config/fastdds.xml`](config/fastdds.xml) (1400-byte UDP messages avoid IP fragment-buffer stalls with large topics; a 60 s discovery lease rides out radio dropouts). On a vessel's subnet (`LAN_SUBNET` of its network env, or `ASTRO_DDS_SUBNET`), `ros_net` also sets `ROS_STATIC_PEERS` to the gateway and the reserved hosts, so discovery reaches them by unicast; multicast stays on and a user-set value wins.
 

@@ -50,6 +50,39 @@ class RunEnvTest(unittest.TestCase):
             self.assertNotEqual(bad.returncode, 0)
             self.assertEqual(override.read_bytes(), previous)
 
+    def test_prebuild_takes_the_vessel_domain(self):
+        """The vessel's network env names the domain (fixture a: 7) for every adapter; without a vessel
+        config/run.yaml's generic 0 stays; ASTRO_ROS_DOMAIN_ID still wins when Compose starts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ('.devcontainer', 'config', 'devices'):
+                shutil.copytree(ROOT / name, root / name, ignore=shutil.ignore_patterns('__pycache__'))
+            shutil.copy(ROOT / 'hw.sh', root / 'hw.sh')
+            stubs = root / 'stubs'
+            stubs.mkdir()
+            (stubs / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; -n) echo testhost;; esac\n')
+            (stubs / 'uname').chmod(0o755)
+            (stubs / 'getent').write_text('#!/bin/sh\nexit 0\n')
+            (stubs / 'getent').chmod(0o755)
+            for name in ('bash', 'dirname', 'basename', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3', 'docker',
+                         'mkdir', 'grep', 'tr'):
+                (stubs / name).symlink_to('/usr/bin/' + name)
+            env = {'PATH': str(stubs), 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+                   'ASTRO_PROFILES': str(ROOT / 'tests/data/profiles'), 'HW_HOSTNAME': 'x', 'HW_SYSFS_NET': '/nonexistent'}
+            prebuild = str(root / '.devcontainer/prebuild.sh')
+            compose = ['docker', 'compose', '-f', str(root / '.devcontainer/docker-compose.yml'),
+                       '-f', str(root / '.devcontainer/docker-compose.override.yml'), 'config', '--format', 'json']
+
+            def domain(vessel, **extra):
+                run = subprocess.run(['bash', prebuild], env={**env, **vessel}, capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                result = subprocess.run(compose, env={**env, **extra}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout)['services']['dev']['environment']['ROS_DOMAIN_ID']
+            self.assertEqual(domain({'ASTRO_VESSEL': 'a'}), '7')
+            self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
+            self.assertEqual(domain({}), '0')                       # no vessel: the generic default
+
     def resolve(self, text, env=None):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'run.yaml'

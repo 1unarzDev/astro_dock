@@ -1,5 +1,5 @@
 ros:
-  domain_id: 42
+  domain_id: 0
   discovery_range: SUBNET
 data:
   root: /home/roboboat/roboboat_ws/bags

@@ -21,7 +21,7 @@ services:
     stop_grace_period: 30s
     environment:
       ROS_AUTOMATIC_DISCOVERY_RANGE: SUBNET
-      ROS_DOMAIN_ID: "42"
+      ROS_DOMAIN_ID: "0"
       ROS_WS: /home/roboboat/roboboat_ws
       MHSEALS_DATA: /home/roboboat/roboboat_ws/bags
       # Non-interactive bash (docker exec ... bash -c) sources the same ROS and DDS setup.
