@@ -25,8 +25,8 @@ status    Read-only: mca-status, wstalist, status.cgi, radio/wireless config key
 verify    Read-only: ping and ARP each radio, ping the profile's reachable hosts, one UBNT
           discovery probe (UDP 10001). --via runs it on HOST over ssh.
 snapshot  Copy the radio's /tmp/system.cfg to the state directory (contains secrets).
-plan      Snapshot and print the diff of KEY=VALUE pairs (default: the radio's cfg in the
-          profile); nothing is applied. Same as apply --dry-run.
+plan      Read the radio's config and print the diff of KEY=VALUE pairs (default: the radio's
+          cfg in the profile); nothing is applied or saved. Same as apply --dry-run.
 apply     plan, then a RAM-only trial: the radio reboots into its saved config after
           $(cfg revert_seconds)s unless you type KEEP. A channel/width trial is kept only if the peer
           answers through it.
@@ -36,6 +36,8 @@ measure   Read-only: both radios' status, iperf3 TCP and UDP both ways to the pr
 propose   Offline: setting changes per radio from the latest (or given) measurement, as
           plan/apply commands. Guards: the profile's propose.* (HW_PROPOSE_* override).
 Logins: the .env keys named in credentials (without a password ssh prompts).
+status, plan and verify write nothing to the radios; locally, ssh may add a radio's host key
+to the state directory's known_hosts.
 EOF
 }
 
@@ -137,11 +139,11 @@ driver_status() {
 }
 
 snapshot() {
-    local name=$1 file
-    file="$(state_dir)/$name-$(date +%Y%m%d-%H%M%S).cfg"
+    local name=$1 file=${2:-}
+    [[ -n $file ]] || file="$(state_dir)/$name-$(date +%Y%m%d-%H%M%S).cfg"
     (umask 077; ssh_radio "$(addr "$name")" 'cat /tmp/system.cfg' </dev/null >"$file") || { rm -f -- "$file"; die "Snapshot failed"; }
     grep -q '^wireless\.' "$file" || die "$file does not look like an airOS system.cfg"
-    info "Saved $file (contains secrets; keep it out of the repo)" >&2
+    [[ -n ${2:-} ]] || info "Saved $file (contains secrets; keep it out of the repo)" >&2
     printf '%s\n' "$file"
 }
 
@@ -162,8 +164,9 @@ driver_apply() {
     ssh_radio "$(addr "$peer")" "! { $TRIAL_ALIVE; }" </dev/null \
         || die "The $peer radio is unreachable or has a pending trial; apply one radio at a time"
     ssh_radio "$ip" "! { $TRIAL_ALIVE; }" </dev/null || die "$name is unreachable or already has a pending trial"
-    file=$(snapshot "$name")
-    new=$(mktemp) && trap "rm -f -- '$new' '$new.tmp'" EXIT
+    new=$(mktemp) && trap "rm -f -- '$new' '$new.tmp' '$new.live'" EXIT
+    # A plan reads the config into a temporary file: no secret-bearing snapshot is kept.
+    if ((dry)); then file=$new.live; snapshot "$name" "$file" >/dev/null; else file=$(snapshot "$name"); fi
     cp -- "$file" "$new"
     set -f
     for pair in $pairs; do
@@ -197,7 +200,7 @@ driver_apply() {
         fi
         warn "Channel/width change: the link drops while the $peer re-scans (about 30 s); if it does not come back, $name reverts after ${revert}s."
     fi
-    ((dry)) && { info "Dry run; nothing applied. Snapshot: $file"; return; }
+    ((dry)) && { info "Dry run; nothing applied or saved."; return; }
     read -r -p "Trial $name at $ip in RAM, rebooting to its saved config after ${revert}s? Type APPLY: " answer
     [[ $answer == APPLY ]] || { info "Cancelled; nothing changed"; return; }
     # Flash is untouched until KEEP, so the timer, a reboot or a power cycle all restore the saved config.

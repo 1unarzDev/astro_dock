@@ -28,7 +28,7 @@ verbs() { declare -F | sed -n 's/^declare -f driver_//p' | grep -vx usage | tr '
 usage() {
     local file
     printf 'Usage: %s KIND VERB [ARGS]   (KIND VERB --help for details)\n' "$HW_PROGRAM"
-    printf '       %s env [KEY]          the network env path, or one layered value\n\n' "$HW_PROGRAM"
+    printf '       %s env [KEY]          the network env path, or one of its keys (layered)\n\n' "$HW_PROGRAM"
     printf 'Kinds in profile %s:\n' "$(basename -- "$HW_PROFILE")"
     for file in "$HW_PROFILE"/*.yaml; do
         [[ -e $file ]] || continue
@@ -42,6 +42,8 @@ case ${1:-} in
     env)
         if [[ -z ${2:-} ]]; then printf '%s\n' "$ASTRO_NETWORK_ENV"; exit 0; fi
         [[ $2 =~ ^[A-Z][A-Z0-9_]*$ ]] || die "Not an env key: $2"
+        # Network values only: .env secrets and other variables are never printed.
+        grep -q "^$2=" "$ASTRO_NETWORK_ENV" || die "$2 is not a key of $ASTRO_NETWORK_ENV"
         hw_load_env "$ASTRO_NETWORK_ENV"
         printf '%s\n' "${!2:-}"
         exit 0

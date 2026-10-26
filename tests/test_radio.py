@@ -248,11 +248,11 @@ class LinkMeasureTest(unittest.TestCase):
         self.assertIn('radio.1.chanbw: 20 -> 40', run.stdout)
         self.assertIn('radio.1.txpower: 24 -> 20', run.stdout)
         self.assertIn('re-scans', run.stderr)
-        self.assertIn('Dry run; nothing applied', run.stdout)
+        self.assertIn('Dry run; nothing applied or saved', run.stdout)
         self.assertNotIn('Type APPLY', run.stdout)
         self.assertEqual(self.radio_files(ROCKET), ['system.cfg'])
         self.assertIn('radio.1.chanbw=20', (self.tmp / 'hosts' / ROCKET / 'tmp/system.cfg').read_text())
-        self.assertEqual(len(list((self.state / 'ubiquiti').glob('rocket-*.cfg'))), 1)
+        self.assertEqual(list((self.state / 'ubiquiti').glob('rocket-*.cfg')), [])   # no secret-bearing snapshot
 
     def test_apply_refuses_channel_keys_on_the_station(self):
         run = self.hw('apply', 'bullet', '--dry-run', 'radio.1.chanbw=20')

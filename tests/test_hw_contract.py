@@ -73,6 +73,17 @@ class Contract(unittest.TestCase):
         self.assertEqual(self.hw('thing', 'extra').stdout, '[from file]\n')
         self.assertEqual(self.hw('thing', 'extra', THING_PASSWORD='').stdout, '[]\n')
 
+    def test_env_prints_only_network_env_keys(self):
+        (self.tmp / 'no.env').write_text('THING_PASSWORD=hunter22\n')
+        run = self.hw('env', 'ADDR')
+        self.assertEqual((run.returncode, run.stdout), (0, '10.0.0.7\n'), run.stderr)
+        for key in ('THING_PASSWORD', 'HOME'):
+            with self.subTest(key=key):
+                run = self.hw('env', key)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertIn('is not a key of', run.stderr)
+                self.assertNotIn('hunter22', run.stdout + run.stderr)
+
     def test_profile_selection(self):
         run = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'env'], capture_output=True, text=True,
                              env={**os.environ, 'ASTRO_PROFILE': 'nonexistent', 'ASTRO_ENV_FILE': '/dev/null'})
