@@ -63,7 +63,7 @@ jobs:
       - name: Reject stale ROS and Gazebo Classic references
         run: |
           ! grep -RInE 'ros-humble|/opt/ros/humble|gazebo_ros_pkgs|gazebo_ros2_control' \
-            .devcontainer .vscode generate_packages.py
+            .devcontainer .vscode
       - uses: docker/setup-buildx-action@v3
       - name: Build core without publishing
         uses: docker/build-push-action@v6

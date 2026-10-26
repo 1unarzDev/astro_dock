@@ -113,6 +113,16 @@ for ok, message in [
 ]:
     require(ok, f"architecture: {message}")
 
+# Dependencies are curated by hand in packages.txt, jetson-packages.txt and requirements.txt; the retired
+# generate_packages.py (interactive, dumped every package.xml dependency into them) must not return.
+tracked = subprocess.run(["git", "-C", str(root), "ls-files"], check=True, capture_output=True, text=True).stdout.split()
+require("generate_packages.py" not in tracked, "packages: generate_packages.py was retired; edit the lists by hand")
+for name in tracked:
+    path = root / name
+    if name != ".github/scripts/check-containers.py" and path.is_file() and not name.startswith("src/"):
+        require("generate_packages" not in path.read_text(encoding="utf-8", errors="ignore"),
+                f"packages: {name} references the retired generate_packages.py")
+
 for failure in failures:
     print(f"container checks: {failure}", file=sys.stderr)
 print(f"container checks: {'FAIL' if failures else 'pass'} ({release.group(1) if release else 'no release pin'})")
