@@ -1,5 +1,5 @@
 ros:
-  domain_id: 0
+  domain_id: 42      # the fleet default (unchanged hosts stay on it); a vessel's ROS_DOMAIN_ID or ASTRO_ROS_DOMAIN_ID overrides
   discovery_range: SUBNET
 data:
   root: /home/roboboat/roboboat_ws/bags

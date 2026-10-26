@@ -32,7 +32,11 @@ import socket
 import subprocess
 import sys
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    sys.exit('profile.py: PyYAML is missing, so the device profiles cannot load '
+             '(install it: python3 -m pip install --user pyyaml).')
 
 KEY = re.compile(r'\$([A-Z][A-Z0-9_]*)')
 NAME = re.compile(r'[a-z0-9][a-z0-9_-]*')

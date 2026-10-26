@@ -68,32 +68,37 @@ if command -v getent >/dev/null; then
 " "$work_file"
     fi
 fi
-# The vessel's ROS domain: ROS_DOMAIN_ID of its network env (hw.sh env), else config/run.yaml's
-# generic default 0. It is baked here; ASTRO_ROS_DOMAIN_ID (prebuild's or Compose's environment)
-# overrides it. A missing profiles submodule or a host that resolves no vessel says so loudly.
+# The ROS domain: the vessel's ROS_DOMAIN_ID (its network env, hw.sh env), injected into the adapter
+# here; else the fleet default of docker-compose.yml and config/run.yaml, which a stale adapter, a
+# host without a vessel and a checkout without the profiles submodule keep. ASTRO_ROS_DOMAIN_ID
+# (prebuild's or Compose's environment) overrides either. No PyYAML here: macOS has none.
 hw="$script_dir/../hw.sh"
 domain_fix="export ASTRO_ROS_DOMAIN_ID=N where the dev container opens (prebuild and Compose read it), or rerun prebuild with ASTRO_VESSEL=NAME (hw.sh --vessel)"
+domain_default="ROS domain ${ASTRO_ROS_DOMAIN_ID:-of the fleet default (docker-compose.yml, config/run.yaml)}"
 domain=""
-if [[ -z "$("$hw" whoami --root 2>/dev/null || true)" ]]; then
+reason() { sed -e 's/\x1b\[[0-9;]*m//g' -e '$!d' "$work_file.err"; }
+if ! profiles_root="$("$hw" whoami --root 2>"$work_file.err")"; then
+    echo "WARNING: hw.sh cannot load the profiles ($(reason)); the dev container gets the $domain_default." >&2
+elif [[ -z "$profiles_root" ]]; then
     if [[ -z "${ASTRO_PROFILES:-}" ]] && grep -qs '^\[submodule "profiles"\]' "$script_dir/../.gitmodules"; then
         {
             echo "WARNING: ======================================================================"
             echo "WARNING: The profiles submodule is declared but not initialised: no vessel network env,"
-            echo "WARNING: so this dev container gets ROS domain ${ASTRO_ROS_DOMAIN_ID:-0} and will not see the vessel's nodes."
+            echo "WARNING: so this dev container gets the $domain_default, not a vessel's own."
             echo "WARNING: Run git submodule update --init profiles and rerun prebuild, or $domain_fix."
             echo "WARNING: ======================================================================"
         } >&2
     else
-        echo "ROS domain: generic mode (no profile root), config/run.yaml's default ${ASTRO_ROS_DOMAIN_ID:+(ASTRO_ROS_DOMAIN_ID=$ASTRO_ROS_DOMAIN_ID overrides it)}"
+        echo "ROS domain: generic mode (no profile root), the $domain_default"
     fi
 elif ! domain="$("$hw" env ROS_DOMAIN_ID 2>"$work_file.err")"; then
     domain=""
     if grep -q 'is not a key' "$work_file.err"; then
-        echo "ROS domain: config/run.yaml's generic default (the vessel's network env names no ROS_DOMAIN_ID)"
+        echo "ROS domain: the vessel's network env names no ROS_DOMAIN_ID, so the $domain_default"
     else
         {
-            echo "WARNING: This host resolves no vessel (see ./hw.sh whoami): $(sed -e 's/\x1b\[[0-9;]*m//g' -e '$!d' "$work_file.err")"
-            echo "WARNING: The dev container gets ROS domain ${ASTRO_ROS_DOMAIN_ID:-0}, baked now. An operator laptop off the boat LAN or"
+            echo "WARNING: This host resolves no vessel (see ./hw.sh whoami): $(reason)"
+            echo "WARNING: The dev container gets the $domain_default. An operator laptop off the boat LAN or"
             echo "WARNING: prebuilt with --host and no vessel: $domain_fix."
         } >&2
     fi
@@ -102,17 +107,24 @@ if [[ -n "$domain" ]]; then
     [[ "$domain" =~ ^[0-9]+$ ]] && ((domain <= 232)) || { echo "Invalid ROS_DOMAIN_ID in the vessel's network env: $domain" >&2; exit 1; }
     echo "ROS domain $domain (the vessel's network env)${ASTRO_ROS_DOMAIN_ID:+; ASTRO_ROS_DOMAIN_ID=$ASTRO_ROS_DOMAIN_ID overrides it}"
     printf 'ros:\n  domain_id: %s\n' "$domain" > "$work_file.domain"
+    # Into services.dev.environment (a mapping in every adapter), replacing an adapter's own value.
+    awk -v value='${ASTRO_ROS_DOMAIN_ID:-'"$domain"'}' '
+        { line[NR] = $0 }
+        END {
+            for (i = 1; i <= NR; i++) if (line[i] == "  dev:") { start = i; break }
+            if (!start) { print "prebuild: the adapter has no services.dev" > "/dev/stderr"; exit 1 }
+            for (stop = start + 1; stop <= NR && line[stop] !~ /^([^ ]|  ?[^ ])/; stop++)
+                if (line[stop] == "    environment:") env = stop
+            for (i = 1; i <= NR; i++) {
+                if (i > start && i < stop && line[i] ~ /^      ROS_DOMAIN_ID:/) continue
+                print line[i]
+                if (env ? i == env : i == start) {
+                    if (!env) print "    environment:"
+                    print "      ROS_DOMAIN_ID: \"" value "\""
+                }
+            }
+        }' "$work_file" > "$work_file.bak" && mv "$work_file.bak" "$work_file"
 fi
-# Every adapter defers to ASTRO_ROS_DOMAIN_ID when Compose starts the container (the vessel's domain, else 0).
-python3 -I - "$work_file" "${domain:-0}" <<'PY'
-import sys, yaml
-path, domain = sys.argv[1], sys.argv[2]
-with open(path) as stream:
-    adapter = yaml.safe_load(stream)
-adapter['services']['dev'].setdefault('environment', {})['ROS_DOMAIN_ID'] = '${ASTRO_ROS_DOMAIN_ID:-%s}' % domain
-with open(path, 'w') as stream:
-    yaml.safe_dump(adapter, stream, sort_keys=False)
-PY
 operator_file="${HOME}/.config/mhseals/run.yaml"
 if [[ "$os_type" == linux && ( -n "$selection" || -f "$operator_file" ) ]]; then
     files=(--file "$script_dir/../config/run.yaml")

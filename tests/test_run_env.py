@@ -51,51 +51,77 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(override.read_bytes(), previous)
 
     def test_prebuild_takes_the_vessel_domain(self):
-        """The vessel's network env names the domain (fixture a: 7) for every adapter; without a vessel
-        config/run.yaml's generic 0 stays; ASTRO_ROS_DOMAIN_ID still wins when Compose starts."""
+        """The vessel's network env names the domain (fixture a: 7), injected without PyYAML; every other
+        host keeps the fleet default 42 (a stale adapter, no vessel, no submodule, macOS without PyYAML);
+        ASTRO_ROS_DOMAIN_ID still wins when Compose starts."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ('.devcontainer', 'config', 'devices'):
                 shutil.copytree(ROOT / name, root / name, ignore=shutil.ignore_patterns('__pycache__'))
             shutil.copy(ROOT / 'hw.sh', root / 'hw.sh')
-            stubs = root / 'stubs'
-            stubs.mkdir()
-            (stubs / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; -n) echo testhost;; esac\n')
-            (stubs / 'uname').chmod(0o755)
-            (stubs / 'getent').write_text('#!/bin/sh\nexit 0\n')
-            (stubs / 'getent').chmod(0o755)
-            for name in ('bash', 'dirname', 'basename', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3', 'docker',
-                         'mkdir', 'grep', 'tr'):
-                (stubs / name).symlink_to('/usr/bin/' + name)
-            env = {'PATH': str(stubs), 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+
+            def stubs(name, system, python='/usr/bin/python3'):
+                path = root / name
+                path.mkdir()
+                (path / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo %s;; -m) echo x86_64;; -n) echo testhost;; esac\n'
+                                            % system)
+                (path / 'getent').write_text('#!/bin/sh\nexit 0\n')
+                (path / 'python3').write_text('#!/bin/sh\nexec %s "$@"\n' % python)
+                for stub in ('uname', 'getent', 'python3'):
+                    (path / stub).chmod(0o755)
+                for tool in ('bash', 'dirname', 'basename', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'docker',
+                             'mkdir', 'grep', 'tr', 'awk'):
+                    (path / tool).symlink_to('/usr/bin/' + tool)
+                return str(path)
+            # macOS: no PyYAML (an import of yaml fails).
+            noyaml = root / 'python3-noyaml'
+            noyaml.write_text('#!/bin/sh\n[ "$1" = -I ] && shift\nexec /usr/bin/python3 -I -c '
+                              '\'import runpy, sys; sys.modules["yaml"] = None; sys.argv = sys.argv[1:]; '
+                              'runpy.run_path(sys.argv[0], run_name="__main__")\' "$@"\n')
+            noyaml.chmod(0o755)
+            linux, mac = stubs('linux', 'Linux'), stubs('mac', 'Darwin', python=str(noyaml))
+            env = {'PATH': linux, 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
                    'ASTRO_PROFILES': str(ROOT / 'tests/data/profiles'), 'HW_HOSTNAME': 'x', 'HW_SYSFS_NET': '/nonexistent'}
             prebuild = str(root / '.devcontainer/prebuild.sh')
+            override = root / '.devcontainer/docker-compose.override.yml'
             compose = ['docker', 'compose', '-f', str(root / '.devcontainer/docker-compose.yml'),
-                       '-f', str(root / '.devcontainer/docker-compose.override.yml'), 'config', '--format', 'json']
+                       '-f', str(override), 'config', '--format', 'json']
 
             warnings = []
+
+            def config(**extra):
+                result = subprocess.run(compose, env={**env, **extra}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout)['services']['dev']['environment']['ROS_DOMAIN_ID']
 
             def domain(vessel, **extra):
                 run = subprocess.run(['bash', prebuild], env={**env, **vessel}, capture_output=True, text=True)
                 self.assertEqual(run.returncode, 0, run.stderr)
                 warnings.append(run.stderr)
-                result = subprocess.run(compose, env={**env, **extra}, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                return json.loads(result.stdout)['services']['dev']['environment']['ROS_DOMAIN_ID']
+                return config(**extra)
+            # A stale adapter (pulled, prebuild not rerun) has no domain: the fleet default.
+            shutil.copy(root / '.devcontainer/docker-compose.override.linux.yml', override)
+            self.assertEqual(config(), '42')
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}), '7')
             self.assertNotIn('WARNING', warnings[-1])
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
-            self.assertEqual(domain({'ASTRO_VESSEL': 'b'}), '0')     # a vessel env without ROS_DOMAIN_ID: no warning
+            self.assertEqual(domain({'ASTRO_VESSEL': 'b'}), '42')    # a vessel env without ROS_DOMAIN_ID: no warning
             self.assertNotIn('WARNING', warnings[-1])
-            # No vessel (an operator laptop off the LAN): 0, said loudly, and ASTRO_ROS_DOMAIN_ID still wins.
-            self.assertEqual(domain({}), '0')
+            # No vessel (an operator laptop off the LAN, or --host without a vessel): 42, said, and the override wins.
+            self.assertEqual(domain({}), '42')
             self.assertIn('WARNING: This host resolves no vessel (see ./hw.sh whoami): [ERROR] No vessel for this machine', warnings[-1])
             self.assertIn('ASTRO_ROS_DOMAIN_ID', warnings[-1])
             self.assertIn('ASTRO_VESSEL', warnings[-1])
-            self.assertEqual(domain({}, ASTRO_ROS_DOMAIN_ID='42'), '42')
-            # The profiles submodule declared but not initialised: a loud banner, generic 0.
+            self.assertEqual(domain({}, ASTRO_ROS_DOMAIN_ID='5'), '5')
+            # macOS: the mac adapter (its own environment block) takes the vessel's domain without PyYAML ...
+            self.assertEqual(domain({'ASTRO_VESSEL': 'a', 'PATH': stubs('mac-yaml', 'Darwin')}), '7')
+            # ... and without PyYAML hw.sh says so, and the fleet default stays.
+            self.assertEqual(domain({'ASTRO_VESSEL': 'a', 'PATH': mac}), '42')
+            self.assertIn('PyYAML is missing', warnings[-1])
+            self.assertNotIn('not initialised', warnings[-1])
+            # The profiles submodule declared but not initialised: a loud banner, the fleet default.
             (root / '.gitmodules').write_text('[submodule "profiles"]\n\tpath = profiles\n\turl = https://example.invalid/p\n')
-            self.assertEqual(domain({'ASTRO_PROFILES': ''}), '0')
+            self.assertEqual(domain({'ASTRO_PROFILES': ''}), '42')
             self.assertIn('WARNING: The profiles submodule is declared but not initialised', warnings[-1])
             self.assertIn('ASTRO_ROS_DOMAIN_ID', warnings[-1])
 
