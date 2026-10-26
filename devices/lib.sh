@@ -18,37 +18,81 @@ hw_load_env() {
     done <"$1"
 }
 
-# hw_init: layers environment > .env (secrets, per machine) > the profile chain (devices/profile.py).
-# Selection: hw.sh --profile > ASTRO_PROFILE (environment, then .env) > the one profile naming a
-# network env; ASTRO_PROFILE_DIR (a directory) is for tests. Sets HW_PROFILE, HW_PROFILE_CHAIN,
-# HW_PROFILE_KINDS, and ASTRO_NETWORK_ENV / ASTRO_REGISTRY (absolute, or empty when no layer names one).
-hw_init() {
-    local profiles=$HW_ROOT/config/profiles out
-    hw_load_env "${ASTRO_ENV_FILE:-$HW_ROOT/.env}"
-    if [[ -n ${ASTRO_PROFILE_DIR:-} ]]; then
-        HW_PROFILE=$ASTRO_PROFILE_DIR
-    else
-        [[ -n ${ASTRO_PROFILE:-} ]] || ASTRO_PROFILE=$(python3 -I "$HW_ROOT/devices/profile.py" default "$profiles") || exit 1
-        [[ $ASTRO_PROFILE =~ ^[a-z0-9][a-z0-9_-]*$ && -d $profiles/$ASTRO_PROFILE ]] \
-            || die "No profile '$ASTRO_PROFILE' in config/profiles"
-        HW_PROFILE=$profiles/$ASTRO_PROFILE
+# hw_secrets: the secrets file (ASTRO_SECRETS, default ~/.config/astro/secrets.env), refused unless
+# private (mode 600 or 400), then a legacy astro_dock/.env (ASTRO_ENV_FILE) with a warning, for one release.
+hw_secrets() {
+    local legacy=${ASTRO_ENV_FILE:-$HW_ROOT/.env} mode
+    HW_SECRETS=${ASTRO_SECRETS:-${XDG_CONFIG_HOME:-$HOME/.config}/astro/secrets.env}
+    if [[ -e $HW_SECRETS ]]; then
+        mode=$(stat -L -c %a -- "$HW_SECRETS") || die "Cannot stat $HW_SECRETS"
+        [[ $mode == [46]00 ]] || die "$HW_SECRETS is mode $mode; secrets must be private: chmod 600 $HW_SECRETS"
+        hw_load_env "$HW_SECRETS"
     fi
-    out=$(python3 -I "$HW_ROOT/devices/profile.py" meta "$HW_PROFILE") || exit 1
+    if [[ -f $legacy && -s $legacy ]]; then
+        warn "Reading the legacy $legacy; move its keys to $HW_SECRETS (mode 600) and remove it"
+        hw_load_env "$legacy"
+    fi
+}
+
+# hw_profiles_root: ASTRO_PROFILES > HW_ROOT/profiles (the submodule, once initialised) >
+# HW_ROOT/config/profiles (legacy, until the submodule lands) > empty (generic mode).
+hw_profiles_root() {
+    local dir
+    if [[ -n ${ASTRO_PROFILES:-} ]]; then
+        [[ -d $ASTRO_PROFILES ]] || die "ASTRO_PROFILES=$ASTRO_PROFILES is not a directory"
+        printf '%s\n' "$ASTRO_PROFILES"
+        return
+    fi
+    for dir in "$HW_ROOT/profiles" "$HW_ROOT/config/profiles"; do
+        compgen -G "$dir/*/profile.yaml" >/dev/null && { printf '%s\n' "$dir"; return; }
+    done
+    return 0
+}
+
+# hw_init: layers environment > secrets file > the profile chain (devices/profile.py). Every profile of
+# the root loads and is checked; resolution picks this machine's host (--host/ASTRO_HOST, else hostname or
+# a permanent MAC in a registry's STATIC_LEASES) and vessel (--vessel/ASTRO_VESSEL, else the host's).
+# ASTRO_PROFILE is the vessel's old name, for one release. ASTRO_PROFILE_DIR (a directory) is for tests.
+# Sets HW_PROFILE (the vessel's directory, else the fleet's), HW_PROFILE_CHAIN, HW_PROFILE_KINDS,
+# HW_SCOPE_ERROR (non-empty without a vessel), ASTRO_HOST, ASTRO_VESSEL, ASTRO_NETWORK_ENV and
+# ASTRO_REGISTRY (absolute, or empty). Without a profile root (generic mode) HW_PROFILES_ROOT is empty.
+hw_init() {
+    local out
+    hw_secrets
+    HW_PROFILES_ROOT='' HW_SCOPE_ERROR='' HW_PROFILE_KINDS='' HW_PROFILE_CHAIN=''
+    if [[ -n ${ASTRO_PROFILE:-} && -z ${ASTRO_VESSEL:-} ]]; then
+        warn "ASTRO_PROFILE/--profile is now ASTRO_VESSEL/--vessel"
+        ASTRO_VESSEL=$ASTRO_PROFILE
+    fi
+    export ASTRO_HOST=${ASTRO_HOST:-} ASTRO_VESSEL=${ASTRO_VESSEL:-}
+    if [[ -n ${ASTRO_PROFILE_DIR:-} ]]; then
+        HW_PROFILE=$ASTRO_PROFILE_DIR HW_PROFILES_ROOT=$(dirname -- "$ASTRO_PROFILE_DIR")
+        out=$(python3 -I "$HW_ROOT/devices/profile.py" meta "$HW_PROFILE") || exit 1
+        eval "$out"
+        return
+    fi
+    HW_PROFILES_ROOT=$(hw_profiles_root)
+    if [[ -z $HW_PROFILES_ROOT ]]; then
+        HW_SCOPE_ERROR="No profile root (generic mode): set ASTRO_PROFILES or run git submodule update --init profiles"
+        ASTRO_NETWORK_ENV=${ASTRO_NETWORK_ENV:-} ASTRO_REGISTRY=${ASTRO_REGISTRY:-}
+        return
+    fi
+    out=$(python3 -I "$HW_ROOT/devices/profile.py" resolve "$HW_PROFILES_ROOT") || exit 1
     eval "$out"
-    [[ -z $ASTRO_NETWORK_ENV || $ASTRO_NETWORK_ENV == /* ]] || ASTRO_NETWORK_ENV=$HW_ROOT/$ASTRO_NETWORK_ENV
-    [[ -z $ASTRO_REGISTRY || $ASTRO_REGISTRY == /* ]] || ASTRO_REGISTRY=$HW_ROOT/$ASTRO_REGISTRY
+    export ASTRO_HOST ASTRO_VESSEL
 }
 
 # hw_load_kind KIND: the merged KIND.yaml of the profile chain as HW_* variables; set HW_* win.
 hw_load_kind() {
     local out
+    [[ -n $HW_PROFILE_CHAIN ]] || die "$HW_SCOPE_ERROR"
     [[ " $HW_PROFILE_KINDS " == *" $1 "* ]] || die "Profile $(basename -- "$HW_PROFILE") has no $1.yaml"
     out=$(python3 -I "$HW_ROOT/devices/profile.py" kind "$HW_PROFILE" "$1" "$ASTRO_NETWORK_ENV") || exit 1
     eval "$out"
 }
 
 # cfg a.b.c: a profile value (HW_A_B_C). cfg_keys a.b: the keys of a mapping. secret a.b: the value of
-# the .env key the profile names at a.b (credentials stay out of the repo; the profile names them).
+# the secrets key the profile names at a.b (credentials stay out of every repo; the profile names them).
 hw_var() { local v=${1^^}; v=${v//[^A-Z0-9]/_}; printf 'HW_%s' "$v"; }
 cfg() { local n; n=$(hw_var "$1"); printf '%s' "${!n:-}"; }
 cfg_keys() { local n; n=$(hw_var "$1")__KEYS; printf '%s' "${!n:-}"; }
@@ -56,7 +100,7 @@ secret() {
     local key
     key=$(cfg "$1")
     [[ -z $key ]] && return 0
-    [[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] || die "$1 must name an .env key, not '$key'"
+    [[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] || die "$1 must name a secrets key, not '$key'"
     printf '%s' "${!key:-}"
 }
 

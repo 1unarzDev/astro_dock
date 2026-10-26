@@ -10,25 +10,53 @@ Usage: $HW_PROGRAM $HW_KIND status|verify [HOST...]
        $HW_PROGRAM $HW_KIND plan|apply [--image REF] [HOST...]
        $HW_PROGRAM $HW_KIND rollback IMAGE [HOST...]
        $HW_PROGRAM $HW_KIND keys [HOST...]
-       $HW_PROGRAM $HW_KIND repos
+       $HW_PROGRAM $HW_KIND repos [--role ROLE...]
+       $HW_PROGRAM $HW_KIND project
 
 status    Read-only: each repository's branch, head and dirty state, and the container's image.
 plan      Read-only: what apply would do (heads against origin/main via ls-remote; no fetch).
-apply     Back up dirty state, fast-forward astro_dock and the repos ($(cfg repos)) to origin/main,
-          prune stale symlink-install links, build in the container. --image recreates it on REF.
+apply     Back up dirty state, fast-forward astro_dock (and init its profiles submodule) and the host's
+          repos to origin/main, prune stale symlink-install links, build in the container. --image
+          recreates it on REF. A host's repos: repos.all and repos.ROLE of each of its registry roles.
 verify    Read-only: every repository is at its origin/main and the container runs.
 rollback  Recreate the container on IMAGE (an astro-rollback:STAMP that apply printed), then build.
 keys      Create the operator key (XDG_CONFIG_HOME/$(cfg operator_key)/id_ed25519) if missing, install
           it where the TUI is refused (your own ssh may ask once) and record each host key. Idempotent.
-repos     Read-only, local: "NAME URL BRANCH" per repository of the profile (from its sources);
+repos     Read-only, local: "NAME URL BRANCH" per repository of this computer (from sources): repos.all
+          and those of its roles (--role ROLE, else this host's registry roles, else none);
           ./setup.linux.sh --components repos clones and builds them on this computer.
-Without HOST: every ssh host of $ASTRO_REGISTRY. HW_REPOS overrides the repos.
+project   The Compose project of the dev container (compose_project).
+Without HOST: every ssh host of ${ASTRO_REGISTRY:-the vessel registry}.
 EOF
 }
 
+# host_roles HOST: its registry roles (none without a registry or entry).
+host_roles() {
+    [[ -n $1 && -r ${ASTRO_REGISTRY:-} ]] || return 0
+    python3 -I "$HW_ROOT/devices/profile.py" roles "$ASTRO_REGISTRY" "$1"
+}
+
+# role_repos ROLE...: repos.all, then each role's, without repeats.
+role_repos() {
+    local seen=' ' role name
+    for role in all "$@"; do
+        for name in $(cfg "repos.$role"); do
+            [[ $seen == *" $name "* ]] || { seen+="$name "; printf '%s\n' "$name"; }
+        done
+    done
+}
+
+driver_project() { printf '%s\n' "$(cfg compose_project)"; }
+
 driver_repos() {
-    local name url branch
-    for name in $(cfg repos); do
+    local name url branch roles=()
+    while (($#)); do
+        [[ $1 == --role && -n ${2:-} ]] || die "Usage: $HW_PROGRAM $HW_KIND repos [--role ROLE...]"
+        roles+=("$2")
+        shift 2
+    done
+    ((${#roles[@]})) || mapfile -t roles < <(host_roles "${ASTRO_HOST:-}")
+    for name in $(role_repos "${roles[@]}"); do
         [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "$HW_KIND.yaml: '$name' is not a directory name"
         url=$(cfg "sources.$name.url") branch=$(cfg "sources.$name.branch")
         [[ -n $url ]] || die "$HW_KIND.yaml: sources.$name has no url"
@@ -65,12 +93,13 @@ for_hosts() {
     shift
     while read -r name container workspace; do
         [[ $container != - && $workspace != - ]] || { log "FAIL $name: registry gives no container/workspace"; rc=1; continue; }
-        "$fn" "$name" "$container" "${workspace/#\~/\$HOME}" || rc=1
+        HW_HOST=$name "$fn" "$name" "$container" "${workspace/#\~/\$HOME}" || rc=1
     done < <(fleet_hosts "$@")
     return $rc
 }
 
-repos() { printf 'astro_dock %s' "$(cfg repos)"; }
+# The repositories of the host for_hosts is on (HW_HOST): astro_dock, then its roles' repos.
+repos() { printf 'astro_dock %s' "$(role_repos $(host_roles "${HW_HOST:-}") | tr '\n' ' ')"; }
 
 # Runs on the host: per repository "repo branch head clean|dirty at-origin|differs|unknown" (origin's
 # main from ls-remote, so nothing is fetched), then the container's image and state.
@@ -105,7 +134,12 @@ for repo in $(repos); do
     git fetch -q origin || { echo "FAIL \$repo: fetch"; rc=1; continue; }
     [ "\$branch" = main ] || git checkout -q main || { echo "FAIL \$repo: checkout main from \$branch"; rc=1; continue; }
     if git merge --ff-only -q origin/main; then echo "OK \$repo \$branch@\$head -> main@\$(git rev-parse --short HEAD)"
-    else echo "FAIL \$repo: main has local commits; not fast-forwarded"; rc=1; fi
+    else echo "FAIL \$repo: main has local commits; not fast-forwarded"; rc=1; continue; fi
+    # astro_dock's pinned profiles submodule follows its commit (hw.sh reads the profiles from it).
+    if [ "\$repo" = astro_dock ] && git config -f .gitmodules submodule.profiles.path >/dev/null 2>&1; then
+        git submodule update --init -q profiles && echo "OK profiles \$(git -C profiles rev-parse --short HEAD)" \
+            || { echo "FAIL profiles: submodule update"; rc=1; }
+    fi
 done
 exit \$rc
 EOF

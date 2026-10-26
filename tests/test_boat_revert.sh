@@ -26,7 +26,7 @@ printf '#!/bin/sh\n:\n' >"$tmp/bin/setuserpasswd"
 chmod +x "$tmp/bin"/*
 
 # The router driver with the shipped profile's values; sourcing it runs nothing.
-HW_ROOT=$root ASTRO_ENV_FILE=/dev/null
+HW_ROOT=$root ASTRO_ENV_FILE=/dev/null ASTRO_SECRETS=/nonexistent ASTRO_VESSEL=blastoise
 source "$root/devices/lib.sh"
 hw_init
 hw_load_kind router

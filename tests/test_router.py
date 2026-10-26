@@ -48,7 +48,7 @@ class Router(unittest.TestCase):
 
     def hw(self, verb, stdin=''):
         env = {**os.environ, 'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'FAKE': str(self.tmp),
-               'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
+               'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
                'BOAT_WIFI_PASSWORD': 'wifipass1', 'ROUTER_PASSWORD': ''}
         return subprocess.run(['bash', str(ROOT / 'hw.sh'), 'router', verb, '--state-dir', str(self.tmp / 'state')],
                               input=stdin, env=env, capture_output=True, text=True, timeout=60)
@@ -80,7 +80,7 @@ class Router(unittest.TestCase):
 
     def test_no_verb_prints_usage_and_never_applies(self):
         env = {**os.environ, 'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'FAKE': str(self.tmp),
-               'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
+               'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
                'BOAT_WIFI_PASSWORD': 'wifipass1', 'ROUTER_PASSWORD': ''}
         (self.tmp / 'ssh.log').unlink(missing_ok=True)
         run = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'router'], env=env, capture_output=True, text=True, timeout=60)

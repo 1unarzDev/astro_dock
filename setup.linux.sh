@@ -2,8 +2,32 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-# The active profile's network env (profile.yaml network_env; for Blastoise config/boat-network.env).
+# The vessel's network env (its profile.yaml network_env), as hw.sh resolves it.
 network_env() { "$SCRIPT_DIR/hw.sh" env; }
+# The profile root (empty in generic mode: no ASTRO_PROFILES and no profiles/ submodule).
+PROFILE_ROOT_CHECKED=false
+PROFILE_ROOT=""
+profile_root() {
+    $PROFILE_ROOT_CHECKED || PROFILE_ROOT="$("$SCRIPT_DIR/hw.sh" whoami --root)" || exit 1
+    PROFILE_ROOT_CHECKED=true
+    [[ -n "$PROFILE_ROOT" ]]
+}
+# needs_profile STAGE: false (with one note for the run) in generic mode.
+GENERIC_NOTED=false
+needs_profile() {
+    profile_root && return 0
+    $GENERIC_NOTED || echo "Generic mode (no profile root: set ASTRO_PROFILES or run git submodule update --init profiles): skipping the repos, gateway, boat and jetson stages."
+    GENERIC_NOTED=true
+    SKIPPED+=("$1")
+    return 1
+}
+# The dev container: the running `dev` service of the Compose project (hosts.yaml compose_project).
+dev_container() {
+    local project
+    project="${ASTRO_COMPOSE_PROJECT:-$("$SCRIPT_DIR/hw.sh" hosts project 2>/dev/null || true)}"
+    docker ps -q --filter "label=com.docker.compose.project=${project:-astro_dock_devcontainer}" \
+        --filter label=com.docker.compose.service=dev 2>/dev/null | head -1
+}
 
 DRY_RUN=false
 ASSUME_YES=false
@@ -19,6 +43,7 @@ RUNTIME=docker
 HAS_NVIDIA=false
 COMPLETED=()
 SKIPPED=()
+ROLES=()
 
 usage() {
     cat <<'EOF'
@@ -27,7 +52,10 @@ Usage: ./setup.linux.sh [options]
 Options:
   --dry-run                 Print commands without running them
   --components LIST         clock,docker,gpu,devices,devtools,compose,repos,gateway,boat,jetson,operator-key
-  --profile NAME            config/profiles/NAME (default: ASTRO_PROFILE from the environment or .env)
+  --vessel NAME             The vessel profile (default: this machine's, as ./hw.sh whoami finds it)
+  --host NAME               This machine's registry host (default: found by hostname or MAC)
+  --role ROLE               Repos stage: the role whose repositories to add to repos.all (repeatable;
+                            default: this host's registry roles)
   --non-interactive         Disable prompts (requires --yes)
   --yes                     Approve the overall plan and every stage
   -h, --help                Show this help
@@ -44,11 +72,16 @@ while (($#)); do
             [[ $# -gt 0 ]] || { echo "--components requires a value" >&2; exit 2; }
             COMPONENTS="$1"
             ;;
-        --profile)
+        --vessel|--profile|--host|--role)
+            option="$1"
             shift
-            [[ $# -gt 0 ]] || { echo "--profile requires a value" >&2; exit 2; }
-            export ASTRO_PROFILE="$1"
-            unset ASTRO_PROFILE_DIR
+            [[ $# -gt 0 ]] || { echo "$option requires a value" >&2; exit 2; }
+            case "$option" in
+                --vessel) export ASTRO_VESSEL="$1" ;;
+                --profile) echo "--profile is now --vessel" >&2; export ASTRO_VESSEL="$1" ;;
+                --host) export ASTRO_HOST="$1" ;;
+                --role) ROLES+=(--role "$1") ;;
+            esac
             ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -327,13 +360,20 @@ stage_compose() {
     COMPLETED+=(compose)
 }
 
-# The profile's repositories (./hw.sh hosts repos): clone the missing ones under src/, keep them out
-# of git status, then build them here when colcon is on PATH, else in the dev container.
+# This computer's repositories (./hw.sh hosts repos: repos.all and its roles'): clone the missing ones
+# under src/, keep them out of git status, then build them here when colcon is on PATH, else in the
+# dev container. The pinned profiles submodule is initialised first (it names the repositories).
 stage_repos() {
-    local list name url branch exclude names=() build
+    local list name url branch exclude names=() build container
     heading "Workspace repositories"
-    list="$("$SCRIPT_DIR/hw.sh" hosts repos)" || { SKIPPED+=(repos); return; }
-    echo "Clones the profile's repositories under src/ (existing checkouts are kept) and builds them:"
+    if [[ -z "${ASTRO_PROFILES:-}" ]] && git -C "$SCRIPT_DIR" config -f .gitmodules submodule.profiles.path >/dev/null 2>&1 \
+        && ! compgen -G "$SCRIPT_DIR/profiles/*/profile.yaml" >/dev/null; then
+        run git -C "$SCRIPT_DIR" submodule update --init profiles
+        PROFILE_ROOT_CHECKED=false
+    fi
+    needs_profile repos || return 0
+    list="$("$SCRIPT_DIR/hw.sh" hosts repos "${ROLES[@]}")" || { SKIPPED+=(repos); return; }
+    echo "Clones this computer's repositories under src/ (existing checkouts are kept) and builds them:"
     sed 's/^/  /' <<<"$list"
     approve "Clone and build these repositories?" || { SKIPPED+=(repos); return; }
     exclude="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null || true)"
@@ -351,11 +391,11 @@ stage_repos() {
     build="colcon build --symlink-install --packages-up-to \$(colcon list --names-only --base-paths ${names[*]})"
     if command -v colcon >/dev/null 2>&1; then
         (cd "$SCRIPT_DIR" && run bash -c "$build")
-    elif [[ "$(docker inspect -f '{{.State.Running}}' roboboat_dev 2>/dev/null)" == true ]]; then
+    elif container="$(dev_container)" && [[ -n "$container" ]]; then
         # BASH_ENV gives docker exec's bash the ROS environment.
-        run docker exec roboboat_dev bash -c "cd \"\$ROS_WS\" && $build"
+        run docker exec "$container" bash -c "cd \"\$ROS_WS\" && $build"
     else
-        echo "Start the dev container (roboboat_dev), then build inside it: $build" >&2
+        echo "Start the dev container (the Compose dev service), then build inside it: $build" >&2
         SKIPPED+=(repos-build)
     fi
     COMPLETED+=(repos)
@@ -500,6 +540,7 @@ stage_clock() {
 
 stage_gateway() {
     local subnet gateway_ip unit hook device
+    needs_profile gateway || return 0
     read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP")
     heading "Boat LAN internet gateway"
     echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
@@ -564,6 +605,7 @@ EOF
 
 stage_boat() {
     local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
+    needs_profile boat || return 0
     read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "$BOAT_SUBNET" "$GATEWAY_IP" "$STATIC_LEASES")
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
@@ -648,6 +690,7 @@ ensure_linger() {
 
 stage_jetson() {
     local mode swap=/swapfile size=16G
+    needs_profile jetson || return 0
     heading "Jetson host"
     if [[ ! -r /proc/device-tree/compatible ]] || ! grep -aqi tegra /proc/device-tree/compatible; then
         echo "Not a Jetson; skipping."

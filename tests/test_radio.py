@@ -102,7 +102,7 @@ class LinkMeasureTest(unittest.TestCase):
         env = {'PATH': ':'.join([*map(str, path_extra), str(self.tmp / 'bin'), os.environ['PATH']]),
                'HOME': str(self.tmp), 'XDG_STATE_HOME': str(self.tmp / 'state'), 'FAKE': str(self.tmp),
                'UBNT_PASSWORD': '', 'UBNT_JUMP': '', 'BOAT_HOST_USER': 'crew', 'BOAT_HOST_PASSWORD': '',
-               'HW_MEASURE_SECONDS': '3', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
+               'HW_MEASURE_SECONDS': '3', 'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
         env.update(extra)
         return subprocess.run(['bash', str(ROOT / script), *args], input=stdin, env=env,
                               capture_output=True, text=True, timeout=120)

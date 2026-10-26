@@ -1,0 +1,14 @@
+driver: hosts/fleet
+repos:
+  all: [alpha]
+  computer: []
+  camera: [beta]
+  operator: [gamma]
+sources:
+  alpha: {url: https://example.invalid/alpha.git}
+  beta: {url: https://example.invalid/beta.git, branch: ros2}
+  gamma: {url: https://example.invalid/gamma.git}
+  delta: {url: https://example.invalid/delta.git}
+compose_project: fixture_project
+operator_key: fixture/ssh
+operator_registry: fixture/devices.yaml

@@ -25,14 +25,15 @@ class Hosts(unittest.TestCase):
             result = subprocess.run(
                 [str(ROOT / script), *command], capture_output=True, text=True,
                 env={**os.environ, 'HW_SSH': str(Path(tmp, 'ssh')), 'FAKE_SSH_LOG': str(log),
-                     'XDG_STATE_HOME': tmp, 'ASTRO_ENV_FILE': '/dev/null', **env})
+                     'XDG_STATE_HOME': tmp, 'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', **env})
             return result, log.read_text()
 
     def test_deploy_fast_forwards_configured_repos_and_builds(self):
-        result, calls = self.run_script('apply', 'host-a', HW_REPOS='repo_x')
+        result, calls = self.run_script('apply', 'host-a', HW_REPOS_ALL='repo_x')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('== host-a bash -s', calls)
         self.assertIn('for repo in astro_dock repo_x', calls)
+        self.assertIn('git submodule update --init -q profiles', calls)    # the pinned profiles follow astro_dock
         self.assertIn('dir=$HOME/astro_dock;', calls)                       # the registry's workspace
         self.assertIn('git merge --ff-only -q origin/main', calls)
         self.assertIn('== host-a docker exec -i roboboat_dev bash -s', calls)
@@ -115,7 +116,7 @@ class Hosts(unittest.TestCase):
             Path(tmp, 'xdg/mhseals/devices.yaml').write_text('self: tranquility\n')
             log = Path(tmp, 'ssh.log')
             env = {**os.environ, 'HW_SSH': str(Path(tmp, 'ssh')), 'FAKE_SSH_LOG': str(log),
-                   'HW_SSH_COPY_ID': str(Path(tmp, 'copy')), 'XDG_STATE_HOME': tmp, 'ASTRO_ENV_FILE': '/dev/null',
+                   'HW_SSH_COPY_ID': str(Path(tmp, 'copy')), 'XDG_STATE_HOME': tmp, 'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
                    'XDG_CONFIG_HOME': str(Path(tmp, 'xdg')), 'ASTRO_REGISTRY': str(devices),
                    'ASTRO_NETWORK_ENV': str(Path(tmp, 'boat-network.env'))}
             run = lambda: subprocess.run([str(ROOT / 'hw.sh'), 'hosts', 'keys'], capture_output=True,

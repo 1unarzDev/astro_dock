@@ -1,0 +1,4 @@
+extends: fleet
+kind: vessel
+network_env: network.env
+registry: devices.yaml

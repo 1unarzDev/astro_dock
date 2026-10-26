@@ -1,0 +1,6 @@
+# Tranquility, the base station: the operator laptop (RTK base, operator heartbeat, the testing TUI) and
+# the gateway that forwards a boat LAN's internet. Its host entry and roles are in each vessel registry it
+# serves (blastoise's devices.yaml); it matches itself by hostname. The operator key paths are fleet-wide
+# (roboboat/hosts.yaml operator_key, operator_registry).
+extends: roboboat
+kind: station

@@ -1,8 +1,13 @@
 # The boat computers of the registry (every host with ssh on): deploy, keys, and the repositories under
 # src/ that each one checks out (the image bakes none of them).
 driver: hosts/fleet
-repos: [mhseals_hardware, mhseals_nav, mhseals_testing]   # apply fast-forwards them; setup's repos stage clones and builds them
-sources:                        # src/NAME: clone URL, branch (default main); a boat or host profile picks repos from these
+repos:                          # per registry role, plus all: a host checks out all and its roles' repos
+  all: [mhseals_hardware, mhseals_nav, mhseals_testing]   # apply fast-forwards them; setup's repos stage clones and builds them
+  boat_computer: []
+  camera_host: [direct_lidar_inertial_odometry]           # the lidar host
+  operator: [rviz-plugin-zed-od, zed-ros2-wrapper]        # ZED messages for RViz
+  gateway: []
+sources:                        # src/NAME: clone URL, branch (default main); repos picks from these
   mhseals_hardware: {url: https://github.com/MHSeals/mhseals_hardware.git}
   mhseals_nav: {url: https://github.com/MHSeals/mhseals_nav.git}
   mhseals_testing: {url: https://github.com/MHSeals/mhseals_testing.git}

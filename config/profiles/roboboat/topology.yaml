@@ -1,0 +1,6 @@
+# The fleet's members and the links between them. nodes must list every member with its kind; a link's
+# via names MEMBER.KIND, the device kind that carries it. Later: a blastoise-squirtle mesh link, with
+# per-link subnet and ROS domain keys (squirtle must not reuse 192.168.0.0/24 or blastoise's domain).
+nodes: {blastoise: vessel, squirtle: vessel, tranquility: station}
+links:
+  - {between: [tranquility, blastoise], medium: airmax, via: blastoise.radio}

@@ -1,0 +1,3 @@
+nodes: {a: vessel, b: vessel, s: station}
+links:
+  - {between: [s, a], medium: airmax, via: a.thing}

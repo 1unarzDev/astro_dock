@@ -1,0 +1,6 @@
+defaults: {user: crew, container: dev, workspace: ~/astro_dock, ssh: true}
+hosts:
+  a-pc: {roles: [computer]}
+  a-cam: {roles: [camera]}
+  s: {roles: [operator], address: 10.0.1.2}
+  a-router: {roles: [router], address: $ROUTER_IP, ssh: false}

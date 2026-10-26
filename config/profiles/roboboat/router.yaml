@@ -7,7 +7,7 @@ lan: {address: $ROUTER_IP, netmask: $NETMASK, gateway: $GATEWAY_IP}
 dns: [$DNS_PRIMARY, $DNS_SECONDARY]
 dhcp: {start: $DHCP_START, count: $DHCP_COUNT, lease_minutes: 1440, reservations: $STATIC_LEASES}
 revert_seconds: 300             # an unconfirmed apply restores the previous NVRAM this long after boot
-credentials:                    # .env keys (secrets.env.example)
+credentials:                    # secrets keys (secrets.keys)
   user: ROUTER_USER             # ssh login, root on DD-WRT
   password: ROUTER_PASSWORD     # ssh password, only until the router key is installed
   admin_password: ROUTER_ADMIN_PASSWORD

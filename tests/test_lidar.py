@@ -90,7 +90,7 @@ class LidarSetupTest(unittest.TestCase):
     def run_script(self, verb, stdin='', script='hw.sh', *args, **extra):
         env = {'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'HOME': str(self.tmp),
                'XDG_STATE_HOME': str(self.tmp / 'state'), 'FAKE_LIDAR': str(self.state), 'LIDAR_JUMP': '',
-               'EXPECT_IP': ENV['LIDAR_IP'], 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
+               'EXPECT_IP': ENV['LIDAR_IP'], 'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
         env.update(extra)
         command = ['lidar', verb] if script == 'hw.sh' else [verb]
         return subprocess.run(['bash', str(ROOT / script), *command, *args], input=stdin, env=env,

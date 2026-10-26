@@ -1,0 +1,3 @@
+driver: fake/thing
+address: $ROUTER_IP
+credentials: {password: THING_PASSWORD}

@@ -10,4 +10,4 @@ telemetry_port: 8308
 rpm: 600                        # 300-1200 in steps of 60
 returns: Strongest              # Strongest, Last or Dual (Dual doubles the packet rate)
 fov: {start: 0, end: 359}
-jump: LIDAR_JUMP                # .env key of an optional ssh host on the LAN
+jump: LIDAR_JUMP                # secrets key of an optional ssh host on the LAN
