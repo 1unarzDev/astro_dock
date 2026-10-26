@@ -35,7 +35,7 @@ measure   Read-only: both radios' status, iperf3 TCP and UDP both ways to the pr
           measure.target with ping alongside; saved under the link state directory.
 propose   Offline: setting changes per radio from the latest (or given) measurement, as
           plan/apply commands. Guards: the profile's propose.* (HW_PROPOSE_* override).
-Logins: the .env keys named in credentials (without a password ssh prompts).
+Logins: the secrets keys named in credentials (without a password ssh prompts).
 status, plan and verify write nothing to the radios; locally, ssh may add a radio's host key
 to the state directory's known_hosts.
 EOF
@@ -265,7 +265,7 @@ driver_measure() {
     target=$(cfg measure.target) seconds=$(cfg measure.seconds) port=$(cfg measure.port) container=$(cfg measure.container)
     user=$(secret measure.credentials.user)
     [[ -n $target ]] || die "measure.target is unset in the profile"
-    [[ -n $user ]] || die "$(cfg measure.credentials.user) (the login on $target) is unset; set it in .env"
+    [[ -n $user ]] || die "$(cfg measure.credentials.user) (the login on $target) is unset; set it in the secrets file"
     [[ $seconds =~ ^[0-9]+$ ]] && ((seconds >= 3 && seconds <= 120)) || die "measure.seconds must be 3..120"
     [[ $container =~ ^[A-Za-z0-9_.-]+$ ]] || die "measure.container must be a container name"
     command -v python3 >/dev/null || die "python3 is required"

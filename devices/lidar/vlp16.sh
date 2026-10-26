@@ -13,7 +13,7 @@ snapshot  Save settings, status and info as one JSON file (state directory lidar
 apply     Snapshot, show the differing keys, and after you type APPLY post only those, then
           save once and verify. Netmask/gateway go last and add a reset; they must be active after.
 rollback  apply the settings of a snapshot (default: the latest) instead of the profile.
-Runs from a LAN host, or through the host in the .env key named by jump (e.g. tranquility).
+Runs from a LAN host, or through the host in the secrets key named by jump (e.g. tranquility).
 EOF
 }
 

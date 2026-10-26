@@ -20,7 +20,7 @@ key       Print the per-router public key for DD-WRT's Authorized Keys.
 the ignored router_setup_state/ when present, else ~/.local/state/astro_dock/router.
 status, plan and verify write nothing to the router; locally they may create the router key and
 add its host key to known_hosts (after you accept the fingerprint).
-Secrets: the .env keys named under credentials; empty passwords are asked for.
+Secrets: the secrets keys named under credentials; empty passwords are asked for.
 EOF
 }
 
@@ -89,7 +89,7 @@ same_subnet() {
     (( ( $(ip_to_int "$1") & mask ) == ( $(ip_to_int "$2") & mask ) ))
 }
 
-# ask_secret VARIABLE LABEL: prompt (hidden) when the .env key is empty.
+# ask_secret VARIABLE LABEL: prompt (hidden) when the secrets key is empty.
 ask_secret() {
     [[ -z ${!1} ]] || return 0
     local input
@@ -121,7 +121,7 @@ validate_settings() {
     ask_secret WIFI_PASSWORD "Wi-Fi password ($(cfg credentials.wifi_password) is empty)"
     (( ${#WIFI_PASSWORD} >= 8 && ${#WIFI_PASSWORD} <= 63 )) || die "WPA2 password must contain 8-63 characters"
     [[ $ADMIN_PASSWORD != *$'\n'* && $WIFI_PASSWORD != *$'\n'* ]] || die "Passwords cannot contain newlines"
-    [[ -n $ADMIN_PASSWORD ]] || die "Set $(cfg credentials.admin_password) in .env or enter a web-admin password"
+    [[ -n $ADMIN_PASSWORD ]] || die "Set $(cfg credentials.admin_password) in the secrets file or enter a web-admin password"
 }
 
 initialize_state() {
