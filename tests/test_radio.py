@@ -275,8 +275,8 @@ class LinkMeasureTest(unittest.TestCase):
 
         def stop_timer():
             pid = (rocket / 'tmp/astro-trial.pid').read_text().strip()
-            subprocess.run(['pkill', '-P', pid])
             subprocess.run(['kill', pid])
+            subprocess.run(['pkill', '-P', pid])
         self.addCleanup(stop_timer)
         run = self.hw('apply', 'rocket', 'radio.1.chanbw=40', stdin='APPLY\nKEEP\n')
         self.assertNotEqual(run.returncode, 0)

@@ -94,6 +94,22 @@ class Router(unittest.TestCase):
         self.assertIn('Usage:', run.stdout)
         self.assertFalse((self.tmp / 'ssh.log').exists())     # no arguments: usage, never apply
 
+    def test_rollback_refuses_more_than_200_differing_keys(self):
+        backups = self.tmp / 'state' / ENV['ROUTER_IP']
+        backups.mkdir(mode=0o700, exist_ok=True)
+        values = {'lan_ipaddr': ENV['ROUTER_IP'],
+                  **{'extra_%d' % i: 'old' for i in range(201)}}
+        (backups / 'nvram-20260101-000000.b64').write_text(''.join(
+            '%s\t%s\n' % (key, base64.b64encode(value.encode() + b'\n').decode())
+            for key, value in values.items()))
+        run = self.hw('rollback', stdin='1\nRESTORE\n')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('more than 200 differing keys', run.stderr)
+        self.assertIn('rc_startup could overflow NVRAM', run.stderr)
+        self.assertNotIn('Type RESTORE', run.stderr)
+        self.assertNotIn('restored and confirmed', run.stdout)
+        self.assertEqual(self.writes(), '')
+
     def test_rollback_refuses_a_bad_backup_before_contacting_the_router(self):
         b64 = lambda value: base64.b64encode(value.encode() + b'\n').decode()
         cases = {'empty': ('', 'is empty'),

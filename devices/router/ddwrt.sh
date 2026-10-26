@@ -612,6 +612,7 @@ driver_rollback() {
     grep -Fq -- "$PUBLIC_KEY" <<<"$auth" || want[sshd_authorized_keys]=${auth:+$auth$'\n'}$PUBLIC_KEY
     [[ ${want[sshd_enable]-1} == 1 ]] || want[sshd_enable]=1
     ((${#want[@]})) || { info "The router already matches $selected; nothing to restore."; return; }
+    ((${#want[@]} <= 200)) || die "Refusing to restore more than 200 differing keys: their old values in rc_startup could overflow NVRAM."
     printf 'Keys to restore (%d): %s\n' "${#want[@]}" "$(printf '%s\n' "${!want[@]}" | sort | tr '\n' ' ')"
     printf 'Router LAN address after the restore: %s\n' "$restore_ip"
     read -r -p "Type RESTORE to restore them, reboot, and confirm within ${REVERT_SECONDS}s: " answer
