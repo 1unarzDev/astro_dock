@@ -18,7 +18,8 @@ plan      Read-only: what apply would do (heads against origin/main via ls-remot
 apply     Back up dirty state, fast-forward astro_dock (and init its profiles submodule) and the host's
           repos to origin/main, prune stale symlink-install links, build in the container. --image
           recreates it on REF. A host's repos: repos.all and repos.ROLE of each of its registry roles.
-verify    Read-only: every repository is at its origin/main and the container runs.
+verify    Read-only: every repository is at its origin/main, the profiles submodule at its pin, and the
+          container runs.
 rollback  Recreate the container on IMAGE (an astro-rollback:STAMP that apply printed), then build.
 keys      Create the operator key (XDG_CONFIG_HOME/$(cfg operator_key)/id_ed25519) if missing, install
           it where the TUI is refused (your own ssh may ask once) and record each host key. Idempotent.
@@ -112,6 +113,14 @@ for repo in $(repos); do
     remote=\$(git ls-remote origin main 2>/dev/null | cut -f1); sync=unknown
     [ -z "\$remote" ] || { [ "\$(git rev-parse HEAD)" = "\$remote" ] && sync=at-origin || sync=differs; }
     echo "\$repo \$(git rev-parse --abbrev-ref HEAD) \$(git rev-parse --short HEAD) \$dirty \$sync"
+    # astro_dock's pinned profiles: "-" uninitialised (generic mode), "+" not at the pinned commit.
+    if [ "\$repo" = astro_dock ] && git config -f .gitmodules submodule.profiles.path >/dev/null 2>&1; then
+        case "\$(git submodule status profiles 2>/dev/null)" in
+            -*) echo "profiles FAIL uninitialised: git submodule update --init profiles" ;;
+            +*) echo "profiles FAIL not at the pinned commit: git submodule update profiles" ;;
+            *) echo "profiles OK" ;;
+        esac
+    fi
 done
 docker inspect $1 --format 'container $1 {{.Config.Image}} running={{.State.Running}}' 2>/dev/null || echo "container $1 missing"
 EOF
@@ -238,10 +247,10 @@ driver_verify() {
     verify_one() {
         out=$(heads_on "$@") || return 1
         printf '%s\n' "$out"
-        ! grep -q ' missing\| running=false' <<<"$out" || return 1
-        ! awk '$2 != "container" && ($3 != "main" || $5 == "dirty" || $6 != "at-origin")' <<<"$out" | grep -q .
+        ! grep -q ' missing\| running=false\| FAIL ' <<<"$out" || return 1
+        ! awk '$2 != "container" && $2 != "profiles" && ($3 != "main" || $5 == "dirty" || $6 != "at-origin")' <<<"$out" | grep -q .
     }
-    for_hosts verify_one "$@" || { warn "Not every host is at origin/main with its container running"; rc=1; }
+    for_hosts verify_one "$@" || { warn "Not every host is at origin/main with its pinned profiles and its container running"; rc=1; }
     return $rc
 }
 

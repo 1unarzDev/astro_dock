@@ -79,6 +79,37 @@ class Hosts(unittest.TestCase):
             self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
             bad, _ = self.run_script('verify', 'a', ssh=report % 'clean differs', ASTRO_REGISTRY=str(registry))
             self.assertNotEqual(bad.returncode, 0)
+            pinned = report % 'clean at-origin"\necho "profiles OK'
+            good, _ = self.run_script('verify', 'a', ssh=pinned, ASTRO_REGISTRY=str(registry))
+            self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+            for state in ('uninitialised', 'not at the pinned commit'):
+                bad, _ = self.run_script('verify', 'a', ssh=report % ('clean at-origin"\necho "profiles FAIL %s' % state),
+                                         ASTRO_REGISTRY=str(registry))
+                self.assertNotEqual(bad.returncode, 0, state)
+
+    def test_heads_report_the_profiles_submodule_state(self):
+        # The status script itself, run against a scratch astro_dock with a declared submodule.
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp, 'astro_dock')
+            sub = Path(tmp, 'sub')
+            git = lambda *a, cwd=ws: subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t',
+                                                     '-c', 'protocol.file.allow=always', *a],
+                                                    cwd=cwd, check=True, capture_output=True)
+            for repo in (sub, ws):
+                repo.mkdir()
+                git('init', '-q', '-b', 'main', cwd=repo)
+                git('commit', '-q', '--allow-empty', '-m', 'x', cwd=repo)
+            git('submodule', 'add', '-q', str(sub), 'profiles')
+            git('commit', '-q', '-m', 'pin')
+            script = lambda: subprocess.run(
+                ['bash', '-c', '. "$1"; REPOS_ALL=; repos() { echo astro_dock; }; heads_script box "$2" | bash',
+                 '_', str(ROOT / 'devices/hosts/fleet.sh'), str(ws)],
+                capture_output=True, text=True).stdout
+            self.assertIn('profiles OK', script())
+            git('commit', '-q', '--allow-empty', '-m', 'y', cwd=ws / 'profiles')
+            self.assertIn('profiles FAIL not at the pinned commit', script())
+            git('submodule', 'deinit', '-q', '-f', 'profiles')
+            self.assertIn('profiles FAIL uninitialised', script())
 
     def test_deploy_without_hosts_takes_the_ssh_hosts_of_the_registry(self):
         with tempfile.TemporaryDirectory() as tmp:
