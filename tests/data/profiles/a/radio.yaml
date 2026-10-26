@@ -1,0 +1,20 @@
+# An airMAX point-to-point link (tests/test_radio.py). Vessel a only: b has no radio (tests/test_profiles.py).
+driver: radio/airmax
+ssid: example
+revert_seconds: 300
+devices:
+  rocket: {address: $UBNT_ROCKET_IP, mac: 02:aa:00:00:00:22, role: ap, cfg: ""}
+  bullet: {address: $UBNT_BULLET_IP, mac: 02:aa:00:00:00:21, role: station, cfg: ""}
+reachable: [$ROUTER_IP, $TRANSPORT_IP]
+credentials: {user: UBNT_USER, password: UBNT_PASSWORD, jump: UBNT_JUMP}
+measure:
+  target: $TRANSPORT_IP
+  container: dev
+  seconds: 10
+  port: 5201
+  credentials: {user: BOAT_HOST_USER, password: BOAT_HOST_PASSWORD}
+propose:
+  range_m: 1000
+  freq: ""
+  width_max: 40
+  txpower_max: ""

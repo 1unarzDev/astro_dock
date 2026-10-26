@@ -6,7 +6,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV = dict(line.split('=', 1) for line in (ROOT / 'config/boat-network.env').read_text().splitlines()
+PROFILES = ROOT / 'tests/data/profiles'                 # the fixture fleet, vessel a
+ENV = dict(line.split('=', 1) for line in (PROFILES / 'a/network.env').read_text().splitlines()
            if line[:1].isalpha())
 ROCKET, BULLET, BOAT = ENV['UBNT_ROCKET_IP'], ENV['UBNT_BULLET_IP'], ENV['TRANSPORT_IP']
 
@@ -44,7 +45,7 @@ FAKE_PING = '''#!/bin/sh
 echo "25 packets transmitted, 25 received, 0% packet loss, time 4800ms"
 echo "rtt min/avg/max/mdev = 61.0/72.5/118.9/11.2 ms"
 '''
-FAKE_IP = '#!/bin/sh\necho "$4 dev lan0 src 192.168.0.2 uid 1000"\n'
+FAKE_IP = '#!/bin/sh\necho "$4 dev lan0 src 10.0.1.2 uid 1000"\n'
 # The container: iperf3 only once $FAKE/installed exists; an astro-ros-install call is logged.
 FAKE_DOCKER = r'''#!/usr/bin/env bash
 echo "docker $*" >>"$FAKE/docker.log"
@@ -64,7 +65,7 @@ CFG = {'radio.1.freq': '5180', 'radio.1.center.1.freq': '5180', 'radio.1.chanbw'
        'radio.1.ieee_mode': '11acvht20', 'radio.1.dfs.status': 'enabled', 'radio.1.polling': 'enabled',
        'radio.1.ptpmode': '0', 'radio.1.ack.auto': 'enabled', 'radio.1.ackdistance': '600',
        'radio.1.acktimeout': '31', 'radio.1.txpower': '24', 'tshaper.status': 'enabled',
-       'wireless.1.ssid': 'blastoise', 'wireless.1.security.psk': 'secretkey', 'users.1.password': 'x'}
+       'wireless.1.ssid': 'example', 'wireless.1.security.psk': 'secretkey', 'users.1.password': 'x'}
 
 
 def executable(path, text):
@@ -102,7 +103,7 @@ class LinkMeasureTest(unittest.TestCase):
         env = {'PATH': ':'.join([*map(str, path_extra), str(self.tmp / 'bin'), os.environ['PATH']]),
                'HOME': str(self.tmp), 'XDG_STATE_HOME': str(self.tmp / 'state'), 'FAKE': str(self.tmp),
                'UBNT_PASSWORD': '', 'UBNT_JUMP': '', 'BOAT_HOST_USER': 'crew', 'BOAT_HOST_PASSWORD': '',
-               'HW_MEASURE_SECONDS': '3', 'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
+               'HW_MEASURE_SECONDS': '3', 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
         env.update(extra)
         return subprocess.run(['bash', str(ROOT / script), *args], input=stdin, env=env,
                               capture_output=True, text=True, timeout=120)

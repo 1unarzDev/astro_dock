@@ -1,0 +1,7 @@
+# Jetson image promotion (.github/scripts/test-jetson-promotion.py); a vessel sets its gateway.
+driver: jetson/l4t
+family: jetson-jp6-jazzy
+image: example/astro
+gateway: ""
+validator: .devcontainer/boat-validate.sh
+workflow: promote-jetson.yml

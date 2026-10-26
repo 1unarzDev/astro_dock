@@ -1,0 +1,13 @@
+# A VLP16 on the vessel LAN (tests/test_lidar.py); a vessel sets its MAC.
+driver: lidar/vlp16
+address: $LIDAR_IP
+mac:
+netmask: $NETMASK
+gateway: $ROUTER_IP
+data_host: $LIDAR_DATA_HOST
+data_port: 2368
+telemetry_port: 8308
+rpm: 600
+returns: Strongest
+fov: {start: 0, end: 359}
+jump: LIDAR_JUMP

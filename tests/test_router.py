@@ -7,7 +7,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV = dict(line.split('=', 1) for line in (ROOT / 'config/boat-network.env').read_text().splitlines()
+PROFILES = ROOT / 'tests/data/profiles'                 # the fixture fleet, vessel a
+ENV = dict(line.split('=', 1) for line in (PROFILES / 'a/network.env').read_text().splitlines()
            if line[:1].isalpha())
 
 # Drops ssh options, logs the command and runs it with the fake nvram first on PATH.
@@ -48,7 +49,7 @@ class Router(unittest.TestCase):
 
     def hw(self, verb, stdin=''):
         env = {**os.environ, 'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'FAKE': str(self.tmp),
-               'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
+               'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
                'BOAT_WIFI_PASSWORD': 'wifipass1', 'ROUTER_PASSWORD': ''}
         return subprocess.run(['bash', str(ROOT / 'hw.sh'), 'router', verb, '--state-dir', str(self.tmp / 'state')],
                               input=stdin, env=env, capture_output=True, text=True, timeout=60)
@@ -64,9 +65,9 @@ class Router(unittest.TestCase):
         self.assertIn('lan_ipaddr=' + ENV['ROUTER_IP'], run.stdout)
         run = self.hw('plan')
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn('Router name / SSID  : mhseals / mhseals', run.stdout)
+        self.assertIn('Router name / SSID  : example / example', run.stdout)
         self.assertIn('Auto-revert         : 300s after boot', run.stdout)
-        self.assertIn('Time zone           : America/Chicago', run.stdout)
+        self.assertIn('Time zone           : UTC', run.stdout)
         run = self.hw('verify')
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('verification failed', run.stderr)
@@ -80,7 +81,7 @@ class Router(unittest.TestCase):
 
     def test_no_verb_prints_usage_and_never_applies(self):
         env = {**os.environ, 'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'FAKE': str(self.tmp),
-               'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
+               'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'ROUTER_ADMIN_PASSWORD': 'adminpass',
                'BOAT_WIFI_PASSWORD': 'wifipass1', 'ROUTER_PASSWORD': ''}
         (self.tmp / 'ssh.log').unlink(missing_ok=True)
         run = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'router'], env=env, capture_output=True, text=True, timeout=60)

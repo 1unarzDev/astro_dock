@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import json
 import shlex
 import tempfile
 import unittest
@@ -11,7 +10,8 @@ import unittest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-# The shipped profile root: the profiles/ submodule when initialised (else those tests skip).
+FIXTURE = ROOT / 'tests/data/profiles'                  # the fixture fleet (vessels a and b, station s)
+# The profiles/ submodule when initialised (else its test skips).
 SHIPPED = ROOT / 'profiles' if any((ROOT / 'profiles').glob('*/profile.yaml')) else None
 REQUIRED = ('status', 'plan', 'apply', 'verify', 'rollback')
 VERBS = ''.join('driver_%s() { echo "%s $*"; touch "$MARK"; }\n' % (v, v) for v in REQUIRED)
@@ -93,7 +93,7 @@ class Contract(unittest.TestCase):
 
     def test_profile_selection(self):
         env = {**os.environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent',
-               'HW_HOSTNAME': 'innovation', 'HW_SYSFS_NET': '/nonexistent'}
+               'ASTRO_PROFILES': str(FIXTURE), 'HW_HOSTNAME': 'innovation', 'HW_SYSFS_NET': '/nonexistent'}
         run = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'env'], capture_output=True, text=True,
                              env={**env, 'ASTRO_VESSEL': 'nonexistent'})
         self.assertNotEqual(run.returncode, 0)
@@ -101,12 +101,12 @@ class Contract(unittest.TestCase):
         run = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'env', 'ROUTER_IP'], capture_output=True, text=True, env=env)
         self.assertNotEqual(run.returncode, 0)                          # no match and no --vessel
         self.assertIn('pass --vessel', run.stderr)
-        run = subprocess.run(['bash', str(ROOT / 'hw.sh'), '--vessel', 'blastoise', 'env', 'ROUTER_IP'],
+        run = subprocess.run(['bash', str(ROOT / 'hw.sh'), '--vessel', 'a', 'env', 'ROUTER_IP'],
                              capture_output=True, text=True, env=env)
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertRegex(run.stdout, r'^[0-9.]+\n$')
+        self.assertEqual(run.stdout, '10.0.1.1\n')
 
-    def test_every_shipped_driver_and_profile_satisfies_the_contract(self):
+    def test_every_shipped_driver_satisfies_the_contract(self):
         drivers = sorted((ROOT / 'devices').glob('*/*.sh'))
         for path in drivers:
             with self.subTest(driver=path.relative_to(ROOT)):
@@ -115,15 +115,24 @@ class Contract(unittest.TestCase):
                          % (ROOT, path, path, ' '.join(REQUIRED)))
                 run = subprocess.run(['bash', '-c', check], capture_output=True, text=True)
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        for profile in sorted(p.parent for p in (SHIPPED.glob('*/profile.yaml') if SHIPPED else ())):
-            env = {**os.environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent'}
+
+    def test_every_member_of_the_profiles_submodule_loads(self):
+        """The pinned profiles/ submodule, whatever its members: each shows, and each vessel's kinds print
+        their help. Its own repository tests its values."""
+        if SHIPPED is None:
+            self.skipTest('the profiles submodule is not initialised (generic checkout)')
+        environ = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
+        env = {**environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent'}
+        members = sorted(p.parent for p in SHIPPED.glob('*/profile.yaml'))
+        self.assertTrue(members)
+        for profile in members:
             show = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'profile', 'show', profile.name],
                                   capture_output=True, text=True, env=env)
             with self.subTest(profile=profile.name):
                 self.assertEqual(show.returncode, 0, show.stderr)
             shown = yaml.safe_load(show.stdout)
             if not shown['network_env']:
-                continue                                # a parent or a stub: its kinds need a boat's addresses
+                continue                                # a parent or a stub: its kinds need a vessel's addresses
             for kind in set(shown) - {'profile', 'network_env', 'registry'}:
                 with self.subTest(profile=profile.name, kind=kind):
                     run = subprocess.run(['bash', str(ROOT / 'hw.sh'), '--vessel', profile.name, kind, '--help'],
@@ -230,89 +239,7 @@ class Layering(unittest.TestCase):
         self.assertTrue(run.stdout.startswith('profile: base -> mid -> leaf\n'))
 
 
-class ShippedProfiles(unittest.TestCase):
-    def setUp(self):
-        if SHIPPED is None:
-            self.skipTest('no profile root (generic checkout)')
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.sys = Path(tmp.name)
-
-    def nic(self, mac):
-        (self.sys / 'eth0').mkdir(exist_ok=True)
-        (self.sys / 'eth0/address').write_text(mac + '\n')
-        (self.sys / 'eth0/addr_assign_type').write_text('0\n')
-
-    def run_hw(self, *args, hostname='innovation', **env):
-        environ = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
-        run = subprocess.run(['bash', str(ROOT / 'hw.sh'), *args], capture_output=True, text=True,
-                             env={**environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent',
-                                  'HW_HOSTNAME': hostname, 'HW_SYSFS_NET': str(self.sys), 'HW_ADDRS': '',
-                                  'HW_DT_MODEL': str(self.sys / 'no-model'), **env})
-        self.assertEqual(run.returncode, 0, run.stderr)
-        return run.stdout
-
-    def show(self, *args, **env):
-        return self.run_hw(*args, 'profile', 'show', **env).splitlines()[0]
-
-    def whoami(self, *args, **env):
-        return dict(line.split(None, 1) for line in self.run_hw(*args, 'whoami', **env).splitlines())
-
-    def test_operator_laptops_are_the_control_station_and_boat_computers_never(self):
-        me = self.whoami(hostname='tranquility')
-        self.assertEqual(me['host'], 'tranquility (hostname tranquility)')
-        self.assertEqual((me['station'], me['vessel']), ('control_station', 'blastoise (registry of blastoise lists tranquility)'))
-        me = self.whoami('--host', 'somelaptop')
-        self.assertEqual(me['station'], 'control_station')
-        self.assertTrue(me['vessel'].startswith('none'))
-        me = self.whoami(hostname='somelaptop', HW_ADDRS='192.168.0.57/24')
-        self.assertEqual(me['host'], 'somelaptop (boat LAN 192.168.0.57 in 192.168.0.0/24: a generic control station)')
-        self.assertEqual((me['station'], me['vessel']), ('control_station', 'blastoise (boat LAN 192.168.0.57 in 192.168.0.0/24)'))
-        for env in ({'HW_ADDRS': '192.168.0.152/24'},                                  # the ODROID's reservation
-                    {'HW_ADDRS': '192.168.0.57/24', 'HW_DT_MODEL': '/proc/self/status'}):   # a board
-            with self.subTest(env=env):
-                me = self.whoami(hostname='somelaptop', **env)
-                self.assertNotIn('station', me)
-                self.assertTrue(me['host'].startswith('none (no match'), me['host'])
-                self.assertTrue(me['vessel'].startswith('none'))
-        me = self.whoami('--host', 'blastoise-odroid', HW_ADDRS='192.168.0.57/24')
-        self.assertEqual(me['host'], 'blastoise-odroid (--host/ASTRO_HOST)')
-        self.assertNotIn('station', me)
-        self.assertTrue(me['vessel'].startswith('blastoise '))
-
-    def test_the_boat_hosts_and_the_station_find_blastoise_and_flags_override(self):
-        self.assertEqual(self.show(), 'profile: roboboat')                     # no match: the fleet
-        self.assertEqual(self.show(hostname='tranquility'), 'profile: roboboat -> blastoise')
-        self.assertEqual(self.show(hostname='blastoise-odroid'), 'profile: roboboat -> blastoise')
-        self.nic('56:e2:03:5c:60:22')                                          # the ODROID's leased MAC
-        self.assertEqual(self.show(hostname='roboboat'), 'profile: roboboat -> blastoise')
-        self.assertEqual(self.show(ASTRO_VESSEL='squirtle'), 'profile: roboboat -> squirtle')
-        self.assertEqual(self.show('--vessel', 'blastoise', ASTRO_VESSEL='squirtle'), 'profile: roboboat -> blastoise')
-        self.assertEqual(self.show(ASTRO_PROFILE='squirtle', hostname='x'), 'profile: roboboat -> squirtle')
-
-    def test_blastoise_resolves_to_the_values_before_layering(self):
-        """No behaviour change: blastoise's kinds equal the pre-layering values, except the repos list,
-        which became repos.all plus per-role lists (the owner's decision)."""
-        baseline = json.loads((ROOT / 'tests/data/blastoise-baseline.json').read_text())
-        meta = profile_py('meta', str(SHIPPED / 'blastoise')).stdout
-        env = assignments('\n'.join(line for line in meta.splitlines() if ' || ' in line))
-        self.assertEqual(Path(env['ASTRO_NETWORK_ENV']).read_text(), (ROOT / 'config/boat-network.env').read_text())
-        self.assertEqual(Path(env['ASTRO_REGISTRY']).read_text(), (ROOT / 'config/devices.yaml').read_text())
-        for kind, expected in baseline.items():
-            with self.subTest(kind=kind):
-                run = profile_py('kind', str(SHIPPED / 'blastoise'), kind, env['ASTRO_NETWORK_ENV'])
-                self.assertEqual(run.returncode, 0, run.stderr)
-                values = assignments(run.stdout)
-                if kind == 'hosts':                 # hosts.yaml gained sources: and per-role repos
-                    added = {k for k in set(values) - set(expected)}
-                    self.assertTrue(all(k.startswith(('HW_SOURCES', 'HW_REPOS_')) for k in added), added)
-                    self.assertEqual(values['HW_REPOS_ALL'], expected.pop('HW_REPOS'))
-                    values = {k: v for k, v in values.items() if k not in added}
-                    expected = {**expected, 'HW__KEYS': expected['HW__KEYS'].replace('repos', 'repos sources')}
-                self.assertEqual(values, expected)
-
-
-# Commands hw.sh and the setup repos stage replaced: nothing tracked here, nor a checked-out src/mhseals_* repo, may name them.
+# Commands hw.sh and the setup repos stage replaced: nothing tracked here, nor in a repository checked out under src/, may name them.
 REMOVED = re.compile(r'\b(?:(?:router_setup|ubiquiti_setup|link_measure|lidar_setup|promote_jetson|boat_hosts'
                      r'|clone_optional)\.sh|optional_repos\.yaml)\b')
 
@@ -322,7 +249,7 @@ class RemovedCommands(unittest.TestCase):
         def tracked(repo):
             run = subprocess.run(['git', '-C', str(repo), 'ls-files', '-z'], capture_output=True, check=True)
             return [repo / name for name in run.stdout.decode().split('\0') if name]
-        files = tracked(ROOT) + [f for repo in sorted(ROOT.glob('src/mhseals_*')) if (repo / '.git').exists()
+        files = tracked(ROOT) + [f for repo in sorted(ROOT.glob('src/*/')) if (repo / '.git').exists()
                                  for f in tracked(repo)]
         hits = []
         for path in files:

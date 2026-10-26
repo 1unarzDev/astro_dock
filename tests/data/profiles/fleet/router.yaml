@@ -1,0 +1,13 @@
+# A DD-WRT router on the vessel LAN (tests/test_router.py, tests/test_boat_revert.sh).
+driver: router/ddwrt
+name: example                   # router name, Wi-Fi SSID and web-admin user
+time_zone: UTC
+lan: {address: $ROUTER_IP, netmask: $NETMASK, gateway: $GATEWAY_IP}
+dns: [$DNS_PRIMARY, $DNS_SECONDARY]
+dhcp: {start: $DHCP_START, count: $DHCP_COUNT, lease_minutes: 1440, reservations: $STATIC_LEASES}
+revert_seconds: 300
+credentials:
+  user: ROUTER_USER
+  password: ROUTER_PASSWORD
+  admin_password: ROUTER_ADMIN_PASSWORD
+  wifi_password: BOAT_WIFI_PASSWORD

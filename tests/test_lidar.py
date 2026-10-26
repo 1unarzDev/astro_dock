@@ -6,7 +6,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV = dict(line.split('=', 1) for line in (ROOT / 'config/boat-network.env').read_text().splitlines()
+PROFILES = ROOT / 'tests/data/profiles'                 # the fixture fleet, vessel a
+ENV = dict(line.split('=', 1) for line in (PROFILES / 'a/network.env').read_text().splitlines()
            if line[:1].isalpha())
 
 # A curl stand-in serving one VLP16's JSON and applying POSTs the way the sensor does.
@@ -43,7 +44,7 @@ json.dump(state, open(state_path, 'w'))
 if path == 'reset':
     sys.exit(int(os.environ.get('FAKE_RESET_RC', '0')))
 '''
-FAKE_IP = '#!/bin/sh\necho "$4 dev lan0 src 192.168.0.2 uid 1000"\n'
+FAKE_IP = '#!/bin/sh\necho "$4 dev lan0 src 10.0.1.2 uid 1000"\n'
 # Drops ssh options, logs the host, and runs the quoted remote command locally.
 FAKE_SSH = '''#!/usr/bin/env bash
 while [[ $1 == -o ]]; do shift 2; done
@@ -54,11 +55,11 @@ eval "$*"
 
 
 def sensor():
-    net = {'addr': ENV['LIDAR_IP'], 'mask': '255.255.255.0', 'gateway': '192.168.0.3', 'dhcp': 'Off',
-           'mac_addr': '60-76-88-38-35-85'}
+    net = {'addr': ENV['LIDAR_IP'], 'mask': '255.255.255.0', 'gateway': '10.0.1.3', 'dhcp': 'Off',
+           'mac_addr': '02-aa-00-00-02-01'}
     return {'settings': {'laser': 'On', 'returns': 'Strongest', 'rpm': 600, 'fov': {'start': 0, 'end': 359},
                          'phaselock': {'enabled': 'Off', 'offset': '0'},
-                         'host': {'addr': '192.168.0.152', 'dport': '2368', 'tport': '8308', 'udpcs': 'Off'},
+                         'host': {'addr': '10.0.1.10', 'dport': '2368', 'tport': '8308', 'udpcs': 'Off'},
                          'net': net, 'active_net': dict(net)},
             'status': {'gps': {'pps_state': 'Absent'}, 'motor': {'state': 'On', 'rpm': 600, 'lock': 'Off'},
                        'laser': {'state': 'On'}},
@@ -90,7 +91,7 @@ class LidarSetupTest(unittest.TestCase):
     def run_script(self, verb, stdin='', script='hw.sh', *args, **extra):
         env = {'PATH': '%s:%s' % (self.tmp / 'bin', os.environ['PATH']), 'HOME': str(self.tmp),
                'XDG_STATE_HOME': str(self.tmp / 'state'), 'FAKE_LIDAR': str(self.state), 'LIDAR_JUMP': '',
-               'EXPECT_IP': ENV['LIDAR_IP'], 'ASTRO_VESSEL': 'blastoise', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
+               'EXPECT_IP': ENV['LIDAR_IP'], 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': str(self.tmp / 'no.env')}
         env.update(extra)
         command = ['lidar', verb] if script == 'hw.sh' else [verb]
         return subprocess.run(['bash', str(ROOT / script), *command, *args], input=stdin, env=env,
@@ -111,8 +112,8 @@ class LidarSetupTest(unittest.TestCase):
     def test_verify_reports_only_differing_keys(self):
         run = self.run_script('verify')
         self.assertEqual(run.returncode, 3, run.stderr)
-        self.assertRegex(run.stderr, r'host\.addr +192\.168\.0\.152 -> ' + ENV['LIDAR_DATA_HOST'])
-        self.assertRegex(run.stderr, r'net\.gateway +192\.168\.0\.3 -> ' + ENV['ROUTER_IP'])
+        self.assertRegex(run.stderr, r'host\.addr +10\.0\.1\.10 -> ' + ENV['LIDAR_DATA_HOST'])
+        self.assertRegex(run.stderr, r'net\.gateway +10\.0\.1\.3 -> ' + ENV['ROUTER_IP'])
         self.assertNotIn('rpm', run.stderr.split('Differs')[1])
         self.assertEqual(self.posts(), [])
 
@@ -122,7 +123,7 @@ class LidarSetupTest(unittest.TestCase):
         snapshots = list((self.tmp / 'state/astro_dock/lidar').iterdir())
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(snapshots[0].stat().st_mode & 0o777, 0o600)
-        self.assertEqual(json.loads(snapshots[0].read_text())['settings']['host']['addr'], '192.168.0.152')
+        self.assertEqual(json.loads(snapshots[0].read_text())['settings']['host']['addr'], '10.0.1.10')
         self.assertEqual(self.run_script('apply').returncode, 0)
         self.assertEqual(len(self.posts()), 4)
 
@@ -133,9 +134,9 @@ class LidarSetupTest(unittest.TestCase):
         self.assertEqual(self.posts(), ['setting/host addr=' + ENV['LIDAR_DATA_HOST'], 'save submit'])
 
     def test_apply_through_jump_host(self):
-        run = self.run_script('apply', 'APPLY\n', LIDAR_JUMP='tranquility')
+        run = self.run_script('apply', 'APPLY\n', LIDAR_JUMP='s')
         self.assert_net_apply(run, 'setting/net gateway=' + ENV['ROUTER_IP'])
-        self.assertEqual(set(Path(str(self.state) + '.ssh').read_text().split()), {'tranquility'})
+        self.assertEqual(set(Path(str(self.state) + '.ssh').read_text().split()), {'s'})
 
     def test_apply_changes_mask_and_gateway(self):
         self.edit_sensor('net', mask='255.255.0.0')
@@ -169,18 +170,18 @@ class LidarSetupTest(unittest.TestCase):
         self.assertEqual(self.posts(), [])
 
     def test_apply_refuses_address_mismatch(self):
-        self.edit_sensor('net', addr='192.168.0.202')
+        self.edit_sensor('net', addr='10.0.1.202')
         run = self.run_script('apply', 'APPLY\n')
         self.assertNotEqual(run.returncode, 0)
-        self.assertIn('reports address 192.168.0.202', run.stderr)
+        self.assertIn('reports address 10.0.1.202', run.stderr)
         self.assertEqual(self.posts(), [])
 
     def test_apply_refuses_invalid_values(self):
         for key, value in (('HW_RPM', '610'), ('HW_RPM', '600&laser=off'), ('HW_RETURNS', 'Dual&rpm=0'),
-                           ('HW_DATA_HOST', '192.168.0.300'), ('HW_DATA_PORT', '70000'),
+                           ('HW_DATA_HOST', '10.0.1.300'), ('HW_DATA_PORT', '70000'),
                            ('HW_FOV_END', '360'), ('HW_GATEWAY', '10.0.0.1'),
                            ('HW_NETMASK', '255.0.255.0'), ('HW_NETMASK', '255.255.255.252'),
-                           ('HW_DATA_HOST', '192.168.1.153')):
+                           ('HW_DATA_HOST', '10.0.2.11')):
             with self.subTest(key=key, value=value):
                 run = self.run_script('apply', 'APPLY\n', **{key: value})
                 self.assertNotEqual(run.returncode, 0)
@@ -197,7 +198,7 @@ class LidarSetupTest(unittest.TestCase):
     def test_plan_and_status_post_nothing(self):
         run = self.run_script('plan')
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertRegex(run.stdout, r'data_host +host\.addr +192\.168\.0\.152 -> ' + ENV['LIDAR_DATA_HOST'])
+        self.assertRegex(run.stdout, r'data_host +host\.addr +10\.0\.1\.10 -> ' + ENV['LIDAR_DATA_HOST'])
         self.assertEqual(self.run_script('status').returncode, 0)
         self.assertEqual(self.posts(), [])
         self.assertFalse((self.tmp / 'state').exists())
@@ -207,7 +208,7 @@ class LidarSetupTest(unittest.TestCase):
         self.log.unlink()
         run = self.run_script('rollback', 'APPLY\n')
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertEqual(self.posts(), ['setting/host addr=192.168.0.152', 'setting/net gateway=192.168.0.3',
+        self.assertEqual(self.posts(), ['setting/host addr=10.0.1.10', 'setting/net gateway=10.0.1.3',
                                         'save submit', 'reset reset_system'])
 
     def test_apply_refuses_unreachable_lidar(self):

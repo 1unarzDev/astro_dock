@@ -25,8 +25,9 @@ printf '#!/bin/sh\necho rebooted >>"$NV/../reboots"\n' >"$tmp/bin/reboot"
 printf '#!/bin/sh\n:\n' >"$tmp/bin/setuserpasswd"
 chmod +x "$tmp/bin"/*
 
-# The router driver with the shipped profile's values; sourcing it runs nothing.
-HW_ROOT=$root ASTRO_ENV_FILE=/dev/null ASTRO_SECRETS=/nonexistent ASTRO_VESSEL=blastoise
+# The router driver with the fixture vessel a's values; sourcing it runs nothing.
+HW_ROOT=$root ASTRO_ENV_FILE=/dev/null ASTRO_SECRETS=/nonexistent
+export ASTRO_PROFILES="$root/tests/data/profiles" ASTRO_VESSEL=a
 source "$root/devices/lib.sh"
 hw_init
 hw_load_kind router
@@ -76,7 +77,7 @@ grep -q "did not reboot" <<<"$out" || fail "wait message"
 
 # Re-apply while unconfirmed: exit 3 and the original revert stays intact.
 revert=$(nv rc_startup)
-ROUTER_IP=192.168.0.9 apply; [[ $? == 3 ]] || fail "re-apply not refused"
+ROUTER_IP=10.0.1.9 apply; [[ $? == 3 ]] || fail "re-apply not refused"
 [[ $(nv rc_startup) == "$revert" && $(nv lan_ipaddr) == "$ROUTER_IP" ]] || fail "re-apply changed state"
 
 # Normal path: new boot, confirm restores the owner script and the revert no longer fires.
@@ -119,7 +120,7 @@ grep -qF "$(cat "$keydir/id_router.pub")" "$NV/sshd_authorized_keys" || fail "ro
 echo "router rollback ok"
 
 # stage_boat: the gateway host keeps its network even when GATEWAY_IP is not the first address.
-read -r gw subnet < <(. "$root/config/boat-network.env"; echo "$GATEWAY_IP $LAN_SUBNET")
+read -r gw subnet < <(. "$ASTRO_PROFILES/a/network.env"; echo "$GATEWAY_IP $LAN_SUBNET")
 other="${gw%.*}.77"
 mkdir -p "$tmp/host"
 cat >"$tmp/host/nmcli" <<'EOF'

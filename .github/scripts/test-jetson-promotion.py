@@ -21,7 +21,10 @@ class JetsonPromotionTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
         self.log = root / 'commands'
+        # The fixture fleet's vessel a: image example/astro, gateway s.
         self.env = dict(os.environ, GH_REPO='example/astro',
+                        ASTRO_PROFILES=str(ROOT / 'tests/data/profiles'), ASTRO_VESSEL='a',
+                        ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null',
                         MOCK_LOG=str(self.log), MOCK_DIGEST=DIGEST)
         self.env['PATH'] = str(root) + os.pathsep + self.env['PATH']
         self.executable(root / 'gh', '''#!/usr/bin/env python3
@@ -59,7 +62,7 @@ import sys
 args = sys.argv[1:]
 with open(os.environ['MOCK_LOG'], 'a') as stream:
     stream.write('ssh ' + json.dumps(args) + '\\n')
-# Unwrap the outer command exactly as Tranquility's shell does.
+# Unwrap the outer command exactly as the gateway's shell does.
 command = args[-1]
 if command.startswith('ssh '):
     command = shlex.split(command)[-1]
@@ -76,7 +79,7 @@ elif command.startswith('bash '):
     print('PASS: received real images: three frames')
 elif command.startswith('docker pull '):
     digest = os.environ.get('MOCK_PULLED_DIGEST', os.environ['MOCK_DIGEST'])
-    print(json.dumps(['lunarzdev/astro@' + digest]))
+    print(json.dumps(['example/astro@' + digest]))
 ''')
 
     @staticmethod
@@ -86,7 +89,7 @@ elif command.startswith('docker pull '):
         path.chmod(0o755)
 
     def promote(self, *arguments):
-        """Run the real helper without contacting GitHub or the boat."""
+        """Run the real helper without contacting GitHub or a host."""
         return subprocess.run(
             ['bash', str(ROOT / 'hw.sh'), 'jetson', 'apply', *arguments],
             env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -97,15 +100,15 @@ elif command.startswith('docker pull '):
         return self.log.read_text() if self.log.exists() else ''
 
     def test_success_validates_then_promotes_then_pulls_and_cleans(self):
-        result = self.promote('roboboat@jetson.local')
+        result = self.promote('crew@jetson.local')
         self.assertEqual(result.returncode, 0, result.stdout)
         commands = self.commands()
-        self.assertLess(commands.index('boat-validate.sh lunarzdev/astro@'),
+        self.assertLess(commands.index('boat-validate.sh example/astro@'),
                         commands.index('"workflow", "run"'))
         self.assertLess(commands.index('"run", "watch"'),
                         commands.index('docker pull'))
-        self.assertIn('tranquility', commands)
-        self.assertIn('roboboat@jetson.local', commands)
+        self.assertIn('"s", "ssh ', commands)              # through the gateway
+        self.assertIn('crew@jetson.local', commands)
         self.assertIn('rm -rf -- /tmp/astro-jetson.ABC123', commands)
 
     def test_failed_camera_never_dispatches_and_cleans(self):
@@ -147,7 +150,7 @@ elif command.startswith('docker pull '):
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
         result = hw('plan', 'user@jetson')
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('Candidate lunarzdev/astro@' + DIGEST, result.stdout)
+        self.assertIn('Candidate example/astro@' + DIGEST, result.stdout)
         self.assertNotIn('ssh ', self.commands())
         self.assertNotIn('"workflow", "run"', self.commands())
         self.log.write_text('')
@@ -159,7 +162,7 @@ elif command.startswith('docker pull '):
         self.env['HW_GATEWAY'] = ''
         result = self.promote('user@jetson', '123')
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertNotIn('tranquility', self.commands())
+        self.assertNotIn('"s", "ssh ', self.commands())
         self.assertIn('user@jetson', self.commands())
 
 

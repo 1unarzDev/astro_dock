@@ -6,7 +6,8 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null', ASTRO_VESSEL='blastoise')
+ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null',
+           ASTRO_PROFILES=str(ROOT / 'tests/data/profiles'), ASTRO_VESSEL='a')   # the fixture fleet
 TOP_VERBS = ('whoami', 'env', 'profile', 'secrets')
 
 

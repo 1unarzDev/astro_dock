@@ -27,7 +27,7 @@ class BannerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = {'XDG_RUNTIME_DIR': self.tmp.name, 'ROS_WS': str(ROOT), 'ROS_DISTRO': 'jazzy',
-                    'ROS_DOMAIN_ID': '42', 'ASTRO_DDS_ADDRESS': '192.168.0.10', 'TERM': 'xterm-256color'}
+                    'ROS_DOMAIN_ID': '7', 'ASTRO_DDS_ADDRESS': '10.0.1.10', 'TERM': 'xterm-256color'}
         self.config = dict(astro_banner.load_config([ROOT / 'config' / 'banner.yaml']), stats=CHEAP)
 
     def tearDown(self):
@@ -49,7 +49,7 @@ class BannerTest(unittest.TestCase):
             lines = text.splitlines()
             self.assertLessEqual(max(len(line) for line in lines), cols)
             self.assertLessEqual(len(lines), rows - 2)
-            self.assertIn('│ ros       jazzy · domain 42', text)
+            self.assertIn('│ ros       jazzy · domain 7', text)
         self.assertEqual(self.render(45, 40), '')
         self.assertEqual(self.render(140, 4), '')
 
