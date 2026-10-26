@@ -102,7 +102,7 @@ commands:
       - $ROS_WS/hw.sh whoami
       - $ROS_WS/hw.sh env ROUTER_IP
       - $ROS_WS/hw.sh secrets check
-      - $ROS_WS/hw.sh --vessel blastoise radio status
+      - $ROS_WS/hw.sh --vessel VESSEL radio status
 
   - name: net/mdns.sh
     run: $ROS_WS/net/mdns.sh

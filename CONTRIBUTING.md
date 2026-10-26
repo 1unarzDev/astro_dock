@@ -1,4 +1,4 @@
-# Contributing to mhseals_docker
+# Contributing to astro_dock
 
 This guide will help you understand our code style, paradigms, and best practices to ensure consistency and maintainability.
 
@@ -23,7 +23,7 @@ import sys
 import numpy as np
 import rclpy
 
-from mhsboat_ctrl.tasks import Task
+from my_robot.tasks import Task
 ```
 
 ### Typing

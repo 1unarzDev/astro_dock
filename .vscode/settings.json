@@ -7,7 +7,6 @@
         "/opt/ros/jazzy/lib/python3.12/site-packages",
         "/opt/ros/jazzy/local/lib/python3.12/dist-packages"
     ],
-    "cmake.sourceDirectory": "/home/lunarz/mhseals_docker/src/direct_lidar_inertial_odometry",
     "remote.autoForwardPortsSource": "hybrid",
     "ROS2.distro": "jazzy",
     "github.copilot.chat.codeGeneration.useInstructionFiles": true

@@ -7,16 +7,8 @@ refs/
 bags/
 router_setup_state/
 .devcontainer/docker-compose.override.yml
-src/zed-ros2-wrapper/
-src/direct_lidar_inertial_odometry/
-src/boat_interfaces/
-src/asv_wave_sim/
-src/auto_nav/
-src/mhsboat_ctrl/
-src/rviz-plugin-zed-od/
-src/mhseals_hardware/
-src/mhseals_nav/
-src/mhseals_testing/
+# Workspace repositories (the profile's repos, or your own) are not part of astro_dock.
+/src/*
 .devcontainer/run-generations/
 .devcontainer/installed.local.txt
 *.egg-info/

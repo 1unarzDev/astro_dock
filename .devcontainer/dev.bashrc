@@ -43,8 +43,8 @@ if [[ -f /workspace/venv/bin/activate ]]; then
   source /workspace/venv/bin/activate
 fi
 
-# Terminals use the default DDS transport; the lidar participants opt into
-# mhseals_nav/config/fastdds_large_data.xml from their launch files.
+# Terminals use the default DDS transport; a package that needs another profile
+# (e.g. large raw point clouds) opts into it from its launch files.
 [[ -n "${ASTRO_RUN_MANAGED:-}" ]] || unset FASTDDS_BUILTIN_TRANSPORTS
 
 # Pin DDS to this host's address on the vessel subnet. A viewer laptop may also be
@@ -165,7 +165,6 @@ EOF
   return 0
 }
 ros_net
-export GZ_SIM_RESOURCE_PATH="${ROS_WS}/src/asv_wave_sim/gz-waves-models/models:${ROS_WS}/src/asv_wave_sim/gz-waves-models/world_models:${ROS_WS}/src/asv_wave_sim/gz-waves-models/worlds${GZ_SIM_RESOURCE_PATH:+:${GZ_SIM_RESOURCE_PATH}}"
 export GZ_SIM_SYSTEM_PLUGIN_PATH="${ROS_WS}/install/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:${GZ_SIM_SYSTEM_PLUGIN_PATH}}"
 
 unalias rviz2 2>/dev/null || true

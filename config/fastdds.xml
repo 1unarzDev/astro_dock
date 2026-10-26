@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Default Jazzy graph: DDS fragments fit a 1500-byte LAN MTU, avoiding
      IP reassembly stalls when RViz subscribes to maps and costmaps together.
-     Large raw LiDAR uses mhseals_nav/config/fastdds_large_data.xml instead. -->
+     A package may opt into its own profile (e.g. for large raw LiDAR) from its launch files. -->
 <dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
 <profiles>
   <transport_descriptors>
@@ -17,15 +17,15 @@
       <type>SHM</type>
     </transport_descriptor>
   </transport_descriptors>
-  <participant profile_name="boat_default" is_default_profile="true">
+  <participant profile_name="astro_default" is_default_profile="true">
     <rtps>
-      <!-- Over the boat radio (RTT 65-80 ms, loss bursts) a peer is dropped only after 60 s
+      <!-- Over a lossy radio link (measured: RTT 65-80 ms, loss bursts) a peer is dropped only after 60 s
            without an announcement (default 20 s), so a dropout never removes its nodes and
            re-discovery is not needed; 5 s announcements keep 12 chances per lease. A crashed
            process's names now linger up to 60 s; no safety check waits on that: the TUI holds
            on a watchdog's ~/status beat silent 2 s or its computer's process report, and what
            does read the graph (command_mux's duplicate publisher, a part's stray nodes) holds
-           or refuses meanwhile. ros_net adds the boat hosts as static peers
+           or refuses meanwhile. ros_net adds the vessel hosts as static peers
            (ROS_STATIC_PEERS); multicast discovery stays on. -->
       <builtin>
         <discovery_config>

@@ -65,7 +65,7 @@ jobs:
           docker run --rm \
             "${REGISTRY_IMAGE}:core-${{ matrix.arch }}" \
             bash -lc 'test "$(id -un)" = roboboat && test "$(id -gn)" = roboboat && source /opt/ros/jazzy/setup.bash && ros2 pkg prefix ros_gz_bridge && /usr/bin/python3 -c "import importlib.metadata; tuple(importlib.metadata.distributions())" && sudo -n true'
-      - name: Check boat runtime dependencies are baked in
+      - name: Check the runtime dependencies are baked in
         run: |
           docker run --rm "${REGISTRY_IMAGE}:core-${{ matrix.arch }}" bash -lc '
             set -e; source /opt/ros/jazzy/setup.bash
@@ -276,7 +276,7 @@ jobs:
             echo
             echo "Retention slot: \`${slot}\`"
             echo
-            echo "Validate the immutable digest on the boat:"
+            echo "Validate the immutable digest on the Jetson:"
             echo
             echo '```bash'
             echo './hw.sh jetson apply user@your-jp6-host'

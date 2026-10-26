@@ -51,7 +51,7 @@ host_name="${host_name%%.*}"
 # Inject into the generated adapter only, for every service it defines, so each
 # container is named after its device. Keep the base roboboat alias for existing
 # callers; Docker adds the actual hostname to /etc/hosts itself.
-sed -i.bak -E "/^  (dev|lidar-relay):$/a\\
+sed -i.bak -E "/^  (dev):$/a\\
     hostname: ${host_name}\\
     extra_hosts: [\"${host_name}:127.0.1.1\"]
 " "$work_file"

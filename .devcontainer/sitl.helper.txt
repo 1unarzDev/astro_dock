@@ -6,8 +6,8 @@ Tools/autotest/sim_vehicle.py -v "$VEHICLE" $SITL_EXTRA_ARGS
 Use Ctrl+C in its terminal. Inspect conflicts with: sudo lsof -i :<port>
 
 --- ROS side (run in the core/cuda development container, not this image) ---
-ros2 launch mhseals_nav robot.launch.py sim:=true
-The SITL image simulates the FCU; it does not own physical ODROID PWM pins.
-Use sim:=false only for deliberate real-boat operation in the development
-container. Run its help command for sensors_ignore, keyboard_control, shared
-hardware YAML, bags, MAVROS, and camera commands.
+ros2 launch <your_package> <robot>.launch.py sim:=true   (your stack's launch)
+The SITL image simulates the FCU; it does not own physical PWM pins.
+Use sim:=false only for deliberate real-robot operation in the development
+container. Your stack's own help lists its launch arguments and hardware
+commands.
