@@ -39,7 +39,7 @@ NAME = re.compile(r'[a-z0-9][a-z0-9_-]*')
 META = ('extends', 'kind', 'network_env', 'registry')
 KINDS = ('vessel', 'station')
 NOT_KINDS = ('profile', 'topology')
-IGNORED_HOSTNAMES = ('roboboat', 'local', 'localhost')    # the dev container's hostname, and placeholders
+IGNORED_HOSTNAMES = ('local', 'localhost')    # placeholders; prebuild names a dev container after its host
 VIRTUAL = re.compile(r'(lo|docker.*|veth.*|br-.*)$')
 DT_MODEL = '/proc/device-tree/model'                     # Jetson, ODROID: a board computer, never a station
 

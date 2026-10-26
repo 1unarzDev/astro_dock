@@ -126,11 +126,11 @@ class Profiles(unittest.TestCase):
         self.assertIn('several station members (s t)', run.stderr)
         self.assertTrue(self.whoami()['host'].startswith('none (no match'))       # not a station: fine
 
-    def test_a_permanent_mac_finds_the_host_and_the_container_hostname_is_ignored(self):
+    def test_a_permanent_mac_finds_the_host_when_the_hostname_is_unregistered(self):
         self.nic('enp1s0', '02:AA:00:00:00:02')
         self.nic('docker0', '02:aa:00:00:00:01')            # virtual: skipped
         self.nic('wlan0', '02:bb:00:00:00:01', assign='3')  # random MAC: skipped
-        me = self.whoami(hostname='roboboat')
+        me = self.whoami(hostname='devcontainer')
         self.assertEqual(me['host'], 'a-cam (MAC 02:aa:00:00:00:02 (enp1s0))')
         self.assertTrue(me['vessel'].startswith('a '))
 
