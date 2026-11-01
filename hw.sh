@@ -27,7 +27,8 @@ hw_driver() {
 
 verbs() { declare -F | sed -n 's/^declare -f driver_//p' | grep -vx usage | tr '\n' ' '; }
 
-# The commands besides KIND VERB, as usage prints them; `hw.sh COMMAND --help` prints its own line.
+# The commands besides KIND VERB, as usage prints them (usage|description, split at the last |);
+# `hw.sh COMMAND --help` prints its own line.
 HW_COMMANDS=(
     "whoami [--root|--registry]|this machine's host and vessel, and how found (or the profile root or registry)"
     "env [KEY]|the vessel's network env path, or one of its keys"
@@ -40,8 +41,8 @@ HW_COMMANDS=(
 command_usage() {
     local line
     for line in "${HW_COMMANDS[@]}"; do
-        [[ -n ${1:-} && ${line%% *} != "$1" && ${line%%|*} != "$1" ]] \
-            || printf '       %s %-20s %s\n' "$HW_PROGRAM" "${line%%|*}" "${line#*|}"
+        [[ -n ${1:-} && ${line%% *} != "$1" && ${line%|*} != "$1" ]] \
+            || printf '       %s %-26s %s\n' "$HW_PROGRAM" "${line%|*}" "${line##*|}"
     done
 }
 
