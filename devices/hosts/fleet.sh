@@ -15,11 +15,12 @@ Usage: $HW_PROGRAM $HW_KIND status|verify [HOST...]
 
 status    Read-only: each repository's branch, head and dirty state, and the container's image.
 plan      Read-only: what apply would do (heads against origin/main via ls-remote; no fetch).
-apply     Back up dirty state, fast-forward astro_dock (and init its profiles submodule) and the host's
-          repos to origin/main, prune stale symlink-install links, build in the container. --image
-          recreates it on REF. A host's repos: repos.all and repos.ROLE of each of its registry roles.
-verify    Read-only: every repository is at its origin/main, the profiles submodule at its pin, and the
-          container runs.
+apply     Back up dirty state, fast-forward astro_dock and the host's repos to origin/main, check out
+          this computer's profile set at its commit (profiles/ there), prune stale symlink-install
+          links, build in the container. --image recreates it on REF. A host's repos: repos.all and
+          repos.ROLE of each of its registry roles.
+verify    Read-only: every repository is at its origin/main, profiles/ at this computer's profile
+          commit, and the container runs.
 rollback  Recreate the container on IMAGE (an astro-rollback:STAMP that apply printed), then build.
 keys      Create the operator key (XDG_CONFIG_HOME/$(cfg operator_key)/id_ed25519) if missing, install
           it where the TUI is refused (your own ssh may ask once) and record each host key. Idempotent.
@@ -77,6 +78,50 @@ fleet_init() {
     [[ -r ${ASTRO_REGISTRY:-} ]] || die "The profile names no readable registry (ASTRO_REGISTRY)"
     STAMP=$(date +%Y%m%d-%H%M%S)
     LOG=$(hw_state hosts)/${FUNCNAME[1]#driver_}-$STAMP.log
+    fleet_profiles
+}
+
+# The profile set every host gets: this computer's profile root, when it is a git checkout of its own
+# (PROFILES_URL its origin, PROFILES_PIN its commit). Else the hosts keep theirs.
+fleet_profiles() {
+    local root
+    PROFILES_URL='' PROFILES_PIN=''
+    root=$(cd -- "$HW_PROFILES_ROOT" && pwd -P) || return 0
+    if [[ $(git -C "$root" rev-parse --show-toplevel 2>/dev/null) != "$root" ]]; then
+        warn "$HW_PROFILES_ROOT is not a git checkout: the hosts keep their profiles/"
+        return 0
+    fi
+    PROFILES_URL=$(git -C "$root" remote get-url origin 2>/dev/null) PROFILES_PIN=$(git -C "$root" rev-parse HEAD)
+    [[ -n $PROFILES_URL ]] || { warn "$root has no origin: the hosts keep their profiles/"; PROFILES_PIN=''; return 0; }
+    [[ -z $(git -C "$root" status --porcelain) ]] || warn "$root has local changes; the hosts get its commit ${PROFILES_PIN:0:7} without them"
+}
+
+# Runs on the host (after heads_script's loop): profiles/ in WORKSPACE against PROFILES_PIN.
+profiles_heads() {
+    [[ -n $PROFILES_PIN ]] || return 0
+    cat <<EOF
+p=\$(git -C $1/profiles rev-parse -q --verify HEAD 2>/dev/null)
+if [ "\$p" = $PROFILES_PIN ]; then echo "profiles OK ${PROFILES_PIN:0:7}"
+else echo "profiles FAIL at \${p:-none}, this computer's is ${PROFILES_PIN:0:7}: $HW_PROGRAM hosts apply"; fi
+EOF
+}
+
+# Runs on the host (after fast_forward's loop): profiles/ in WORKSPACE cloned or fetched from PROFILES_URL
+# and checked out at PROFILES_PIN, dirty state backed up first. The old submodule checkout of
+# astro_dock, left in place when astro_dock stopped tracking it, is reused as it is.
+profiles_checkout() {
+    [[ -n $PROFILES_PIN ]] || return 0
+    cat <<EOF
+cd $1 || { echo "FAIL profiles: no $1"; exit 1; }
+[ -e profiles/.git ] || { rmdir profiles 2>/dev/null; git clone -q --no-checkout '$PROFILES_URL' profiles; } \
+    || { echo "FAIL profiles: clone $PROFILES_URL"; exit 1; }
+if [ -n "\$(git -C profiles status --porcelain)" ]; then
+    mkdir -p "\$backup"; git -C profiles diff HEAD > "\$backup/profiles.diff"; echo "BACKUP profiles -> \$backup"
+fi
+if git -C profiles remote set-url origin '$PROFILES_URL' && git -C profiles fetch -q origin \
+    && git -C profiles checkout -q --detach $PROFILES_PIN; then echo "OK profiles ${PROFILES_PIN:0:7}"
+else echo "FAIL profiles: ${PROFILES_PIN:0:7} not checked out (pushed to $PROFILES_URL? local changes?)"; rc=1; fi
+EOF
 }
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
@@ -118,15 +163,8 @@ for repo in $(repos); do
     remote=\$(git ls-remote origin main 2>/dev/null | cut -f1); sync=unknown
     [ -z "\$remote" ] || { [ "\$(git rev-parse HEAD)" = "\$remote" ] && sync=at-origin || sync=differs; }
     echo "\$repo \$(git rev-parse --abbrev-ref HEAD) \$(git rev-parse --short HEAD) \$dirty \$sync"
-    # astro_dock's pinned profiles: "-" uninitialised (generic mode), "+" not at the pinned commit.
-    if [ "\$repo" = astro_dock ] && git config -f .gitmodules submodule.profiles.path >/dev/null 2>&1; then
-        case "\$(git submodule status profiles 2>/dev/null)" in
-            -*) echo "profiles FAIL uninitialised: git submodule update --init profiles" ;;
-            +*) echo "profiles FAIL not at the pinned commit: git submodule update profiles" ;;
-            *) echo "profiles OK" ;;
-        esac
-    fi
 done
+$(profiles_heads "$2")
 docker inspect $1 --format 'container $1 {{.Config.Image}} running={{.State.Running}}' 2>/dev/null || echo "container $1 missing"
 EOF
 }
@@ -149,12 +187,8 @@ for repo in $(repos); do
     [ "\$branch" = main ] || git checkout -q main || { echo "FAIL \$repo: checkout main from \$branch"; rc=1; continue; }
     if git merge --ff-only -q origin/main; then echo "OK \$repo \$branch@\$head -> main@\$(git rev-parse --short HEAD)"
     else echo "FAIL \$repo: main has local commits; not fast-forwarded"; rc=1; continue; fi
-    # astro_dock's pinned profiles submodule follows its commit (hw.sh reads the profiles from it).
-    if [ "\$repo" = astro_dock ] && git config -f .gitmodules submodule.profiles.path >/dev/null 2>&1; then
-        git submodule update --init -q profiles && echo "OK profiles \$(git -C profiles rev-parse --short HEAD)" \
-            || { echo "FAIL profiles: submodule update"; rc=1; }
-    fi
 done
+$(profiles_checkout "$1")
 exit \$rc
 EOF
 }
@@ -241,7 +275,7 @@ driver_plan() {
     image_arg "$@"; [[ -z $IMAGE ]] || shift 2
     plan_one() {
         heads_on "$@"
-        echo "$1: apply would back up dirty repos, fast-forward to origin/main${IMAGE:+, recreate $2 on $IMAGE} and build in $2"
+        echo "$1: apply would back up dirty repos, fast-forward to origin/main${PROFILES_PIN:+, check out profiles ${PROFILES_PIN:0:7}}${IMAGE:+, recreate $2 on $IMAGE} and build in $2"
     }
     for_hosts plan_one "$@"
 }
@@ -255,7 +289,7 @@ driver_verify() {
         ! grep -q ' missing\| running=false\| FAIL ' <<<"$out" || return 1
         ! awk '$2 != "container" && $2 != "profiles" && ($3 != "main" || $5 == "dirty" || $6 != "at-origin")' <<<"$out" | grep -q .
     }
-    for_hosts verify_one "$@" || { warn "Not every host is at origin/main with its pinned profiles and its container running"; rc=1; }
+    for_hosts verify_one "$@" || { warn "Not every host is at origin/main with this computer's profiles and its container running"; rc=1; }
     return $rc
 }
 
