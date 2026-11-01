@@ -132,7 +132,7 @@ ros2 launch zed_wrapper zed_camera.launch.py \
   camera_model:=zed2i camera_name:=front publish_tf:=false publish_map_tf:=false
 ```
 
-The DDS domain is the vessel's `ROS_DOMAIN_ID` (its network env; prebuild prints it), which prebuild injects into the adapter, else the fleet default 42 (`docker-compose.yml`, `config/run.yaml`; a generic checkout sets its own); `ASTRO_ROS_DOMAIN_ID` overrides it (prebuild and Compose both read it). An operator laptop that resolves no vessel at prebuild (off the boat LAN, or `--host NAME` without `--vessel`), a stale adapter and a checkout without the submodule keep the default, and prebuild warns: export `ASTRO_ROS_DOMAIN_ID` (the vessel's `ROS_DOMAIN_ID`) where the dev container opens, or rerun prebuild with `ASTRO_VESSEL=NAME`. A declared but uninitialised profiles submodule also warns. `/usr/local/zed/tools/ZED_Explorer --all` lists attached cameras.
+The DDS domain is the vessel's `ROS_DOMAIN_ID` (its network env; prebuild prints it), which prebuild injects into the adapter with the vessel itself (`ASTRO_VESSEL`, so the container keeps it off the LAN), else astro_dock's default 42 (`docker-compose.yml`, `config/run.yaml`); `ASTRO_ROS_DOMAIN_ID` overrides it (prebuild and Compose both read it). An operator laptop that resolves no vessel at prebuild (off the boat LAN, or `--host NAME` without `--vessel`), and a stale adapter keep the default, and prebuild warns: export `ASTRO_ROS_DOMAIN_ID` (the vessel's `ROS_DOMAIN_ID`) where the dev container opens, or rerun prebuild with `ASTRO_VESSEL=NAME`. A checkout without profiles keeps it quietly (generic mode). `/usr/local/zed/tools/ZED_Explorer --all` lists attached cameras.
 
 Compose and Jazzy shells load [`config/fastdds.xml`](config/fastdds.xml) (1400-byte UDP messages avoid IP fragment-buffer stalls with large topics; a 60 s discovery lease rides out radio dropouts). On a vessel's subnet (`LAN_SUBNET` of its network env, or `ASTRO_DDS_SUBNET`), `ros_net` also sets `ROS_STATIC_PEERS` to the gateway and the reserved hosts, so discovery reaches them by unicast; multicast stays on and a user-set value wins.
 
@@ -155,10 +155,11 @@ The `jetson` stage sets a JetPack 6 Jetson's persistent MAXN_SUPER power mode, a
 
 ```text
 hw.sh [--vessel V] [--host H] KIND VERB [ARGS]   (KIND VERB --help for details)
-hw.sh whoami [--root]      this machine's host and vessel, and how found (--root: the profile root)
-hw.sh env [KEY]            the vessel's network env path, or one of its keys
-hw.sh profile show [NAME]  a merged profile (no secrets)
-hw.sh secrets check        the secrets file and the missing key names (never values)
+hw.sh whoami [--root|--registry] this machine's host and vessel, and how found (or the profile root or registry)
+hw.sh env [KEY]                  the vessel's network env path, or one of its keys
+hw.sh profile show [NAME]        a merged profile (no secrets)
+hw.sh profile sync [URL [REF]]   check out your profile set at its ref (URL REF: record them first)
+hw.sh secrets check              the secrets file and the missing key names (never values)
 ```
 
 `./hw.sh --help` (or `help`) lists the kinds of the selected profile, `./hw.sh KIND --help` their verbs and `./hw.sh COMMAND --help` a command's usage. Every driver has these:
@@ -172,21 +173,22 @@ hw.sh secrets check        the secrets file and the missing key names (never val
 | `rollback` | back to the saved or previous state | yes |
 
 - **Drivers:** `devices/<kind>/<driver>.sh` must define `driver_status`, `driver_plan`, `driver_apply`, `driver_verify` and `driver_rollback`; `hw.sh` refuses a driver missing one. Other `driver_<verb>` functions are extra verbs. astro_dock ships `hosts/fleet`, `jetson/l4t`, `lidar/vlp16`, `radio/airmax` and `router/ddwrt`.
-- **Fleet deploy:** `./hw.sh hosts apply [--image REF] [HOST...]` backs up dirty state under `~/.local/state/astro_dock/hosts/` on each ssh host of the vessel's registry, fast-forwards astro_dock (initialising its `profiles` submodule) and the host's repositories to `origin/main`, prunes stale symlink-install links and builds in the dev container. `--image` first commits the running container as `astro-rollback:STAMP` and recreates it on REF. `status`, `plan` and `verify` only read; `rollback IMAGE [HOST...]` recreates on a rollback image and builds; `keys` installs the operator ssh key (also `./setup.linux.sh --components operator-key`).
+- **Fleet deploy:** `./hw.sh hosts apply [--image REF] [HOST...]` backs up dirty state under `~/.local/state/astro_dock/hosts/` on each ssh host of the vessel's registry, fast-forwards astro_dock and the host's repositories to `origin/main`, checks out this computer's profile set at its commit in the host's `profiles/` (when that set is a git checkout with an origin; `verify` compares it), prunes stale symlink-install links and builds in the dev container. `--image` first commits the running container as `astro-rollback:STAMP` and recreates it on REF. `status`, `plan` and `verify` only read; `rollback IMAGE [HOST...]` recreates on a rollback image and builds; `keys` installs the operator ssh key (also `./setup.linux.sh --components operator-key`).
 
-#### Device profiles
+#### Profiles
 
-A profile root holds one directory per profile. Root: `$ASTRO_PROFILES`, else the pinned submodule `profiles/` once initialised (setup's repos stage and `hosts apply` initialise it). With none, astro_dock runs in generic mode: `hw.sh` lists no kinds, and setup skips the repos, gateway, boat and jetson stages with one note.
+Everything specific to one robot team (its fleet, vessels, network, hosts and device settings) lives in a profile set the user supplies, never in astro_dock. `profiles/` is gitignored, like `src/*`.
 
-- **Layout:** the fleet is the one profile without `extends:`; each other profile is a member (`kind: vessel` or `kind: station`) that extends it. `profile.yaml` may name the network env (`network_env:`) and the host registry (`registry:`), paths relative to its directory. Each `<kind>.yaml` picks a driver and holds its settings (`$KEY` reads the network env); the fleet's `hosts.yaml` lists repositories by role, `topology.yaml` the members and links, and the optional `secrets.keys` the secret key names.
+- **Source:** `~/.config/astro/profiles.env` (`$ASTRO_PROFILES_CONFIG` overrides; a set variable wins over the file) names it, next to `secrets.env`. `ASTRO_PROFILES=DIR` uses your own directory as it is. Else `ASTRO_PROFILES_URL` (a git repository) at `ASTRO_PROFILES_REF` (a commit, tag or branch; default `main`) is checked out at `profiles/`: `./hw.sh profile sync URL [REF]` records both and checks out, `./hw.sh profile sync` moves to the recorded ref (a branch's latest), and any `hw.sh` command clones it on first use. Nothing else fetches; `profiles/` away from the ref warns, and sync refuses local changes (push them to the profile repository). `./hw.sh whoami` prints the source and commit.
+- **Generic mode:** with no profile set, astro_dock is a generic ROS workspace: `hw.sh` lists no kinds and its device verbs and `env` say how to configure one, the dev container keeps the default domain, and setup skips the repos, gateway, boat and jetson stages with one note.
+- **Migration:** a checkout from the submodule era keeps its populated `profiles/` after the pull and works as before; run `./hw.sh profile sync URL REF` once to record its source, then rerun `.devcontainer/prebuild.sh`.
+- **Layout:** one directory per profile. The fleet is the one profile without `extends:`; each other profile is a member (`kind: vessel` or `kind: station`) that extends it. `profile.yaml` holds only `extends`, `kind`, `network_env` (the network env file) and `registry` (the host registry), paths relative to its directory. Each `<kind>.yaml` picks a driver (`driver: hosts/fleet` runs `devices/hosts/fleet.sh`) and holds its settings (`$KEY` reads the network env); the fleet's `hosts.yaml` lists repositories by role, `topology.yaml` the members and links, and the optional `secrets.keys` the secret key names. [`tests/data/profiles`](tests/data/profiles) is a complete example: fleet `fleet`, vessels `a` and `b`, station `s`.
 - **Merging:** a child's YAML merges over its parent's: mappings key by key, lists and scalars replace; it may set only keys a parent defines, except under a parent's empty mapping (`{}`) or null key. Every profile loads and is checked on every run; duplicate keys, anchors, cycles and unknown keys fail with file and line. `./hw.sh profile show [NAME]` prints the merged result.
 - **Resolution:** the machine finds its own registry host, by hostname or by a permanent MAC in the network env's `STATIC_LEASES`, and the vessel that host belongs to. `--host H` (`ASTRO_HOST`) and `--vessel V` (`ASTRO_VESSEL`) override; an unregistered machine passes `--vessel` for device verbs and `env`. `./hw.sh whoami` prints the result and how it was found.
 - **Control stations:** station membership is a role, not a name. A registry host with the `operator` role resolves to the fleet's station member (the only one, else the one `topology.yaml` links to the vessel). An operator laptop no registry lists joins as a generic control station (roles `operator`, so `hosts repos` gives `repos.all` and `repos.operator`): by `--host NAME`, without a vessel unless `--vessel` gives one, or by an address inside exactly one vessel's `LAN_SUBNET` (`BOAT_SUBNET`, its old name, for one release), which picks that vessel. A boat computer never joins as a station: a device-tree model (a Jetson or another board), a hostname or permanent MAC of a registry host without the operator role, or a `STATIC_LEASES` or registry address of a boat host keeps it unmatched.
 - **Aliases:** `--profile` and `ASTRO_PROFILE` still select the vessel for one release, with a warning.
 - **Secrets:** `~/.config/astro/secrets.env` (`$ASTRO_SECRETS` overrides), refused unless it is mode 600 and, symlinks followed, outside every git work tree. A YAML names its secrets' keys under `credentials:`, never the values; `./hw.sh secrets check` lists the missing names. A legacy astro_dock `.env` is still read, with a warning, for one release.
 - **Layers:** environment > secrets file > profile. `HW_<PATH>` overrides a YAML value (`HW_MEASURE_SECONDS=3`).
-
-MHSeals' fleet (the roboboat fleet, the blastoise and squirtle vessels and the control_station station, which the operator laptop tranquility resolves to), with its network, radio, router, lidar and Jetson procedures, lives in [MHSeals/mhseals_profile](https://github.com/MHSeals/mhseals_profile).
 
 #### Remote work
 

@@ -63,7 +63,7 @@ commands:
     params:
       - name: -v
         type: bool
-        description: Print the choice (and warn when the profiles submodule is missing).
+        description: Print the choice.
 
   - name: rviz2
     run: rviz2
@@ -101,8 +101,9 @@ commands:
     run: $ROS_WS/hw.sh
     summary: Robot device tooling (status, plan, apply, verify, rollback per device kind of the vessel profile).
     notes: >-
-      Profiles come from ASTRO_PROFILES or the profiles/ submodule; without either it runs in generic
-      mode with no device kinds. The machine finds its own host and vessel (hostname or permanent MAC);
+      Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES (a directory) or
+      ASTRO_PROFILES_URL at ASTRO_PROFILES_REF (hw.sh profile sync URL [REF] checks it out at profiles/);
+      without one it runs in generic mode with no device kinds. The machine finds its own host and vessel (hostname or permanent MAC);
       --vessel and --host override. Secrets live in ~/.config/astro/secrets.env (mode 600).
     params:
       - name: --vessel
@@ -112,7 +113,7 @@ commands:
         required: false
         description: This machine's registry host.
       - name: command
-        description: whoami [--root], env [KEY], profile show [NAME], secrets check, or KIND VERB (each with --help).
+        description: whoami [--root|--registry], env [KEY], profile show [NAME], profile sync [URL [REF]], secrets check, or KIND VERB (each with --help).
     examples:
       - $ROS_WS/hw.sh whoami
       - $ROS_WS/hw.sh env ROUTER_IP

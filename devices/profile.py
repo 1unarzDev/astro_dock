@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Layered device profiles for devices/lib.sh. A profile root (ASTRO_PROFILES, the profiles/ submodule)
-holds one directory per profile: NAME/profile.yaml (extends: PARENT, kind: vessel|station, network_env:
+"""Layered device profiles for devices/lib.sh. A profile root (the user's profile set: ASTRO_PROFILES, else
+the profiles/ checkout of ASTRO_PROFILES_URL; see hw_profiles_config) holds one directory per profile: NAME/profile.yaml (extends: PARENT, kind: vessel|station, network_env:
 PATH, registry: PATH; paths relative to that directory) and one KIND.yaml per device kind. The fleet is
 the one profile without `extends` (and without `kind`); every other profile is a member, a vessel or a
 station. The fleet's optional topology.yaml (nodes, links) and secrets.keys are not device kinds.

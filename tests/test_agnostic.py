@@ -1,5 +1,6 @@
 """astro_dock is a generic ROS container workspace: no tracked file names a boat, fleet or LAN of one robot
-team. Those belong in the profiles/ submodule; test data uses the fixture fleet (tests/data/profiles).
+team. Those belong in the user's profile set (profiles/, not tracked); test data uses the fixture fleet
+(tests/data/profiles).
 
 PENDING lists the files that still hit, each with the deferred groups that keep it. A group is scoped by a
 pattern: a hit line of a listed file passes only when every boat literal on it lies inside a match of one
@@ -16,7 +17,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SPECIFIC = re.compile(r'blastoise|squirtle|tranquility|roboboat|mhseals|mhsboat|odroid|192\.168\.0\.'
                       r'|\bdomain\W{0,3}42\b', re.IGNORECASE)
-SUBMODULES = ('profiles', 'src/ros_tcp_endpoint')
+SUBMODULES = ('src/ros_tcp_endpoint',)
 ALLOWED = ('tests/data/',)
 SELF = 'tests/test_agnostic.py'
 
@@ -31,12 +32,7 @@ DATA = ('MHSEALS_DATA', r'MHSEALS_DATA')
 CONFIG = ('~/.config/mhseals', r'\.config/mhseals')
 KEEPER = ('the mhseals keeper pattern', r'mhseals_testing harness|mhseals\.\*harness')
 GITMODULES = ('.gitmodules URLs', r'github\.com/MHSeals/[\w.-]+')
-POINTER = ('the profiles/ pointer in README',
-           r"MHSeals' fleet \(the roboboat fleet, the blastoise and squirtle vessels and the control_station station, "
-           r"which the operator laptop tranquility resolves to\)|\[MHSeals/mhseals_profile\]")
 HOOK_TABLE = ('mhseals_testing agent-hook regression table', r'ssh blastoise\b|mhseals_testing')
-LEGACY_LINKS = ('legacy config/ links into the blastoise profile (astro-clock.py LEGACY_ENV, old callers)',
-                r'^\.\./profiles/blastoise/(?:network\.env|devices\.yaml)$')
 
 PENDING = {
     '.devcontainer/Dockerfile.dev': (IMAGE,),
@@ -55,9 +51,7 @@ PENDING = {
     '.github/scripts/test-jetson-validation.py': (CONTAINER,),
     '.github/workflows/images.yml': (IMAGE,),
     '.gitmodules': (GITMODULES,),
-    'README.md': (IMAGE, CONTAINER, DATA, CONFIG, GITMODULES, POINTER),
-    'config/boat-network.env': (LEGACY_LINKS,),
-    'config/devices.yaml': (LEGACY_LINKS,),
+    'README.md': (IMAGE, CONTAINER, DATA, CONFIG, GITMODULES),
     'config/run.yaml': (IMAGE,),
     'tests/test_agents_hook.py': (HOOK_TABLE, DATA, CONTAINER),
     'tests/test_run_env.py': (DATA,),
@@ -107,7 +101,7 @@ class Agnostic(unittest.TestCase):
             for number, line in lines:
                 if SPECIFIC.search(scope.sub('', line)):
                     unexpected.append(label(name, number, line))
-        self.assertEqual(unexpected, [], 'boat-specific literals (move them to the profiles submodule or the fixture '
+        self.assertEqual(unexpected, [], 'boat-specific literals (move them to the profile set or the fixture '
                                          'fleet; a PENDING file allows only its groups\' patterns):\n' + '\n'.join(unexpected))
 
     def test_pending_only_shrinks(self):
