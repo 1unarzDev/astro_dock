@@ -49,7 +49,6 @@ from my_robot.tasks import Task
 ### Modularity
 - Organize code into modules and packages to promote separation of concerns.
 - Each module should have a single responsibility.
-- Use the `Task` class for defining tasks and ensure each task is in its own file.
 
 ## Best Practices
 

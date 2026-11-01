@@ -2,7 +2,7 @@
 """One hook for every coding agent: Claude Code and Codex call this; workspace packages decide.
 
     python3 -I .agents/hook.py claude|codex      # a hook: the agent CLI's event JSON on stdin
-    python3 -I .agents/hook.py --playbook        # print the full playbooks as text
+    python3 -I .agents/hook.py --playbook [claude|codex]   # print the full playbooks as text
 
 A package opts in with an ``agent_hook.py`` module at ``src/<repo>/<package>/agent_hook.py``
 that defines ``agent_event(event)``. Each one gets the same neutral event, whichever CLI sent it:
