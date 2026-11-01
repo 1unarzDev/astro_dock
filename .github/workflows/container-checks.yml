@@ -7,9 +7,7 @@ on:
       - "setup.linux.sh"
       - "hw.sh"
       - "devices/**"
-      - "profiles"
       - ".gitmodules"
-      - "config/boat-network.env"
       - "tests/**"
       - "fetch_bags.sh"
       - ".github/workflows/**"
@@ -23,8 +21,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Check out the pinned profiles (public submodule)
-        run: git submodule update --init profiles
       - name: Validate shell scripts
         run: |
           for script in setup.linux.sh hw.sh devices/*/*.sh .devcontainer/*.sh .github/scripts/*.sh tests/*.sh; do

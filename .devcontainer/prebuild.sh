@@ -69,28 +69,20 @@ if command -v getent >/dev/null; then
     fi
 fi
 # The ROS domain: the vessel's ROS_DOMAIN_ID (its network env, hw.sh env), injected into the adapter
-# here; else the fleet default of docker-compose.yml and config/run.yaml, which a stale adapter, a
-# host without a vessel and a checkout without the profiles submodule keep. ASTRO_ROS_DOMAIN_ID
-# (prebuild's or Compose's environment) overrides either. No PyYAML here: macOS has none.
+# here with the vessel itself (ASTRO_VESSEL, so the container keeps the vessel this host resolved, also
+# off its LAN); else astro_dock's default of docker-compose.yml and config/run.yaml, which a stale
+# adapter, a host without a vessel and a checkout without profiles keep. ASTRO_ROS_DOMAIN_ID and
+# ASTRO_VESSEL (prebuild's or Compose's environment) override them. No PyYAML here: macOS has none.
 hw="$script_dir/../hw.sh"
 domain_fix="export ASTRO_ROS_DOMAIN_ID=N where the dev container opens (prebuild and Compose read it), or rerun prebuild with ASTRO_VESSEL=NAME (hw.sh --vessel)"
-domain_default="ROS domain ${ASTRO_ROS_DOMAIN_ID:-of the fleet default (docker-compose.yml, config/run.yaml)}"
+domain_default="ROS domain ${ASTRO_ROS_DOMAIN_ID:-of the astro_dock default (docker-compose.yml, config/run.yaml)}"
 domain=""
+vessel=""
 reason() { sed -e 's/\x1b\[[0-9;]*m//g' -e '$!d' "$work_file.err"; }
 if ! profiles_root="$("$hw" whoami --root 2>"$work_file.err")"; then
     echo "WARNING: hw.sh cannot load the profiles ($(reason)); the dev container gets the $domain_default." >&2
 elif [[ -z "$profiles_root" ]]; then
-    if [[ -z "${ASTRO_PROFILES:-}" ]] && grep -qs '^\[submodule "profiles"\]' "$script_dir/../.gitmodules"; then
-        {
-            echo "WARNING: ======================================================================"
-            echo "WARNING: The profiles submodule is declared but not initialised: no vessel network env,"
-            echo "WARNING: so this dev container gets the $domain_default, not a vessel's own."
-            echo "WARNING: Run git submodule update --init profiles and rerun prebuild, or $domain_fix."
-            echo "WARNING: ======================================================================"
-        } >&2
-    else
-        echo "ROS domain: generic mode (no profile root), the $domain_default"
-    fi
+    echo "ROS domain: generic mode (no profiles), the $domain_default"
 elif ! domain="$("$hw" env ROS_DOMAIN_ID 2>"$work_file.err")"; then
     domain=""
     if grep -q 'is not a key' "$work_file.err"; then
@@ -103,12 +95,20 @@ elif ! domain="$("$hw" env ROS_DOMAIN_ID 2>"$work_file.err")"; then
         } >&2
     fi
 fi
+[[ -z "$profiles_root" ]] || vessel="$("$hw" whoami 2>/dev/null | sed -n 's/^vessel  *\([a-z0-9][a-z0-9_-]*\) (.*/\1/p')"
 if [[ -n "$domain" ]]; then
     [[ "$domain" =~ ^[0-9]+$ ]] && ((domain <= 232)) || { echo "Invalid ROS_DOMAIN_ID in the vessel's network env: $domain" >&2; exit 1; }
     echo "ROS domain $domain (the vessel's network env)${ASTRO_ROS_DOMAIN_ID:+; ASTRO_ROS_DOMAIN_ID=$ASTRO_ROS_DOMAIN_ID overrides it}"
     printf 'ros:\n  domain_id: %s\n' "$domain" > "$work_file.domain"
-    # Into services.dev.environment (a mapping in every adapter), replacing an adapter's own value.
-    awk -v value='${ASTRO_ROS_DOMAIN_ID:-'"$domain"'}' '
+fi
+if [[ -n "$domain$vessel" ]]; then
+    [[ -z "$vessel" ]] || echo "Vessel $vessel for the dev container${ASTRO_VESSEL:+ (ASTRO_VESSEL=$ASTRO_VESSEL there overrides it)}"
+    lines=()
+    [[ -z "$domain" ]] || lines+=("      ROS_DOMAIN_ID: \"\${ASTRO_ROS_DOMAIN_ID:-$domain}\"")
+    [[ -z "$vessel" ]] || lines+=("      ASTRO_VESSEL: \"\${ASTRO_VESSEL:-$vessel}\"")
+    lines="$(printf '%s\n' "${lines[@]}")"
+    # Into services.dev.environment (a mapping in every adapter), replacing an adapter's own values.
+    awk -v lines="$lines" '
         { line[NR] = $0 }
         END {
             for (i = 1; i <= NR; i++) if (line[i] == "  dev:") { start = i; break }
@@ -116,11 +116,11 @@ if [[ -n "$domain" ]]; then
             for (stop = start + 1; stop <= NR && line[stop] !~ /^([^ ]|  ?[^ ])/; stop++)
                 if (line[stop] == "    environment:") env = stop
             for (i = 1; i <= NR; i++) {
-                if (i > start && i < stop && line[i] ~ /^      ROS_DOMAIN_ID:/) continue
+                if (i > start && i < stop && line[i] ~ /^      (ROS_DOMAIN_ID|ASTRO_VESSEL):/) continue
                 print line[i]
                 if (env ? i == env : i == start) {
                     if (!env) print "    environment:"
-                    print "      ROS_DOMAIN_ID: \"" value "\""
+                    print lines
                 }
             }
         }' "$work_file" > "$work_file.bak" && mv "$work_file.bak" "$work_file"

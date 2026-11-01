@@ -19,8 +19,4 @@ if astro_banner_wanted; then
   export ASTRO_BANNER_SHOWN=1
   python3 -I "${BASH_SOURCE[0]%/*}/astro_banner.py" 2>/dev/null
 fi
-# A clone pulled without its profiles submodule (dev.bashrc's check): one line in every person's shell.
-if astro_person_shell && declare -F __astro_profiles_missing >/dev/null && __astro_profiles_missing; then
-  printf '\033[1;33mWARNING:\033[0m %s\n' "$__ASTRO_PROFILES_HINT" >&2
-fi
 unset -f astro_banner_wanted astro_person_shell

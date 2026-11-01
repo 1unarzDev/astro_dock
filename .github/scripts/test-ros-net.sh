@@ -21,7 +21,7 @@ socket.socket.connect = connect
 socket.socket.getsockname = lambda self: (os.environ['FAKE_SRC'], 0)
 PY
 
-sed -n -e '/^__astro_network_env() {/,/^}/p' -e '/^__astro_profiles_missing() {/,/^}/p' -e '/^__ASTRO_PROFILES_HINT=/p' \
+sed -n -e '/^__astro_network_env() {/,/^}/p' \
   -e '/^ros_net() {/,/^}/p' "$root/.devcontainer/dev.bashrc" > "$tmp/ros_net.sh"
 ros_net() {
   env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" ASTRO_NETWORK_ENV="$net" \
@@ -53,26 +53,24 @@ off="$(env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" 
 check "off the vessel subnet the derived peers are dropped" "$off" unset
 grep -q '<leaseDuration><sec>60</sec>' "$root/config/fastdds.xml" || { echo "FAIL: fastdds.xml lease"; exit 1; }
 
-# A clone pulled without the profiles submodule: generic mode. ros_net -v and a person's shell
-# name the fix, an agent's shell stays silent, and ASTRO_NETWORK_ENV is never exported empty.
+# A checkout without profiles: generic mode, quiet (no warning in ros_net -v or a person's shell), and
+# ASTRO_NETWORK_ENV and ASTRO_REGISTRY are never exported empty.
 generic="$tmp/generic"
-mkdir -p "$generic/profiles"
-git -C "$root" ls-files -z | grep -zv '^profiles$' | tar -C "$root" --null -T - -cf - | tar -C "$generic" -xf -
-hint='git submodule update --init profiles'
+mkdir -p "$generic"
+git -C "$root" ls-files -z | tar -C "$root" --null -T - -cf - | tar -C "$generic" -xf -
+hint='WARNING'
 gen() {
   env -i PATH="$PATH" HOME="$tmp" PYTHONPATH="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$generic" FAKE_PEER="$tmp/peer" \
-    FAKE_SRC=10.0.1.2 "$@" bash -c 'ros2() { :; }; . "$1"; ros_net -v; env | grep -c "^ASTRO_NETWORK_ENV=" || true' _ "$tmp/ros_net.sh" 2>&1
+    FAKE_SRC=10.0.1.2 "$@" bash -c 'ros2() { :; }; . "$1"; ros_net -v; env | grep -c "^ASTRO_\(NETWORK_ENV\|REGISTRY\)=" || true' _ "$tmp/ros_net.sh" 2>&1
 }
 out="$(gen)"
-grep -qF "$hint" <<<"$out" || { echo "FAIL: ros_net -v without the profiles submodule: $out"; exit 1; }
-check "no empty ASTRO_NETWORK_ENV exported" "$(tail -1 <<<"$out")" 0
+! grep -qF "$hint" <<<"$out" || { echo "FAIL: ros_net -v warned in generic mode: $out"; exit 1; }
+check "no empty ASTRO_NETWORK_ENV or ASTRO_REGISTRY exported" "$(tail -1 <<<"$out")" 0
 check "an inherited empty ASTRO_NETWORK_ENV is dropped" "$(gen ASTRO_NETWORK_ENV= | tail -1)" 0
-! grep -qF "$hint" <<<"$(ros_net FAKE_SRC=10.0.1.2 2>&1)" || { echo "FAIL: warned with the submodule present"; exit 1; }
 { cat "$tmp/ros_net.sh"; echo ". '$root/.devcontainer/astro-banner.sh'"; } > "$tmp/rc.sh"
 shell() {
   env -i PATH="$PATH" HOME="$tmp" TERM=xterm ROS_WS="$generic" ASTRO_BANNER=0 "$@" \
     script -qec "bash --rcfile '$tmp/rc.sh' -i" /dev/null <<<exit 2>&1
 }
-[[ $(shell | grep -cF "$hint") == 1 ]] || { echo "FAIL: a person's shell did not get one warning line"; exit 1; }
-! shell CLAUDECODE=1 | grep -qF "$hint" || { echo "FAIL: an agent shell got the warning"; exit 1; }
+! shell | grep -qF "$hint" || { echo "FAIL: a person's shell warned in generic mode"; exit 1; }
 echo "ros_net ok"

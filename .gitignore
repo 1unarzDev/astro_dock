@@ -9,6 +9,8 @@ router_setup_state/
 .devcontainer/docker-compose.override.yml
 # Workspace repositories (the profile's repos, or your own) are not part of astro_dock.
 /src/*
+# Neither is the profile set: hw.sh profile sync checks out yours here (ASTRO_PROFILES_URL).
+/profiles/
 .devcontainer/run-generations/
 .devcontainer/installed.local.txt
 *.egg-info/

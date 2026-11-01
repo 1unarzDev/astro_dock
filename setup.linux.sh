@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # The vessel's network env (its profile.yaml network_env), as hw.sh resolves it.
 network_env() { "$SCRIPT_DIR/hw.sh" env; }
-# The profile root (empty in generic mode: no ASTRO_PROFILES and no profiles/ submodule).
+# The profile root (empty in generic mode: no profile set configured; ./hw.sh profile sync URL [REF]).
 PROFILE_ROOT_CHECKED=false
 PROFILE_ROOT=""
 profile_root() {
@@ -16,7 +16,7 @@ profile_root() {
 GENERIC_NOTED=false
 needs_profile() {
     profile_root && return 0
-    $GENERIC_NOTED || echo "Generic mode (no profile root: set ASTRO_PROFILES or run git submodule update --init profiles): skipping the repos, gateway, boat and jetson stages."
+    $GENERIC_NOTED || echo "Generic mode (no profiles: ./hw.sh profile sync URL [REF], or ASTRO_PROFILES=DIR): skipping the repos, gateway, boat and jetson stages."
     GENERIC_NOTED=true
     SKIPPED+=("$1")
     return 1
@@ -363,15 +363,10 @@ stage_compose() {
 
 # This computer's repositories (./hw.sh hosts repos: repos.all and its roles'): clone the missing ones
 # under src/, keep them out of git status, then build them here when colcon is on PATH, else in the
-# dev container. The pinned profiles submodule is initialised first (it names the repositories).
+# dev container. The profile set names them (hw.sh checks out a configured one on first use).
 stage_repos() {
     local list name url branch exclude names=() build container
     heading "Workspace repositories"
-    if [[ -z "${ASTRO_PROFILES:-}" ]] && git -C "$SCRIPT_DIR" config -f .gitmodules submodule.profiles.path >/dev/null 2>&1 \
-        && ! compgen -G "$SCRIPT_DIR/profiles/*/profile.yaml" >/dev/null; then
-        run git -C "$SCRIPT_DIR" submodule update --init profiles
-        PROFILE_ROOT_CHECKED=false
-    fi
     needs_profile repos || return 0
     list="$("$SCRIPT_DIR/hw.sh" hosts repos "${ROLES[@]}")" || { SKIPPED+=(repos); return; }
     echo "Clones this computer's repositories under src/ (existing checkouts are kept) and builds them:"
