@@ -4,7 +4,7 @@ package: astro_dock
 summary: ROS 2 container workspace helpers, available in every image shell.
 commands:
   - name: help
-    run: astro-help
+    run: help
     summary: Browse every workspace package's commands, fill in parameters, and run them.
     params:
       - name: --list
@@ -14,23 +14,24 @@ commands:
         required: false
         description: With --list, show full details of the commands matching this word.
     examples:
-      - astro-help --list
-      - astro-help --list install
+      - help --list
+      - help --list install
 
   - name: astro-ros-install
     run: astro-ros-install
     summary: Install a ROS or apt package into this running container by distro-independent name.
     notes: >-
       ROS names resolve to ros-$ROS_DISTRO-* debs, else build from source into /opt/astro-extra.
-      The shell reloads after it. Installs last until the container is recreated: add the
-      name to .devcontainer/packages.txt (jetson-packages.txt on Jetson) to keep it.
+      The shell reloads after it. Installs last until the container is recreated; each is recorded
+      in .devcontainer/installed.local.txt: move the names to packages.txt (jetson-packages.txt on
+      Jetson, requirements.txt for pip) to keep them.
     params:
       - name: --source
         type: bool
         description: Build ROS packages from source even when a deb exists.
       - name: names
         type: list
-        description: Package names, e.g. nav2_bringup or htop.
+        description: Package names, e.g. nav2_bringup, htop, or pip:SPEC for /workspace/venv.
     examples:
       - astro-ros-install nav2_bringup
       - astro-ros-install --source examples_rclcpp_minimal_publisher
@@ -59,6 +60,10 @@ commands:
     run: ros_net
     summary: Re-detect this host's robot-subnet address and pin DDS to it (each new shell does this).
     notes: Set ASTRO_DDS_ADDRESS to force an address; off the robot subnet DDS uses all interfaces.
+    params:
+      - name: -v
+        type: bool
+        description: Print the choice (and warn when the profiles submodule is missing).
 
   - name: rviz2
     run: rviz2
@@ -70,17 +75,27 @@ commands:
     notes: Each stage explains itself and asks first; reruns are safe.
     params:
       - name: --components
-        type: list
         default: clock,docker,gpu,devices,devtools,compose
-        description: Comma-separated stages to run, e.g. clock,docker.
+        description: Comma-separated stages (also repos, gateway, boat, jetson, operator-key), e.g. clock,docker.
       - name: --dry-run
         type: bool
         description: Print the commands without running them.
       - name: --yes
         type: bool
         description: Approve the plan and every stage.
+      - name: --non-interactive
+        type: bool
+        description: No prompts (needs --yes).
+      - name: --vessel
+        description: The vessel profile (default this machine's, as hw.sh whoami finds it).
+      - name: --host
+        description: This machine's registry host, or any other name for a generic control station.
+      - name: --role
+        type: list
+        description: Repos stage roles whose repositories to add to repos.all (default this host's roles).
     examples:
       - ./setup.linux.sh --components clock --dry-run
+      - ./setup.linux.sh --components repos --role operator
 
   - name: hw.sh
     run: $ROS_WS/hw.sh
@@ -97,12 +112,13 @@ commands:
         required: false
         description: This machine's registry host.
       - name: command
-        description: whoami, env [KEY], profile show [NAME], secrets check, or KIND VERB.
+        description: whoami [--root], env [KEY], profile show [NAME], secrets check, or KIND VERB (each with --help).
     examples:
       - $ROS_WS/hw.sh whoami
       - $ROS_WS/hw.sh env ROUTER_IP
       - $ROS_WS/hw.sh secrets check
       - $ROS_WS/hw.sh --vessel VESSEL radio status
+      - $ROS_WS/hw.sh hosts repos
 
   - name: net/mdns.sh
     run: $ROS_WS/net/mdns.sh
@@ -111,3 +127,23 @@ commands:
   - name: net/share.sh
     run: $ROS_WS/net/share.sh
     summary: Create a Samba network folder advertised over mDNS (interactive; run on the host).
+    notes: Asks for the share name, user and password; mounts it at /mnt/NAME and keeps the login in ~/.smbcredentials.
+
+  - name: fetch_bags.sh
+    run: $ROS_WS/fetch_bags.sh
+    summary: Copy a host's session bags into bags/NAME (reads the remote only; rsync, else tar over ssh).
+    params:
+      - name: source
+        description: HOST:REMOTE_DIR, e.g. jetson:~/astro_dock/bags/SESSION.
+      - name: name
+        description: The directory under bags/ to copy into.
+
+  - name: astro-clock.py
+    run: $ROS_WS/.devcontainer/astro-clock.py
+    summary: Clock offset of each LAN host by one SNTP query (default TIME_SERVER and the STATIC_LEASES hosts).
+    notes: Exits 1 when a host is more than 50 ms off, unsynchronised or silent.
+    params:
+      - name: hosts
+        type: list
+        required: false
+        description: Hosts to ask instead of the vessel's network env.

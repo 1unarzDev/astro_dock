@@ -1,5 +1,8 @@
 import importlib.util
+import os
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -9,6 +12,8 @@ spec = importlib.util.spec_from_file_location('astro_help', ROOT / '.devcontaine
 astro_help = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(astro_help)
 
+HW_ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null',
+              ASTRO_PROFILES=str(ROOT / 'tests/data/profiles'), ASTRO_VESSEL='a')   # the fixture fleet
 LAUNCH = {'name': 'robot.launch', 'run': 'ros2 launch pkg robot.launch.py',
           'params': [{'name': 'sim', 'type': 'bool', 'default': True}]}
 
@@ -113,6 +118,50 @@ class BuilderTest(unittest.TestCase):
         self.assertIn('$ astro-ros-install <names>', detail)
         self.assertNotIn('ros_env', detail)
         self.assertIn('No command matches', astro_help.text(packages, 'zzz'))
+
+
+def run(*args, **env):
+    return subprocess.run(['/bin/bash', *args], cwd=ROOT, env=dict(HW_ENV, **env), stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=60)
+
+
+def dispatched():
+    """The commands hw.sh's top-level case handles, besides its own help."""
+    body = re.search(r'^case \$\{1:-\} in\n(.*?)^esac', (ROOT / 'hw.sh').read_text(), re.M | re.S).group(1)
+    arms = re.findall(r'^    ([^\s()]+)\)', body, re.M)
+    return {name for arm in arms for name in arm.split('|')} - {"''", '-h', '--help', 'help'}
+
+
+class HelpCoverageTest(unittest.TestCase):
+    """hw.sh's usage, each command's --help and astro-help.yaml name exactly what the scripts handle."""
+
+    def test_hw_usage_matches_dispatch(self):
+        usage = run('hw.sh', '--help')
+        self.assertEqual(usage.returncode, 0, usage.stderr)
+        self.assertEqual(run('hw.sh', 'help').stdout, usage.stdout)
+        listed = set(re.findall(r'^ {7}hw\.sh (\S+)', usage.stdout, re.M))
+        self.assertEqual(listed, dispatched())
+        for name in sorted(listed):
+            with self.subTest(command=name):
+                own = run('hw.sh', name, '--help')
+                self.assertEqual(own.returncode, 0, own.stderr)
+                self.assertTrue(own.stdout.startswith('Usage: hw.sh ' + name), own.stdout)
+
+    def test_astro_help_names_every_hw_command_and_no_other(self):
+        hw = next(c for c in astro_help.parse(astro_help.OWN)['commands'] if c['name'] == 'hw.sh')
+        described = next(p['description'] for p in hw['params'] if p['name'] == 'command')
+        named = {item.split()[0] for item in re.split(r', (?:or )?', described)}
+        self.assertEqual(named, dispatched() | {'KIND'})
+
+    def test_every_net_script_is_listed_and_answers_help(self):
+        runs = {c['run'] for c in astro_help.parse(astro_help.OWN)['commands']}
+        for script in sorted((ROOT / 'net').glob('*.sh')):
+            name = script.relative_to(ROOT).as_posix()
+            with self.subTest(script=name):
+                self.assertIn('$ROS_WS/' + name, runs)
+                out = run(name, '--help', PATH='/nonexistent')   # a missing guard installs nothing
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertTrue(out.stdout.startswith('Usage: ' + name), out.stdout)
 
 
 if __name__ == '__main__':
