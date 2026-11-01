@@ -39,27 +39,63 @@ hw_secrets() {
     fi
 }
 
-# hw_profiles_root: ASTRO_PROFILES > HW_ROOT/profiles (the pinned submodule, once initialised) >
-# empty (generic mode).
+# The profile set is the user's, never astro_dock's. HW_PROFILES_CONFIG (ASTRO_PROFILES_CONFIG, default
+# ~/.config/astro/profiles.env; set variables win) names it: ASTRO_PROFILES, a directory you keep up to
+# date, or ASTRO_PROFILES_URL, a git repository hw.sh checks out at HW_ROOT/profiles (gitignored) at
+# ASTRO_PROFILES_REF (a commit, tag or branch; default main). Neither: generic mode.
+hw_profiles_config() {
+    HW_PROFILES_CONFIG=${ASTRO_PROFILES_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/astro/profiles.env}
+    hw_load_env "$HW_PROFILES_CONFIG"
+}
+
+# hw_profiles_use URL [REF]: record the source in HW_PROFILES_CONFIG, keeping its other lines.
+hw_profiles_use() {
+    local tmp
+    [[ -n $1 && $1 != -* ]] || die "Usage: $HW_PROGRAM profile sync [URL [REF]]"
+    mkdir -p -- "$(dirname -- "$HW_PROFILES_CONFIG")" && tmp=$(mktemp "$HW_PROFILES_CONFIG.XXXXXX") || exit 1
+    { grep -v '^ASTRO_PROFILES_\(URL\|REF\)=' "$HW_PROFILES_CONFIG" 2>/dev/null || :
+      printf 'ASTRO_PROFILES_URL=%s\n' "$1"; [[ -z ${2:-} ]] || printf 'ASTRO_PROFILES_REF=%s\n' "$2"; } >"$tmp"
+    chmod 644 -- "$tmp" && mv -- "$tmp" "$HW_PROFILES_CONFIG" || exit 1
+    ASTRO_PROFILES_URL=$1 ASTRO_PROFILES_REF=${2:-}
+}
+
+# hw_profiles_commit: the commit ASTRO_PROFILES_REF names in HW_ROOT/profiles (a branch as last fetched).
+hw_profiles_commit() {
+    local ref=${ASTRO_PROFILES_REF:-main}
+    git -C "$HW_ROOT/profiles" rev-parse -q --verify "refs/remotes/origin/$ref^{commit}" 2>/dev/null \
+        || git -C "$HW_ROOT/profiles" rev-parse -q --verify "$ref^{commit}" 2>/dev/null
+}
+
+# hw_profiles_sync: HW_ROOT/profiles cloned (or fetched) from ASTRO_PROFILES_URL and checked out at
+# ASTRO_PROFILES_REF; refused over local changes, which belong in the profile repository.
+hw_profiles_sync() {
+    local dir=$HW_ROOT/profiles commit
+    [[ -z ${ASTRO_PROFILES:-} ]] || die "ASTRO_PROFILES=$ASTRO_PROFILES is your own directory: update it there"
+    [[ -n ${ASTRO_PROFILES_URL:-} ]] \
+        || die "No profile source: $HW_PROGRAM profile sync URL [REF] records one in $HW_PROFILES_CONFIG"
+    if [[ -e $dir/.git ]]; then
+        [[ -z $(git -C "$dir" status --porcelain) ]] \
+            || die "$dir has local changes: push them to the profile repository or discard them, then sync"
+        git -C "$dir" remote set-url origin "$ASTRO_PROFILES_URL" && git -C "$dir" fetch -q --tags origin \
+            || die "Cannot fetch $ASTRO_PROFILES_URL into $dir"
+    else
+        [[ ! -e $dir ]] || rmdir -- "$dir" 2>/dev/null || die "$dir is not a git checkout; move it away to sync"
+        git clone -q --no-checkout -- "$ASTRO_PROFILES_URL" "$dir" || die "Cannot clone $ASTRO_PROFILES_URL"
+    fi
+    commit=$(hw_profiles_commit) || die "$ASTRO_PROFILES_URL has no ${ASTRO_PROFILES_REF:-main}"
+    git -C "$dir" checkout -q --detach "$commit" || die "Cannot check out $commit in $dir"
+    info "profiles $dir: $ASTRO_PROFILES_URL at ${ASTRO_PROFILES_REF:-main} (${commit:0:7})" >&2
+}
+
+# hw_profiles_root: ASTRO_PROFILES > HW_ROOT/profiles once it holds a profile > empty (generic mode).
 hw_profiles_root() {
-    local dir
     if [[ -n ${ASTRO_PROFILES:-} ]]; then
         [[ -d $ASTRO_PROFILES ]] || die "ASTRO_PROFILES=$ASTRO_PROFILES is not a directory"
         printf '%s\n' "$ASTRO_PROFILES"
-        return
+    elif compgen -G "$HW_ROOT/profiles/*/profile.yaml" >/dev/null; then
+        printf '%s\n' "$HW_ROOT/profiles"
     fi
-    for dir in "$HW_ROOT/profiles"; do
-        compgen -G "$dir/*/profile.yaml" >/dev/null && { printf '%s\n' "$dir"; return; }
-    done
     return 0
-}
-
-# hw_profiles_missing: true when .gitmodules declares the profiles submodule but HW_ROOT/profiles
-# holds no profile (a git pull without the submodule). Without it every vessel value is gone: no
-# network env, no registry (generic mode).
-hw_profiles_missing() {
-    [[ -z ${ASTRO_PROFILES:-} ]] && grep -qs '^\[submodule "profiles"\]' "$HW_ROOT/.gitmodules" \
-        && ! compgen -G "$HW_ROOT/profiles/*/profile.yaml" >/dev/null
 }
 
 # hw_init: layers environment > secrets file > the profile chain (devices/profile.py). Every profile of
@@ -75,6 +111,7 @@ hw_profiles_missing() {
 hw_init() {
     local out
     hw_secrets
+    hw_profiles_config
     HW_PROFILES_ROOT='' HW_SCOPE_ERROR='' HW_PROFILE_KINDS='' HW_PROFILE_CHAIN=''
     if [[ -n ${ASTRO_PROFILE:-} && -z ${ASTRO_VESSEL:-} ]]; then
         warn "ASTRO_PROFILE/--profile is now ASTRO_VESSEL/--vessel"
@@ -87,10 +124,17 @@ hw_init() {
         eval "$out"
         return
     fi
+    # A configured source is checked out on first use; moving it to a new ref is `profile sync`.
+    if [[ -z ${ASTRO_PROFILES:-} && -n ${ASTRO_PROFILES_URL:-} ]]; then
+        if ! compgen -G "$HW_ROOT/profiles/*/profile.yaml" >/dev/null; then
+            hw_profiles_sync
+        elif [[ $(hw_profiles_commit) != "$(git -C "$HW_ROOT/profiles" rev-parse -q --verify HEAD 2>/dev/null)" ]]; then
+            warn "profiles/ is not at ASTRO_PROFILES_REF=${ASTRO_PROFILES_REF:-main} ($HW_PROFILES_CONFIG): run $HW_PROGRAM profile sync"
+        fi
+    fi
     HW_PROFILES_ROOT=$(hw_profiles_root)
     if [[ -z $HW_PROFILES_ROOT ]]; then
-        HW_SCOPE_ERROR="No profile root (generic mode): set ASTRO_PROFILES or run git submodule update --init profiles"
-        ! hw_profiles_missing || warn "The profiles submodule is not initialised: generic mode, without the vessel's network env and registry. Run: git submodule update --init profiles"
+        HW_SCOPE_ERROR="No profiles (generic mode): $HW_PROGRAM profile sync URL [REF], or ASTRO_PROFILES=DIR"
         ASTRO_NETWORK_ENV=${ASTRO_NETWORK_ENV:-} ASTRO_REGISTRY=${ASTRO_REGISTRY:-}
     else
         out=$(python3 -I "$HW_ROOT/devices/profile.py" resolve "$HW_PROFILES_ROOT") || exit 1

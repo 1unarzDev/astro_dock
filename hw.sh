@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Robot device tooling: ./hw.sh [--vessel V] [--host H] KIND VERB [ARGS]. KIND is a YAML file of the
 # vessel's profile chain (PROFILES/<vessel>/KIND.yaml, merged over its parents) whose `driver:` names
-# devices/<driver>.sh. PROFILES is ASTRO_PROFILES, else the profiles/ submodule; without one, generic mode.
+# devices/<driver>.sh. PROFILES is the user's profile set (ASTRO_PROFILES, else the profiles/ checkout of
+# ASTRO_PROFILES_URL; ~/.config/astro/profiles.env); without one, generic mode.
 # Every driver implements status, plan, apply, verify and rollback; status and plan change nothing.
 set -Eeuo pipefail
 
@@ -28,9 +29,10 @@ verbs() { declare -F | sed -n 's/^declare -f driver_//p' | grep -vx usage | tr '
 
 # The commands besides KIND VERB, as usage prints them; `hw.sh COMMAND --help` prints its own line.
 HW_COMMANDS=(
-    "whoami [--root]|this machine's host and vessel, and how found (--root: the profile root)"
+    "whoami [--root|--registry]|this machine's host and vessel, and how found (or the profile root or registry)"
     "env [KEY]|the vessel's network env path, or one of its keys"
     "profile show [NAME]|a merged profile (no secrets)"
+    "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
     "secrets check|the secrets file and the missing key names (never values)"
 )
 
@@ -52,7 +54,7 @@ usage() {
     printf 'An operator laptop is a control station: a registry host with the operator role, --host NAME\n'
     printf 'of no registry, or an address on one vessel'"'"'s LAN_SUBNET (never a boat computer).\n'
     if [[ -z $HW_PROFILES_ROOT ]]; then
-        printf 'Generic mode: no profile root (ASTRO_PROFILES or the profiles/ submodule), so no device kinds.\n'
+        printf 'Generic mode: no profiles (%s profile sync URL [REF], or ASTRO_PROFILES=DIR), so no device kinds.\n' "$HW_PROGRAM"
         return
     fi
     printf 'Kinds in profile %s%s:\n' "${HW_PROFILE_CHAIN// / -> }" \
@@ -62,12 +64,19 @@ usage() {
     done
 }
 
+# profiles_source: " (URL at REF, commit)" for the profiles/ checkout of a configured source.
+profiles_source() {
+    [[ -z ${ASTRO_PROFILES:-} && -n ${ASTRO_PROFILES_URL:-} ]] || return 0
+    printf ' (%s at %s, %s)' "$ASTRO_PROFILES_URL" "${ASTRO_PROFILES_REF:-main}" \
+        "$(git -C "$HW_PROFILES_ROOT" rev-parse --short HEAD 2>/dev/null)"
+}
+
 whoami_report() {
     if [[ -z $HW_PROFILES_ROOT ]]; then
-        printf 'profiles  none: generic mode (set ASTRO_PROFILES or run git submodule update --init profiles)\n'
+        printf 'profiles  none: generic mode (%s profile sync URL [REF], or ASTRO_PROFILES=DIR)\n' "$HW_PROGRAM"
         return
     fi
-    printf 'profiles  %s\n' "$HW_PROFILES_ROOT"
+    printf 'profiles  %s%s\n' "$HW_PROFILES_ROOT" "$(profiles_source)"
     printf 'fleet     %s; members %s\n' "$HW_FLEET" "$HW_MEMBERS"
     printf 'host      %s (%s)\n' "${ASTRO_HOST:-none}" "$HW_SELF_HOW"
     [[ -z $HW_SELF_MEMBER ]] || printf 'station   %s\n' "$HW_SELF_MEMBER"
@@ -110,6 +119,13 @@ while (($#)); do
         *) break ;;
     esac
 done
+# profile sync needs no profile root: it makes one.
+if [[ "${1:-} ${2:-}" == "profile sync" && ! " ${3:-} " =~ \ (-h|--help)\  ]]; then
+    hw_profiles_config
+    [[ -z ${3:-} ]] || hw_profiles_use "$3" "${4:-}"
+    hw_profiles_sync
+    exit 0
+fi
 hw_init
 if [[ " ${*:2:2} " =~ \ (-h|--help)\  && -n $(command_usage "${1:-}") ]]; then
     command_usage "$1" | sed '1s/^      /Usage:/'
@@ -118,7 +134,11 @@ fi
 case ${1:-} in
     ''|-h|--help|help) usage; exit 0 ;;
     whoami)
-        if [[ ${2:-} == --root ]]; then printf '%s\n' "$HW_PROFILES_ROOT"; else whoami_report; fi
+        case ${2:-} in
+            --root) printf '%s\n' "$HW_PROFILES_ROOT" ;;
+            --registry) printf '%s\n' "${ASTRO_REGISTRY:-}" ;;
+            *) whoami_report ;;
+        esac
         exit 0
         ;;
     secrets)
@@ -127,7 +147,7 @@ case ${1:-} in
         exit
         ;;
     profile)
-        [[ ${2:-} == show ]] || die "Usage: $HW_PROGRAM profile show [NAME]"
+        [[ ${2:-} == show ]] || die "Usage: $HW_PROGRAM profile show [NAME] | profile sync [URL [REF]]"
         [[ -n $HW_PROFILES_ROOT ]] || die "$HW_SCOPE_ERROR"
         dir=$HW_PROFILE
         if [[ -n ${3:-} ]]; then
