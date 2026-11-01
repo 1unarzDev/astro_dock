@@ -11,7 +11,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'tests/data/profiles'                  # the fixture fleet (vessels a and b, station s)
-# The profiles/ submodule when initialised (else its test skips).
+# Your profile set's checkout at profiles/ (hw.sh profile sync), when present (else its test skips).
 SHIPPED = ROOT / 'profiles' if any((ROOT / 'profiles').glob('*/profile.yaml')) else None
 REQUIRED = ('status', 'plan', 'apply', 'verify', 'rollback')
 VERBS = ''.join('driver_%s() { echo "%s $*"; touch "$MARK"; }\n' % (v, v) for v in REQUIRED)
@@ -116,13 +116,13 @@ class Contract(unittest.TestCase):
                 run = subprocess.run(['bash', '-c', check], capture_output=True, text=True)
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
-    def test_every_member_of_the_profiles_submodule_loads(self):
-        """The pinned profiles/ submodule, whatever its members: each shows, and each vessel's kinds print
-        their help. Its own repository tests its values."""
+    def test_every_member_of_the_checked_out_profiles_loads(self):
+        """profiles/, whatever its members: each shows, and each vessel's kinds print their help. Its own
+        repository tests its values."""
         if SHIPPED is None:
-            self.skipTest('the profiles submodule is not initialised (generic checkout)')
+            self.skipTest('no profiles/ checkout (generic checkout)')
         environ = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
-        env = {**environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent'}
+        env = {**environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_PROFILES': str(SHIPPED)}
         members = sorted(p.parent for p in SHIPPED.glob('*/profile.yaml'))
         self.assertTrue(members)
         for profile in members:

@@ -1,6 +1,8 @@
-"""hw.sh hosts with an ssh stand-in that records scripts; nothing is deployed."""
+"""hw.sh hosts with an ssh stand-in that records scripts; nothing is deployed. The host-side profiles
+scripts also run against scratch repositories (the fixture fleet as a git repository)."""
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -12,7 +14,31 @@ PROFILES = ROOT / 'tests/data/profiles'                 # the fixture fleet, ves
 FAKE_SSH = '''#!/usr/bin/env bash
 { echo "== $*"; cat; } >> "$FAKE_SSH_LOG"
 '''
+GIT_ENV = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 't',
+           'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
 REGISTRY = 'defaults: {ssh: true, container: box, workspace: ~/ws}\nhosts:\n  a: {}\n  r: {ssh: false}\n  b: {user: x}\n'
+
+
+
+def git(repo, *args):
+    return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True,
+                          env={**os.environ, **GIT_ENV}).stdout.strip()
+
+
+def commit(repo, name):
+    Path(repo, name).write_text(name + '\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', name)
+    return git(repo, 'rev-parse', 'HEAD')
+
+
+def fleet_repo(path, origin='https://example.invalid/fleet.git'):
+    """The fixture fleet as a git checkout with an origin: its commit."""
+    shutil.copytree(PROFILES, path)
+    git(path, 'init', '-q', '-b', 'main')
+    if origin:
+        git(path, 'remote', 'add', 'origin', origin)
+    return commit(path, 'README')
 
 
 class Hosts(unittest.TestCase):
@@ -26,7 +52,7 @@ class Hosts(unittest.TestCase):
             result = subprocess.run(
                 [str(ROOT / script), *command], capture_output=True, text=True,
                 env={**os.environ, 'HW_SSH': str(Path(tmp, 'ssh')), 'FAKE_SSH_LOG': str(log),
-                     'XDG_STATE_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', **env})
+                     'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', **env})
             return result, log.read_text()
 
     def test_deploy_fast_forwards_configured_repos_and_builds(self):
@@ -34,7 +60,8 @@ class Hosts(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('== host-a bash -s', calls)
         self.assertIn('for repo in astro_dock repo_x', calls)
-        self.assertIn('git submodule update --init -q profiles', calls)    # the pinned profiles follow astro_dock
+        self.assertIn('is not a git checkout: the hosts keep their profiles/', result.stderr)
+        self.assertNotIn('profiles', calls)                                 # the fixture root: no profiles step
         self.assertIn('dir=$HOME/astro_dock;', calls)                       # the registry's workspace
         self.assertIn('git merge --ff-only -q origin/main', calls)
         self.assertIn('== host-a docker exec -i dev bash -s', calls)
@@ -80,37 +107,67 @@ class Hosts(unittest.TestCase):
             self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
             bad, _ = self.run_script('verify', 'a', ssh=report % 'clean differs', ASTRO_REGISTRY=str(registry))
             self.assertNotEqual(bad.returncode, 0)
-            pinned = report % 'clean at-origin"\necho "profiles OK'
+            pinned = report % 'clean at-origin"\necho "profiles OK abc1234'
             good, _ = self.run_script('verify', 'a', ssh=pinned, ASTRO_REGISTRY=str(registry))
             self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
-            for state in ('uninitialised', 'not at the pinned commit'):
+            for state in ('at none, this computer\'s is abc1234', 'at def5678, this computer\'s is abc1234'):
                 bad, _ = self.run_script('verify', 'a', ssh=report % ('clean at-origin"\necho "profiles FAIL %s' % state),
                                          ASTRO_REGISTRY=str(registry))
                 self.assertNotEqual(bad.returncode, 0, state)
 
-    def test_heads_report_the_profiles_submodule_state(self):
-        # The status script itself, run against a scratch astro_dock with a declared submodule.
+    def test_apply_and_plan_carry_this_computers_profile_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp, 'astro_dock')
-            sub = Path(tmp, 'sub')
-            git = lambda *a, cwd=ws: subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t',
-                                                     '-c', 'protocol.file.allow=always', *a],
-                                                    cwd=cwd, check=True, capture_output=True)
-            for repo in (sub, ws):
-                repo.mkdir()
-                git('init', '-q', '-b', 'main', cwd=repo)
-                git('commit', '-q', '--allow-empty', '-m', 'x', cwd=repo)
-            git('submodule', 'add', '-q', str(sub), 'profiles')
-            git('commit', '-q', '-m', 'pin')
-            script = lambda: subprocess.run(
-                ['bash', '-c', '. "$1"; REPOS_ALL=; repos() { echo astro_dock; }; heads_script box "$2" | bash',
-                 '_', str(ROOT / 'devices/hosts/fleet.sh'), str(ws)],
-                capture_output=True, text=True).stdout
-            self.assertIn('profiles OK', script())
-            git('commit', '-q', '--allow-empty', '-m', 'y', cwd=ws / 'profiles')
-            self.assertIn('profiles FAIL not at the pinned commit', script())
-            git('submodule', 'deinit', '-q', '-f', 'profiles')
-            self.assertIn('profiles FAIL uninitialised', script())
+            root = Path(tmp, 'fleet')
+            pin = fleet_repo(root)
+            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('WARN', result.stderr)
+            self.assertIn("git clone -q --no-checkout 'https://example.invalid/fleet.git' profiles", calls)
+            self.assertIn('checkout -q --detach %s' % pin, calls)
+            result, calls = self.run_script('plan', 'host-a', ASTRO_PROFILES=str(root))
+            self.assertIn('check out profiles %s' % pin[:7], result.stdout)
+            self.assertIn('if [ "$p" = %s ]' % pin, calls)
+            Path(root, 'a/profile.yaml').write_text(Path(root, 'a/profile.yaml').read_text() + '# local\n')
+            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            self.assertIn('has local changes; the hosts get its commit %s without them' % pin[:7], result.stderr)
+            self.assertIn('checkout -q --detach %s' % pin, calls)
+            git(root, 'remote', 'remove', 'origin')
+            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            self.assertIn('has no origin: the hosts keep their profiles/', result.stderr)
+            self.assertNotIn('profiles', calls)
+
+    def test_the_host_scripts_check_out_and_verify_the_pin(self):
+        # heads_script and fast_forward themselves, run against a scratch host workspace.
+        with tempfile.TemporaryDirectory() as tmp:
+            source, origin, ws = Path(tmp, 'fleet'), Path(tmp, 'astro-origin'), Path(tmp, 'astro_dock')
+            first = fleet_repo(source, origin=None)
+            origin.mkdir()
+            git(origin, 'init', '-q', '-b', 'main')
+            Path(origin, '.gitignore').write_text('/profiles/\n')
+            commit(origin, 'hw.sh')
+            git(tmp, 'clone', '-q', str(origin), str(ws))
+            script = lambda fn, pin: subprocess.run(
+                ['bash', '-c', '. "$1"; STAMP=1; REPOS_ALL=; repos() { echo astro_dock; }; PROFILES_URL=$3 '
+                 'PROFILES_PIN=$4; %s "$2" | bash' % fn, '_', str(ROOT / 'devices/hosts/fleet.sh'), str(ws),
+                 str(source), pin], capture_output=True, text=True, env={**os.environ, 'XDG_STATE_HOME': str(Path(tmp, 'state'))}).stdout
+            heads = lambda pin: script('heads_script box', pin)          # container box, workspace ws
+            apply = lambda pin: script('fast_forward', pin)
+            self.assertNotIn('profiles', heads(''))                              # no pin: no profiles line
+            self.assertIn('profiles FAIL at none, this computer\'s is %s' % first[:7], heads(first))
+            out = apply(first)
+            self.assertIn('OK profiles %s' % first[:7], out)
+            self.assertNotIn('BACKUP', out)                                      # a fresh clone is not dirty
+            self.assertEqual(git(ws / 'profiles', 'rev-parse', 'HEAD'), first)
+            self.assertIn('profiles OK %s' % first[:7], heads(first))
+            second = commit(source, 'NOTES')
+            self.assertIn('profiles FAIL at %s' % first, heads(second))
+            Path(ws, 'profiles/a/profile.yaml').write_text(Path(ws, 'profiles/a/profile.yaml').read_text() + '# local\n')
+            out = apply(second)
+            self.assertIn('BACKUP profiles', out)
+            self.assertIn('OK profiles %s' % second[:7], out)
+            self.assertEqual(git(ws / 'profiles', 'rev-parse', 'HEAD'), second)
+            self.assertIn('# local', Path(tmp, 'state/astro_dock/hosts/backup-1/profiles.diff').read_text())
+            self.assertIn('FAIL profiles: %s not checked out' % ('0' * 7), apply('0' * 40))
 
     def test_deploy_without_hosts_takes_the_ssh_hosts_of_the_registry(self):
         with tempfile.TemporaryDirectory() as tmp:

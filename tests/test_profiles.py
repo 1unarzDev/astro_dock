@@ -1,7 +1,8 @@
 """Profile roots: every member loads, this machine resolves its host and vessel, repos per role, secrets.
 
 Runs the real hw.sh on the fixture fleet tests/data/profiles (vessels a and b, station s) with a fake
-hostname, a fake /sys/class/net and a fake driver. Nothing is contacted.
+hostname, a fake /sys/class/net and a fake driver; as a configured source, the fixture fleet is a git
+repository in a temp dir. Nothing is contacted.
 """
 import os
 from pathlib import Path
@@ -41,7 +42,8 @@ class Profiles(unittest.TestCase):
         env.update(ASTRO_PROFILES=str(self.root), ASTRO_SECRETS=str(self.tmp / 'no-secrets'),
                    ASTRO_ENV_FILE='/dev/null', HW_HOSTNAME=hostname, HW_SYSFS_NET=str(self.sys),
                    HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
-                   HW_DRIVERS=str(self.tmp / 'drivers'), XDG_STATE_HOME=str(self.tmp / 'state'))
+                   HW_DRIVERS=str(self.tmp / 'drivers'), XDG_STATE_HOME=str(self.tmp / 'state'),
+                   XDG_CONFIG_HOME=str(self.tmp / 'config'))
         env.update(extra)
         env = {k: v for k, v in env.items() if v is not None}
         return subprocess.run(['bash', str(hw_root / 'hw.sh'), *args], capture_output=True, text=True,
@@ -277,46 +279,152 @@ class Profiles(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn('Reading the legacy %s' % legacy, run.stderr)
 
-    # Generic mode: no profile root
-    def test_generic_mode_without_a_profile_root(self):
+    # Generic mode: no profiles
+    def checkout(self):
+        """A workspace with astro_dock's tools and no profiles/, as a fresh clone has it."""
         ws = self.tmp / 'ws'
         ws.mkdir()
-        for name in ('hw.sh', 'setup.linux.sh'):
+        for name in ('hw.sh', 'setup.linux.sh', '.gitmodules', '.gitignore'):
             shutil.copy2(ROOT / name, ws / name)
         shutil.copytree(ROOT / 'devices', ws / 'devices')
+        return ws
+
+    def test_a_generic_checkout_works_without_profiles(self):
+        ws = self.checkout()
         run = self.hw('whoami', hw_root=ws, ASTRO_PROFILES=None)
-        self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn('generic mode', run.stdout)
+        self.assertEqual((run.returncode, run.stderr), (0, ''))                 # quiet
+        self.assertEqual(run.stdout, 'profiles  none: generic mode (hw.sh profile sync URL [REF], or ASTRO_PROFILES=DIR)\n')
+        self.assertEqual(self.hw('whoami', '--root', hw_root=ws, ASTRO_PROFILES=None).stdout, '\n')
         run = self.hw(hw_root=ws, ASTRO_PROFILES=None)
-        self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn('Generic mode: no profile root', run.stdout)
-        for args in (('env',), ('radio', 'status'), ('hosts', 'repos')):
+        self.assertEqual((run.returncode, run.stderr), (0, ''))
+        self.assertIn('Generic mode: no profiles (hw.sh profile sync URL [REF], or ASTRO_PROFILES=DIR)', run.stdout)
+        for args in (('env',), ('radio', 'status'), ('hosts', 'repos'), ('profile', 'show')):
             run = self.hw(*args, hw_root=ws, ASTRO_PROFILES=None)
             self.assertNotEqual(run.returncode, 0)
-            self.assertIn('No profile root (generic mode)', run.stderr)
+            self.assertIn('No profiles (generic mode): hw.sh profile sync URL [REF], or ASTRO_PROFILES=DIR', run.stderr)
+        run = self.hw('profile', 'sync', hw_root=ws, ASTRO_PROFILES=None)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('No profile source: hw.sh profile sync URL [REF] records one in %s'
+                      % (self.tmp / 'config/astro/profiles.env'), run.stderr)
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         run = subprocess.run(['bash', str(ws / 'setup.linux.sh'), '--components', 'repos,gateway,boat,jetson',
                               '--dry-run', '--non-interactive'], capture_output=True, text=True, timeout=60,
-                             env={**env, 'ASTRO_SECRETS': str(self.tmp / 'none'), 'ASTRO_ENV_FILE': '/dev/null'})
+                             env={**env, 'ASTRO_SECRETS': str(self.tmp / 'none'), 'ASTRO_ENV_FILE': '/dev/null',
+                                  'XDG_CONFIG_HOME': str(self.tmp / 'config')})
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(run.stdout.count('Generic mode (no profile root'), 1)
+        self.assertEqual(run.stdout.count('Generic mode (no profiles: ./hw.sh profile sync URL [REF], or ASTRO_PROFILES=DIR)'), 1)
         self.assertIn('Skipped:   repos gateway boat jetson', run.stdout)
-        self.assertNotIn('submodule is not initialised', run.stdout + run.stderr)   # no profiles declared
+        self.assertNotIn('submodule', run.stdout + run.stderr)
+        self.assertFalse((ws / 'profiles').exists())
 
-    def test_a_declared_but_uninitialised_profiles_submodule_warns(self):
-        # A git pull without the submodule: .gitmodules names profiles, the directory is empty.
-        ws = self.tmp / 'ws'
-        (ws / 'profiles').mkdir(parents=True)
-        shutil.copy2(ROOT / 'hw.sh', ws / 'hw.sh')
-        shutil.copy2(ROOT / '.gitmodules', ws / '.gitmodules')
-        shutil.copytree(ROOT / 'devices', ws / 'devices')
-        hint = 'git submodule update --init profiles'
-        for args in (('whoami',), ('env',)):
-            run = self.hw(*args, hw_root=ws, ASTRO_PROFILES=None)
-            self.assertIn('submodule is not initialised', run.stderr)
-            self.assertIn(hint, run.stderr)
-        self.assertNotIn('submodule is not initialised', self.hw('whoami', hw_root=ws).stderr)   # ASTRO_PROFILES set
+    # A configured source: ASTRO_PROFILES_URL at ASTRO_PROFILES_REF, checked out at profiles/
+    def git(self, repo, *args):
+        env = {**os.environ, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+               'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
+        return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True,
+                              env=env).stdout.strip()
 
+    def commit(self, repo, name, text='x\n'):
+        (repo / name).write_text(text)
+        self.git(repo, 'add', '-A')
+        self.git(repo, 'commit', '-q', '-m', name)
+        return self.git(repo, 'rev-parse', 'HEAD')
+
+    def source(self):
+        """The fixture fleet as a git repository on main: (its path, its commit)."""
+        repo = self.tmp / 'fleet-repo'
+        shutil.copytree(FIXTURE, repo)
+        self.git(repo, 'init', '-q', '-b', 'main')
+        return repo, self.commit(repo, 'README')
+
+    def config(self, text=None):
+        path = self.tmp / 'config/astro/profiles.env'
+        if text is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return path
+
+    def test_profile_sync_records_the_source_and_checks_out_its_ref(self):
+        repo, first = self.source()
+        second = self.commit(repo, 'NOTES')
+        ws = self.checkout()
+        sync = lambda *args, **kw: self.hw('profile', 'sync', *args, hw_root=ws, ASTRO_PROFILES=None, **kw)
+        self.config('ASTRO_PROFILES_URL=https://example.invalid/old.git\n# mine\nASTRO_PROFILES_REF=old\n')
+        run = sync(str(repo), first)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('profiles %s/profiles: %s at %s (%s)' % (ws, repo, first, first[:7]), run.stderr)
+        self.assertEqual(self.config().read_text(),
+                         '# mine\nASTRO_PROFILES_URL=%s\nASTRO_PROFILES_REF=%s\n' % (repo, first))
+        self.assertEqual(self.git(ws / 'profiles', 'rev-parse', 'HEAD'), first)
+        run = self.hw('whoami', hostname='op', hw_root=ws, ASTRO_PROFILES=None)
+        self.assertEqual((run.returncode, run.stderr), (0, ''))
+        me = dict(line.split(None, 1) for line in run.stdout.splitlines())
+        self.assertEqual(me['profiles'], '%s/profiles (%s at %s, %s)' % (ws, repo, first, first[:7]))
+        self.assertEqual(me['station'], 's')
+        self.assertEqual(self.hw('whoami', '--root', hw_root=ws, ASTRO_PROFILES=None).stdout, '%s/profiles\n' % ws)
+        # A ref the checkout is not at warns (here: the environment's, which wins over the file).
+        run = self.hw('whoami', hw_root=ws, ASTRO_PROFILES=None, ASTRO_PROFILES_REF='main')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('profiles/ is not at ASTRO_PROFILES_REF=main (%s): run hw.sh profile sync' % self.config(),
+                      run.stderr)
+        run = sync(str(repo))                                                    # no REF: main
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(self.config().read_text(), '# mine\nASTRO_PROFILES_URL=%s\n' % repo)
+        self.assertEqual(self.git(ws / 'profiles', 'rev-parse', 'HEAD'), second)
+        # A branch moves only on sync: whoami does not fetch.
+        third = self.commit(repo, 'MORE')
+        run = self.hw('whoami', hw_root=ws, ASTRO_PROFILES=None)
+        self.assertEqual((run.returncode, run.stderr), (0, ''))
+        self.assertEqual(self.git(ws / 'profiles', 'rev-parse', 'HEAD'), second)
+        self.assertEqual(sync().returncode, 0)
+        self.assertEqual(self.git(ws / 'profiles', 'rev-parse', 'HEAD'), third)
+        run = sync(str(repo), 'nosuch')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('%s has no nosuch' % repo, run.stderr)
+
+    def test_a_configured_source_is_checked_out_on_first_use(self):
+        repo, first = self.source()
+        ws = self.checkout()
+        (ws / 'profiles').mkdir()                                                # empty, as an old pull leaves it
+        self.config('ASTRO_PROFILES_URL=%s\n' % repo)
+        me = dict(line.split(None, 1) for line in
+                  self.hw('whoami', hostname='a-pc', hw_root=ws, ASTRO_PROFILES=None).stdout.splitlines())
+        self.assertEqual(me['profiles'], '%s/profiles (%s at main, %s)' % (ws, repo, first[:7]))
+        self.assertTrue(me['vessel'].startswith('a '))
+        self.assertEqual(self.git(ws / 'profiles', 'rev-parse', 'HEAD'), first)
+        ws2 = self.tmp / 'ws2'
+        shutil.copytree(ws, ws2, ignore=shutil.ignore_patterns('profiles'))
+        run = self.hw('whoami', hw_root=ws2, ASTRO_PROFILES=None, ASTRO_PROFILES_URL=str(self.tmp / 'nosuch'))
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('Cannot clone %s' % (self.tmp / 'nosuch'), run.stderr)
+
+    def test_astro_profiles_wins_over_a_configured_source(self):
+        repo, _ = self.source()
+        ws = self.checkout()
+        self.config('ASTRO_PROFILES_URL=%s\n' % repo)
+        me = self.whoami(hw_root=ws)
+        self.assertEqual(me['profiles'], str(self.root))
+        self.assertFalse((ws / 'profiles').exists())
+        run = self.hw('profile', 'sync', hw_root=ws)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('ASTRO_PROFILES=%s is your own directory: update it there' % self.root, run.stderr)
+
+    def test_sync_refuses_local_changes_and_a_directory_that_is_not_a_checkout(self):
+        repo, first = self.source()
+        self.commit(repo, 'NOTES')
+        ws = self.checkout()
+        self.assertEqual(self.hw('profile', 'sync', str(repo), first, hw_root=ws, ASTRO_PROFILES=None).returncode, 0)
+        with open(ws / 'profiles/a/profile.yaml', 'a') as f:
+            f.write('# local\n')
+        run = self.hw('profile', 'sync', str(repo), 'main', hw_root=ws, ASTRO_PROFILES=None)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('%s/profiles has local changes' % ws, run.stderr)
+        self.assertEqual(self.git(ws / 'profiles', 'rev-parse', 'HEAD'), first)
+        shutil.rmtree(ws / 'profiles')
+        shutil.copytree(FIXTURE, ws / 'profiles')                               # a copy, not a checkout
+        run = self.hw('profile', 'sync', hw_root=ws, ASTRO_PROFILES=None)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('%s/profiles is not a git checkout; move it away to sync' % ws, run.stderr)
 
 if __name__ == '__main__':
     unittest.main()

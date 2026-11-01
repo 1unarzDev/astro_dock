@@ -1,8 +1,9 @@
 """setup.linux.sh --components repos: clone and build this computer's repositories (hosts.yaml repos.all and
 repos.ROLE of its roles, from sources) on the fixture fleet tests/data/profiles.
 
-Runs the real setup.linux.sh, hw.sh and devices/ copied into a scratch workspace; git clone, git submodule,
-colcon and docker are stand-ins that log, so nothing is fetched or built.
+Runs the real setup.linux.sh, hw.sh and devices/ copied into a scratch workspace; git clone (but hw.sh's
+clone of a configured profile source, the fixture fleet as a git repository), colcon and docker are
+stand-ins that log, so nothing is fetched or built.
 """
 import os
 from pathlib import Path
@@ -13,10 +14,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'tests/data/profiles'
-# clone: log and create the target; submodule update: log and check out the fixture; the rest is real git.
+# clone: log, and create the target (a clone into profiles/ is real); the rest is real git.
 GIT = '''#!/usr/bin/env bash
-if [ "$1" = clone ]; then echo "git $*" >> "$LOG"; mkdir -p "${@: -1}"; exit 0; fi
-if [ "$1" = -C ] && [ "$3" = submodule ]; then echo "git $*" >> "$LOG"; cp -r "$FIXTURE/." "$2/profiles/"; exit 0; fi
+if [ "$1" = clone ]; then
+    echo "git $*" >> "$LOG"
+    case "${@: -1}" in */profiles) ;; *) mkdir -p "${@: -1}"; exit 0 ;; esac
+fi
 exec %s "$@"
 '''
 # list prints one package per base path; build logs its directory and arguments.
@@ -64,7 +67,7 @@ class SetupRepos(unittest.TestCase):
             path.append(str(self.tmp / 'colcon'))
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         env.update(PATH=':'.join(path + [os.environ['PATH']]), LOG=str(self.log), RUNNING=running,
-                   PROJECT='fixture_project', FIXTURE=str(FIXTURE), ASTRO_ENV_FILE='/dev/null',
+                   PROJECT='fixture_project', XDG_CONFIG_HOME=str(self.tmp / 'config'), ASTRO_ENV_FILE='/dev/null',
                    ASTRO_SECRETS=str(self.tmp / 'none'), HW_HOSTNAME='innovation',
                    HW_SYSFS_NET=str(self.tmp / 'nosys'), HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
                    **extra)
@@ -141,14 +144,21 @@ class SetupRepos(unittest.TestCase):
         self.assertIn('Skipped:   repos', run.stdout)
         self.assertEqual(calls, [])
 
-    def test_the_profiles_submodule_is_initialised_first(self):
-        (self.ws / '.gitmodules').write_text('[submodule "profiles"]\n\tpath = profiles\n\turl = https://example.invalid/p.git\n')
-        (self.ws / 'profiles').mkdir()
+    def test_a_configured_profile_source_is_checked_out_first(self):
+        source = self.tmp / 'fleet-repo'
+        shutil.copytree(FIXTURE, source)
+        env = {**os.environ, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 't',
+               'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
+        for args in (('init', '-q', '-b', 'main'), ('add', '-A'), ('commit', '-q', '-m', 'fleet')):
+            subprocess.run(['git', '-C', str(source), *args], check=True, capture_output=True, env=env)
+        (self.tmp / 'config/astro').mkdir(parents=True)
+        (self.tmp / 'config/astro/profiles.env').write_text('ASTRO_PROFILES_URL=%s\n' % source)
         run, calls = self.setup('--host', 'a-pc', profiles=None)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(calls[0], 'git -C %s submodule update --init profiles' % self.ws)
+        self.assertEqual(calls[:2], ['git clone -q --no-checkout -- %s %s/profiles' % (source, self.ws),
+                                     'git clone --branch main https://example.invalid/alpha.git %s/src/alpha' % self.ws])
+        self.assertTrue((self.ws / 'profiles/a/profile.yaml').is_file())
         self.assertIn('alpha https://example.invalid/alpha.git main', run.stdout)
-
 
 if __name__ == '__main__':
     unittest.main()
