@@ -101,11 +101,25 @@ if [[ -n "$domain" ]]; then
     echo "ROS domain $domain (the vessel's network env)${ASTRO_ROS_DOMAIN_ID:+; ASTRO_ROS_DOMAIN_ID=$ASTRO_ROS_DOMAIN_ID overrides it}"
     printf 'ros:\n  domain_id: %s\n' "$domain" > "$work_file.domain"
 fi
+# With the vessel, its network env and registry (ASTRO_NETWORK_ENV, ASTRO_REGISTRY) as container paths,
+# for the processes no shell starts (docker exec without bash, a container without BASH_ENV), when they lie
+# in this checkout (the workspace mount carries them). Literal: the host's own values are host paths.
+network_env=""
+registry=""
+if [[ -n "$vessel" ]]; then
+    astro_root="$(cd "$script_dir/.." && pwd -P)"
+    ws="$(sed -n '/^ *ROS_WS: */{s///p;q;}' "$script_dir/docker-compose.yml")"
+    in_ws() { [[ -n "$ws" && "$1" == "$astro_root"/* && "$1" =~ ^[A-Za-z0-9_./@+-]+$ ]] && printf '%s/%s' "$ws" "${1#"$astro_root"/}"; }
+    network_env="$(in_ws "$("$hw" env 2>/dev/null)")" || network_env=""
+    registry="$(in_ws "$("$hw" whoami --registry 2>/dev/null)")" || registry=""
+fi
 if [[ -n "$domain$vessel" ]]; then
     [[ -z "$vessel" ]] || echo "Vessel $vessel for the dev container${ASTRO_VESSEL:+ (ASTRO_VESSEL=$ASTRO_VESSEL there overrides it)}"
     lines=()
     [[ -z "$domain" ]] || lines+=("      ROS_DOMAIN_ID: \"\${ASTRO_ROS_DOMAIN_ID:-$domain}\"")
     [[ -z "$vessel" ]] || lines+=("      ASTRO_VESSEL: \"\${ASTRO_VESSEL:-$vessel}\"")
+    [[ -z "$network_env" ]] || lines+=("      ASTRO_NETWORK_ENV: \"$network_env\"")
+    [[ -z "$registry" ]] || lines+=("      ASTRO_REGISTRY: \"$registry\"")
     lines="$(printf '%s\n' "${lines[@]}")"
     # Into services.dev.environment (a mapping in every adapter), replacing an adapter's own values.
     awk -v lines="$lines" '
@@ -116,7 +130,7 @@ if [[ -n "$domain$vessel" ]]; then
             for (stop = start + 1; stop <= NR && line[stop] !~ /^([^ ]|  ?[^ ])/; stop++)
                 if (line[stop] == "    environment:") env = stop
             for (i = 1; i <= NR; i++) {
-                if (i > start && i < stop && line[i] ~ /^      (ROS_DOMAIN_ID|ASTRO_VESSEL):/) continue
+                if (i > start && i < stop && line[i] ~ /^      (ROS_DOMAIN_ID|ASTRO_VESSEL|ASTRO_NETWORK_ENV|ASTRO_REGISTRY):/) continue
                 print line[i]
                 if (env ? i == env : i == start) {
                     if (!env) print "    environment:"

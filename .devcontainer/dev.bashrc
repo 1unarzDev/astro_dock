@@ -56,9 +56,10 @@ fi
 # Set ASTRO_DDS_ADDRESS to force an address. Silent at shell start; ros_net -v
 # prints the choice, and the banner shows it too.
 # The vessel's network env and host registry, resolved once per shell tree by hw.sh and exported as
-# ASTRO_NETWORK_ENV and ASTRO_REGISTRY; never exported empty (nav and testing would read that as "no
-# network" and stay quiet), so without a vessel (generic mode or an unregistered machine without
-# ASTRO_VESSEL) they stay unset.
+# ASTRO_NETWORK_ENV and ASTRO_REGISTRY, in every shell (a run.yaml-managed one too; prebuild also puts
+# them in the container's environment for processes no shell starts); never exported empty (nav and
+# testing would read that as "no network" and stay quiet), so without a vessel (generic mode or an
+# unregistered machine without ASTRO_VESSEL) they stay unset.
 __astro_network_env() {
   local env registry
   if [[ -z "${ASTRO_NETWORK_ENV:-}" && -z "${__ASTRO_NET_RESOLVED:-}${__ASTRO_NET_RESOLVING:-}" ]]; then
@@ -72,6 +73,7 @@ __astro_network_env() {
   fi
   printf '%s' "${ASTRO_NETWORK_ENV:-/nonexistent}"
 }
+__astro_network_env >/dev/null
 
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0

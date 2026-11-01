@@ -6,12 +6,13 @@ info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
-# hw_load_env FILE: KEY=value lines (quotes and CRLF stripped). A variable already set, even empty, wins.
+# hw_load_env FILE [KEY...]: KEY=value lines (quotes and CRLF stripped), only the given keys when named.
+# A variable already set, even empty, wins.
 hw_load_env() {
-    local key value
+    local key value keys=" ${*:2} "
     [[ -r $1 ]] || return 0
     while IFS='=' read -r key value || [[ -n $key ]]; do
-        [[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] && [[ ! -v $key ]] || continue
+        [[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] && [[ ! -v $key ]] && [[ $# == 1 || $keys == *" $key "* ]] || continue
         value=${value%$'\r'}
         [[ $value =~ ^\"(.*)\"$ || $value =~ ^\'(.*)\'$ ]] && value=${BASH_REMATCH[1]}
         printf -v "$key" '%s' "$value"
@@ -42,10 +43,18 @@ hw_secrets() {
 # The profile set is the user's, never astro_dock's. HW_PROFILES_CONFIG (ASTRO_PROFILES_CONFIG, default
 # ~/.config/astro/profiles.env; set variables win) names it: ASTRO_PROFILES, a directory you keep up to
 # date, or ASTRO_PROFILES_URL, a git repository hw.sh checks out at HW_ROOT/profiles (gitignored) at
-# ASTRO_PROFILES_REF (a commit, tag or branch; default main). Neither: generic mode.
+# ASTRO_PROFILES_REF (a commit, tag or branch; default main). Neither: generic mode. Only those three keys
+# load: the file is not private, unlike the secrets file.
 hw_profiles_config() {
     HW_PROFILES_CONFIG=${ASTRO_PROFILES_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/astro/profiles.env}
-    hw_load_env "$HW_PROFILES_CONFIG"
+    hw_load_env "$HW_PROFILES_CONFIG" ASTRO_PROFILES ASTRO_PROFILES_URL ASTRO_PROFILES_REF
+}
+
+# hw_url_shown URL: URL without its user[:token]@, for messages.
+hw_url_shown() {
+    if [[ $1 =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@(.*)$ ]]; then
+        printf '%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    else printf '%s' "$1"; fi
 }
 
 # hw_profiles_use URL [REF]: record the source in HW_PROFILES_CONFIG, keeping its other lines.
@@ -77,14 +86,14 @@ hw_profiles_sync() {
         [[ -z $(git -C "$dir" status --porcelain) ]] \
             || die "$dir has local changes: push them to the profile repository or discard them, then sync"
         git -C "$dir" remote set-url origin "$ASTRO_PROFILES_URL" && git -C "$dir" fetch -q --tags origin \
-            || die "Cannot fetch $ASTRO_PROFILES_URL into $dir"
+            || die "Cannot fetch $(hw_url_shown "$ASTRO_PROFILES_URL") into $dir"
     else
         [[ ! -e $dir ]] || rmdir -- "$dir" 2>/dev/null || die "$dir is not a git checkout; move it away to sync"
-        git clone -q --no-checkout -- "$ASTRO_PROFILES_URL" "$dir" || die "Cannot clone $ASTRO_PROFILES_URL"
+        git clone -q --no-checkout -- "$ASTRO_PROFILES_URL" "$dir" || die "Cannot clone $(hw_url_shown "$ASTRO_PROFILES_URL")"
     fi
-    commit=$(hw_profiles_commit) || die "$ASTRO_PROFILES_URL has no ${ASTRO_PROFILES_REF:-main}"
+    commit=$(hw_profiles_commit) || die "$(hw_url_shown "$ASTRO_PROFILES_URL") has no ${ASTRO_PROFILES_REF:-main}"
     git -C "$dir" checkout -q --detach "$commit" || die "Cannot check out $commit in $dir"
-    info "profiles $dir: $ASTRO_PROFILES_URL at ${ASTRO_PROFILES_REF:-main} (${commit:0:7})" >&2
+    info "profiles $dir: $(hw_url_shown "$ASTRO_PROFILES_URL") at ${ASTRO_PROFILES_REF:-main} (${commit:0:7})" >&2
 }
 
 # hw_profiles_root: ASTRO_PROFILES > HW_ROOT/profiles once it holds a profile > empty (generic mode).

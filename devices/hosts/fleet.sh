@@ -82,10 +82,11 @@ fleet_init() {
 }
 
 # The profile set every host gets: this computer's profile root, when it is a git checkout of its own
-# (PROFILES_URL its origin, PROFILES_PIN its commit). Else the hosts keep theirs.
+# (PROFILES_URL its origin, PROFILES_SHOWN that without credentials, PROFILES_PIN its commit). Else the
+# hosts keep theirs.
 fleet_profiles() {
     local root
-    PROFILES_URL='' PROFILES_PIN=''
+    PROFILES_URL='' PROFILES_SHOWN='' PROFILES_PIN=''
     root=$(cd -- "$HW_PROFILES_ROOT" && pwd -P) || return 0
     if [[ $(git -C "$root" rev-parse --show-toplevel 2>/dev/null) != "$root" ]]; then
         warn "$HW_PROFILES_ROOT is not a git checkout: the hosts keep their profiles/"
@@ -93,6 +94,7 @@ fleet_profiles() {
     fi
     PROFILES_URL=$(git -C "$root" remote get-url origin 2>/dev/null) PROFILES_PIN=$(git -C "$root" rev-parse HEAD)
     [[ -n $PROFILES_URL ]] || { warn "$root has no origin: the hosts keep their profiles/"; PROFILES_PIN=''; return 0; }
+    PROFILES_SHOWN=$(hw_url_shown "$PROFILES_URL")
     [[ -z $(git -C "$root" status --porcelain) ]] || warn "$root has local changes; the hosts get its commit ${PROFILES_PIN:0:7} without them"
 }
 
@@ -115,13 +117,13 @@ profiles_checkout() {
 cd $1 || { echo "FAIL profiles: no $1"; exit 1; }
 if [ ! -e profiles/.git ]; then
     { rmdir profiles 2>/dev/null; git clone -q --no-checkout '$PROFILES_URL' profiles; } \
-        || { echo "FAIL profiles: clone $PROFILES_URL"; exit 1; }
+        || { echo "FAIL profiles: clone $PROFILES_SHOWN"; exit 1; }
 elif [ -n "\$(git -C profiles status --porcelain)" ]; then
     mkdir -p "\$backup"; git -C profiles diff HEAD > "\$backup/profiles.diff"; echo "BACKUP profiles -> \$backup"
 fi
 if git -C profiles remote set-url origin '$PROFILES_URL' && git -C profiles fetch -q origin \
     && git -C profiles checkout -q --detach $PROFILES_PIN; then echo "OK profiles ${PROFILES_PIN:0:7}"
-else echo "FAIL profiles: ${PROFILES_PIN:0:7} not checked out (pushed to $PROFILES_URL? local changes?)"; rc=1; fi
+else echo "FAIL profiles: ${PROFILES_PIN:0:7} not checked out (pushed to $PROFILES_SHOWN? local changes?)"; rc=1; fi
 EOF
 }
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }

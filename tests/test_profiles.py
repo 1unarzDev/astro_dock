@@ -398,6 +398,30 @@ class Profiles(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('Cannot clone %s' % (self.tmp / 'nosuch'), run.stderr)
 
+    def test_profiles_env_loads_only_its_keys_and_messages_hide_credentials(self):
+        repo, first = self.source()
+        ws = self.checkout()
+        # Not private like secrets.env: its other keys (a vessel, a secret) are ignored.
+        self.config('ASTRO_PROFILES_URL=%s\nASTRO_VESSEL=b\nTHING_PASSWORD=x\n' % repo)
+        run = self.hw('whoami', hostname='a-pc', hw_root=ws, ASTRO_PROFILES=None)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        me = dict(line.split(None, 1) for line in run.stdout.splitlines())
+        self.assertTrue(me['vessel'].startswith('a '), me['vessel'])
+        run = self.hw('secrets', 'check', hw_root=ws, ASTRO_PROFILES=None)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('THING_PASSWORD', run.stdout + run.stderr)                 # still missing
+        # A URL with user:token@ is printed without them.
+        secret = 'https://user:tok3n@example.invalid/fleet.git'
+        run = self.hw('whoami', hostname='a-pc', hw_root=ws, ASTRO_PROFILES=None, ASTRO_PROFILES_URL=secret,
+                      ASTRO_PROFILES_REF=first)
+        me = dict(line.split(None, 1) for line in run.stdout.splitlines())
+        self.assertEqual(me['profiles'], '%s/profiles (https://example.invalid/fleet.git at %s, %s)'
+                         % (ws, first, first[:7]))
+        run = self.hw('profile', 'sync', secret, 'main', hw_root=ws, ASTRO_PROFILES=None, GIT_TERMINAL_PROMPT='0')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('Cannot fetch https://example.invalid/fleet.git into', run.stderr)
+        self.assertNotIn('tok3n', run.stdout + run.stderr)
+
     def test_astro_profiles_wins_over_a_configured_source(self):
         repo, _ = self.source()
         ws = self.checkout()

@@ -18,7 +18,7 @@ class RunEnvTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ('.devcontainer', 'config'):
-                shutil.copytree(ROOT / name, root / name, ignore=shutil.ignore_patterns('__pycache__'))
+                shutil.copytree(ROOT / name, root / name, symlinks=True, ignore=shutil.ignore_patterns('__pycache__'))
             stubs = root / 'stubs'
             stubs.mkdir()
             (stubs / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; -n) echo testhost;; esac\n')
@@ -57,7 +57,7 @@ class RunEnvTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ('.devcontainer', 'config', 'devices'):
-                shutil.copytree(ROOT / name, root / name, ignore=shutil.ignore_patterns('__pycache__'))
+                shutil.copytree(ROOT / name, root / name, symlinks=True, ignore=shutil.ignore_patterns('__pycache__'))
             shutil.copy(ROOT / 'hw.sh', root / 'hw.sh')
 
             def stubs(name, system, python='/usr/bin/python3'):
@@ -107,6 +107,9 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
             # The container keeps the vessel this host resolved (also off its LAN); Compose's ASTRO_VESSEL wins.
             self.assertEqual(config('ASTRO_VESSEL'), 'a')
+            # The fixture lies outside this checkout, so the container cannot see it: no paths to it.
+            self.assertIsNone(config('ASTRO_REGISTRY'))
+            self.assertIsNone(config('ASTRO_NETWORK_ENV'))
             self.assertEqual(config('ASTRO_VESSEL', ASTRO_VESSEL='b'), 'b')
             self.assertEqual(domain({'ASTRO_VESSEL': 'b'}), '42')    # a vessel env without ROS_DOMAIN_ID: no warning
             self.assertNotIn('WARNING', warnings[-1])
@@ -125,6 +128,72 @@ class RunEnvTest(unittest.TestCase):
             # No profiles at all (a generic checkout): astro_dock's default, said once, no warning.
             self.assertEqual(domain({'ASTRO_PROFILES': '', 'ASTRO_PROFILES_CONFIG': '/nonexistent'}), '42')
             self.assertNotIn('WARNING', warnings[-1])
+
+    def test_every_process_gets_the_vessel_registry(self):
+        """The vessel's registry and network env reach a run.yaml-managed shell (whose ros_net returns early)
+        and, as container paths in Compose's environment, a process no shell starts (docker exec without bash,
+        a container without BASH_ENV): the registry lists every host of the vessel either way."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for name in ('.devcontainer', 'config', 'devices'):
+                shutil.copytree(ROOT / name, root / name, symlinks=True, ignore=shutil.ignore_patterns('__pycache__'))
+            shutil.copy(ROOT / 'hw.sh', root / 'hw.sh')
+            shutil.copytree(ROOT / 'tests/data/profiles', root / 'profiles')     # this checkout's profile set
+            stubs = root / 'stubs'
+            stubs.mkdir()
+            (stubs / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; -n) echo testhost;; esac\n')
+            (stubs / 'getent').write_text('#!/bin/sh\nexit 0\n')
+            for stub in ('uname', 'getent'):
+                (stubs / stub).chmod(0o755)
+            for tool in ('bash', 'dirname', 'basename', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'docker', 'mkdir',
+                         'grep', 'tr', 'awk', 'python3', 'git'):
+                (stubs / tool).symlink_to('/usr/bin/' + tool)
+            env = {'PATH': str(stubs), 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+                   'ASTRO_PROFILES_CONFIG': '/nonexistent', 'HW_HOSTNAME': 'x', 'HW_SYSFS_NET': '/nonexistent',
+                   'ASTRO_VESSEL': 'a'}
+            override = root / '.devcontainer/docker-compose.override.yml'
+            hosts = {'a-pc', 'a-cam', 'op', 'a-router'}
+
+            def container(**extra):
+                run = subprocess.run(['bash', str(root / '.devcontainer/prebuild.sh')], env=env, capture_output=True,
+                                     text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                compose = ['docker', 'compose', '-f', str(root / '.devcontainer/docker-compose.yml'), '-f',
+                           str(override), 'config', '--format', 'json']
+                result = subprocess.run(compose, env={**env, **extra}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout)['services']['dev']['environment']
+
+            def registry_hosts(values):
+                """A process started with only Compose's environment (paths mapped from the workspace mount)."""
+                mapped = {k: v.replace(WS, str(root)) for k, v in values.items()
+                          if k in ('ROS_WS', 'ASTRO_REGISTRY', 'ASTRO_NETWORK_ENV')}
+                read = ('import os, yaml; print(" ".join(sorted(yaml.safe_load(open(os.environ["ASTRO_REGISTRY"]))'
+                        '["hosts"])), open(os.environ["ASTRO_NETWORK_ENV"]).read().count("ROS_DOMAIN_ID=7"))')
+                run = subprocess.run(['env', '-i', 'PATH=/usr/bin:/bin', *(f'{k}={v}' for k, v in mapped.items()),
+                                      'python3', '-c', read], capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                return run.stdout.split()
+
+            for managed in (False, True):
+                with self.subTest(managed=managed):
+                    if managed:    # the operator's run.yaml, in the config directory prebuild made
+                        (next((root / '.config').iterdir()) / 'run.yaml').write_text('{}\n')
+                    # The host's own values are host paths: Compose's environment never replaces the container's.
+                    values = container(ASTRO_REGISTRY='/host/devices.yaml', ASTRO_NETWORK_ENV='/host/network.env')
+                    self.assertEqual(values.get('ASTRO_RUN_MANAGED'), '1' if managed else None)
+                    self.assertEqual(values['ASTRO_REGISTRY'], WS + '/profiles/a/devices.yaml')
+                    self.assertEqual(values['ASTRO_NETWORK_ENV'], WS + '/profiles/a/network.env')
+                    self.assertEqual(registry_hosts(values), sorted(hosts) + ['1'])
+            # A managed shell (ASTRO_RUN_MANAGED: ros_net returns at once) exports them too.
+            shell = subprocess.run(
+                ['env', '-i', 'PATH=/usr/bin:/bin', f'HOME={root}', f'ROS_WS={root}', 'ASTRO_RUN_MANAGED=1',
+                 'ASTRO_BANNER=0', *(f'{k}={env[k]}' for k in ('ASTRO_SECRETS', 'ASTRO_ENV_FILE', 'ASTRO_PROFILES_CONFIG',
+                                                              'HW_HOSTNAME', 'HW_SYSFS_NET', 'ASTRO_VESSEL')),
+                 'bash', '-c', '. "$ROS_WS/.devcontainer/dev.bashrc"; env | grep "^ASTRO_\\(REGISTRY\\|NETWORK_ENV\\)=" | sort'],
+                capture_output=True, text=True)
+            self.assertEqual(shell.stdout.split(), [f'ASTRO_NETWORK_ENV={root}/profiles/a/network.env',
+                                                    f'ASTRO_REGISTRY={root}/profiles/a/devices.yaml'], shell.stderr)
 
     def resolve(self, text, env=None):
         with tempfile.TemporaryDirectory() as tmp:

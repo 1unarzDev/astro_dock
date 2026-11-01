@@ -68,7 +68,7 @@ usage() {
 # profiles_source: " (URL at REF, commit)" for the profiles/ checkout of a configured source.
 profiles_source() {
     [[ -z ${ASTRO_PROFILES:-} && -n ${ASTRO_PROFILES_URL:-} ]] || return 0
-    printf ' (%s at %s, %s)' "$ASTRO_PROFILES_URL" "${ASTRO_PROFILES_REF:-main}" \
+    printf ' (%s at %s, %s)' "$(hw_url_shown "$ASTRO_PROFILES_URL")" "${ASTRO_PROFILES_REF:-main}" \
         "$(git -C "$HW_PROFILES_ROOT" rev-parse --short HEAD 2>/dev/null)"
 }
 

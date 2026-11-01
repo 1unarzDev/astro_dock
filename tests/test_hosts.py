@@ -136,6 +136,18 @@ class Hosts(unittest.TestCase):
             self.assertIn('has no origin: the hosts keep their profiles/', result.stderr)
             self.assertNotIn('profiles', calls)
 
+    def test_messages_never_show_the_origins_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp, 'fleet')
+            fleet_repo(root, origin='https://user:tok3n@example.invalid/fleet.git')
+            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("git clone -q --no-checkout 'https://user:tok3n@example.invalid/fleet.git' profiles", calls)
+            self.assertIn('echo "FAIL profiles: clone https://example.invalid/fleet.git"', calls)
+            self.assertIn('(pushed to https://example.invalid/fleet.git? local changes?)', calls)
+            self.assertEqual(calls.count('tok3n'), 2)                            # the clone and set-url only
+            self.assertNotIn('tok3n', result.stdout + result.stderr)
+
     def test_the_host_scripts_check_out_and_verify_the_pin(self):
         # heads_script and fast_forward themselves, run against a scratch host workspace.
         with tempfile.TemporaryDirectory() as tmp:
