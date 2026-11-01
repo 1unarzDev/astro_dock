@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+    echo "Usage: net/share.sh   create a Samba share, mount it via fstab and advertise it and ssh over mDNS (asks; sudo)"
+    exit 0
+fi
+
 echo "=== Network Scan Folder & mDNS Setup Script ==="
 
 # -------------------------------

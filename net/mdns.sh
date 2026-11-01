@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+    echo "Usage: net/mdns.sh   install Avahi and nss-mdns, enable mDNS name resolution (sudo; Arch, Debian, Fedora)"
+    exit 0
+fi
 
 echo "=== Setting up mDNS for system ==="
 

@@ -3,6 +3,7 @@
 # Uses rsync when the remote has it, otherwise streams a tar over ssh.
 # Usage: ./fetch_bags.sh HOST:REMOTE_DIR DEST_NAME
 set -euo pipefail
+[[ ${1:-} != -h && ${1:-} != --help ]] || { sed -n '2,4s/^# //p' "$0"; exit 0; }
 
 SSH=${FETCH_BAGS_SSH:-ssh}
 src=${1:?usage: fetch_bags.sh HOST:REMOTE_DIR DEST_NAME}
