@@ -3,7 +3,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-# The shipped vessel (the profiles submodule), named, so the runner's hostname does not matter.
+# The shipped vessel (the fixture fleet), named, so the runner's hostname does not matter.
 export ASTRO_PROFILES="$root/tests/data/profiles" ASTRO_VESSEL=a ASTRO_SECRETS=/nonexistent ASTRO_ENV_FILE=/dev/null
 network_env="$("$root/hw.sh" env)"
 tmp="$(mktemp -d)"
@@ -185,7 +185,7 @@ echo other:image > "$legacy" && : > "$dlog"
 clock >/dev/null
 ! grep -q 'rm -f' "$dlog" && [[ -e "$legacy" ]] || fail "removed an astro_clock container of another image"
 
-# Without a network env (an unmatched machine, or generic mode without the profiles submodule) the
+# Without a network env (an unmatched machine, or generic mode without profiles) the
 # plain clock stage still runs; only the lan and operator modes need the env, and they say so.
 generic="$tmp/generic"
 mkdir -p "$generic/profiles"
