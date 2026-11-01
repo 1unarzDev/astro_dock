@@ -26,13 +26,28 @@ hw_driver() {
 
 verbs() { declare -F | sed -n 's/^declare -f driver_//p' | grep -vx usage | tr '\n' ' '; }
 
+# The commands besides KIND VERB, as usage prints them; `hw.sh COMMAND --help` prints its own line.
+HW_COMMANDS=(
+    "whoami [--root]|this machine's host and vessel, and how found (--root: the profile root)"
+    "env [KEY]|the vessel's network env path, or one of its keys"
+    "profile show [NAME]|a merged profile (no secrets)"
+    "secrets check|the secrets file and the missing key names (never values)"
+)
+
+# command_usage [NAME]: the usage lines of every command, or of NAME only.
+command_usage() {
+    local line
+    for line in "${HW_COMMANDS[@]}"; do
+        [[ -n ${1:-} && ${line%% *} != "$1" && ${line%%|*} != "$1" ]] \
+            || printf '       %s %-20s %s\n' "$HW_PROGRAM" "${line%%|*}" "${line#*|}"
+    done
+}
+
 usage() {
     local kind
     printf 'Usage: %s [--vessel V] [--host H] KIND VERB [ARGS]   (KIND VERB --help for details)\n' "$HW_PROGRAM"
-    printf '       %s whoami               this machine'"'"'s host and vessel, and how they were found\n' "$HW_PROGRAM"
-    printf '       %s env [KEY]            the vessel'"'"'s network env path, or one of its keys\n' "$HW_PROGRAM"
-    printf '       %s profile show [NAME]  a merged profile (no secrets)\n' "$HW_PROGRAM"
-    printf '       %s secrets check        the secrets file and the missing key names (never values)\n\n' "$HW_PROGRAM"
+    command_usage
+    printf '\n'
     printf 'Without a match, --vessel V (or ASTRO_VESSEL) picks the vessel; --host H (or ASTRO_HOST) the host.\n'
     printf 'An operator laptop is a control station: a registry host with the operator role, --host NAME\n'
     printf 'of no registry, or an address on one vessel'"'"'s LAN_SUBNET (never a boat computer).\n'
@@ -96,8 +111,12 @@ while (($#)); do
     esac
 done
 hw_init
+if [[ " ${*:2:2} " =~ \ (-h|--help)\  && -n $(command_usage "${1:-}") ]]; then
+    command_usage "$1" | sed '1s/^      /Usage:/'
+    exit 0
+fi
 case ${1:-} in
-    ''|-h|--help) usage; exit 0 ;;
+    ''|-h|--help|help) usage; exit 0 ;;
     whoami)
         if [[ ${2:-} == --root ]]; then printf '%s\n' "$HW_PROFILES_ROOT"; else whoami_report; fi
         exit 0

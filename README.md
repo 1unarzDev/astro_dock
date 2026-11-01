@@ -155,13 +155,13 @@ The `jetson` stage sets a JetPack 6 Jetson's persistent MAXN_SUPER power mode, a
 
 ```text
 hw.sh [--vessel V] [--host H] KIND VERB [ARGS]   (KIND VERB --help for details)
-hw.sh whoami               this machine's host and vessel, and how they were found
+hw.sh whoami [--root]      this machine's host and vessel, and how found (--root: the profile root)
 hw.sh env [KEY]            the vessel's network env path, or one of its keys
 hw.sh profile show [NAME]  a merged profile (no secrets)
 hw.sh secrets check        the secrets file and the missing key names (never values)
 ```
 
-`./hw.sh --help` lists the kinds of the selected profile, `./hw.sh KIND --help` their verbs. Every driver has these:
+`./hw.sh --help` (or `help`) lists the kinds of the selected profile, `./hw.sh KIND --help` their verbs and `./hw.sh COMMAND --help` a command's usage. Every driver has these:
 
 | Verb | Does | Changes the device |
 | --- | --- | --- |
@@ -245,7 +245,7 @@ This builds `core`; Jetson images use their platform-specific Dockerfiles. On Je
 
 #### Coding agents
 
-Claude Code ([`.claude/settings.json`](.claude/settings.json)) and Codex ([`.codex/hooks.json`](.codex/hooks.json)) run one stdlib dispatcher, [`.agents/hook.py`](.agents/hook.py), on session start and around every shell command. It converts each CLI's event into one neutral event and passes it to the `agent_event` of every workspace package that ships an `agent_hook.py` module (`src/<repo>/<package>/agent_hook.py`). A package hook can add a playbook at session start, deny a command with a reason, or record what ran. Without a package hook, nothing happens. [`AGENTS.md`](AGENTS.md) covers agents that don't run hooks. Codex runs project hooks only after you trust them (`/hooks`). Until then nothing is blocked before it runs, and only the robot's own safeguards apply. Sessions started inside a nested `src/<pkg>` repository don't pick up astro_dock's `.claude` and `.codex` hooks, so start agents from the astro_dock root. Errors go to `~/.local/state/astro/agents-hook.log` and never block a command; all package hooks together get a 2 s budget. Run `python3 -m pytest tests/test_agents_hook.py` to test the dispatcher.
+Claude Code ([`.claude/settings.json`](.claude/settings.json)) and Codex ([`.codex/hooks.json`](.codex/hooks.json)) run one stdlib dispatcher, [`.agents/hook.py`](.agents/hook.py), on session start and around every shell command. It converts each CLI's event into one neutral event and passes it to the `agent_event` of every workspace package that ships an `agent_hook.py` module (`src/<repo>/<package>/agent_hook.py`). A package hook can add a playbook at session start, deny a command with a reason, or record what ran; `python3 .agents/hook.py --playbook` prints the playbooks in full. Without a package hook, nothing happens. [`AGENTS.md`](AGENTS.md) covers agents that don't run hooks. Codex runs project hooks only after you trust them (`/hooks`). Until then nothing is blocked before it runs, and only the robot's own safeguards apply. Sessions started inside a nested `src/<pkg>` repository don't pick up astro_dock's `.claude` and `.codex` hooks, so start agents from the astro_dock root. Errors go to `~/.local/state/astro/agents-hook.log` and never block a command; all package hooks together get a 2 s budget. Run `python3 -m pytest tests/test_agents_hook.py` to test the dispatcher.
 
 #### Image publishing and deployment
 

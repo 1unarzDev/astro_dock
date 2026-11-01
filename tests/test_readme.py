@@ -8,7 +8,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null',
            ASTRO_PROFILES=str(ROOT / 'tests/data/profiles'), ASTRO_VESSEL='a')   # the fixture fleet
-TOP_VERBS = ('whoami', 'env', 'profile', 'secrets')
 
 
 def run_help(*args):
@@ -34,6 +33,7 @@ class ReadmeTest(unittest.TestCase):
     def setUpClass(cls):
         cls.hw_top = run_help('./hw.sh', '--help')
         cls.kinds = re.findall(r'^  (\w+)\s+\w+/\w+$', cls.hw_top, re.M)
+        cls.top_verbs = tuple(re.findall(r'^ {7}hw\.sh (\w+)', cls.hw_top, re.M)) + ('help',)
         cls.kind_help = {k: run_help('./hw.sh', k, '--help') for k in cls.kinds}
         cls.hw_all = cls.hw_top + ''.join(cls.kind_help.values())
         cls.setup = run_help('./setup.linux.sh', '--help')
@@ -53,6 +53,12 @@ class ReadmeTest(unittest.TestCase):
                 with self.subTest(line=line[:60], flag=flag):
                     self.assertTrue(re.search(rf'(?<![\w-]){re.escape(flag)}(?![\w-])', helps), 'not in --help')
 
+    def test_usage_block(self):
+        """The README's hw.sh usage block is what hw.sh --help prints."""
+        usage = [line.strip().removeprefix('Usage: ') for line in self.hw_top.splitlines()
+                 if re.match(r'(Usage: | {7})hw\.sh ', line)]
+        self.assertEqual([line for line in self.lines if line.startswith('hw.sh ')], usage)
+
     def test_components(self):
         listed = set(re.search(r'--components LIST\s+(\S+)', self.setup).group(1).split(','))
         for snippet in self.snippets:
@@ -70,7 +76,7 @@ class ReadmeTest(unittest.TestCase):
                 if not words or not re.fullmatch(r'[a-z]+', words[0]):
                     continue  # a placeholder (KIND), an option or nothing
                 with self.subTest(snippet=snippet):
-                    self.assertIn(words[0], TOP_VERBS + tuple(self.kinds))
+                    self.assertIn(words[0], self.top_verbs + tuple(self.kinds))
                     if words[0] in self.kind_help and len(words) > 1 and re.fullmatch(r'[a-z]+', words[1]):
                         self.assertRegex(self.kind_help[words[0]], rf'\b{words[1]}\b')
 
