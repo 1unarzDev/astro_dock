@@ -113,9 +113,10 @@ profiles_checkout() {
     [[ -n $PROFILES_PIN ]] || return 0
     cat <<EOF
 cd $1 || { echo "FAIL profiles: no $1"; exit 1; }
-[ -e profiles/.git ] || { rmdir profiles 2>/dev/null; git clone -q --no-checkout '$PROFILES_URL' profiles; } \
-    || { echo "FAIL profiles: clone $PROFILES_URL"; exit 1; }
-if [ -n "\$(git -C profiles status --porcelain)" ]; then
+if [ ! -e profiles/.git ]; then
+    { rmdir profiles 2>/dev/null; git clone -q --no-checkout '$PROFILES_URL' profiles; } \
+        || { echo "FAIL profiles: clone $PROFILES_URL"; exit 1; }
+elif [ -n "\$(git -C profiles status --porcelain)" ]; then
     mkdir -p "\$backup"; git -C profiles diff HEAD > "\$backup/profiles.diff"; echo "BACKUP profiles -> \$backup"
 fi
 if git -C profiles remote set-url origin '$PROFILES_URL' && git -C profiles fetch -q origin \
