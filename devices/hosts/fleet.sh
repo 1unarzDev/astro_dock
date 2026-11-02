@@ -172,6 +172,17 @@ docker inspect $1 --format 'container $1 {{.Config.Image}} running={{.State.Runn
 EOF
 }
 
+# Runs on the host, in a repository: its dirty state (diff, status, untracked files) into $backup.
+backup_dirty() {
+    cat <<'EOF'
+    if [ -n "$(git status --porcelain)" ]; then
+        mkdir -p "$backup"; git diff HEAD > "$backup/$repo.diff"; git status --porcelain > "$backup/$repo.status"
+        git ls-files -o --exclude-standard -z | tar --null -T - -czf "$backup/$repo.untracked.tgz"
+        echo "BACKUP $repo -> $backup"
+    fi
+EOF
+}
+
 # Runs on the host: one line per repository, OK / BACKUP / FAIL.
 fast_forward() {
     cat <<EOF
@@ -181,11 +192,7 @@ for repo in $(repos); do
     cd "\$dir" 2>/dev/null || { echo "FAIL \$repo: no \$dir"; rc=1; continue; }
     branch=\$(git rev-parse --abbrev-ref HEAD); head=\$(git rev-parse --short HEAD)
     mkdir -p "\$backup"; echo "\$repo \$branch \$head" >> "\$backup/heads.txt"
-    if [ -n "\$(git status --porcelain)" ]; then
-        git diff HEAD > "\$backup/\$repo.diff"; git status --porcelain > "\$backup/\$repo.status"
-        git ls-files -o --exclude-standard -z | tar --null -T - -czf "\$backup/\$repo.untracked.tgz"
-        echo "BACKUP \$repo -> \$backup"
-    fi
+$(backup_dirty)
     git fetch -q origin || { echo "FAIL \$repo: fetch"; rc=1; continue; }
     [ "\$branch" = main ] || git checkout -q main || { echo "FAIL \$repo: checkout main from \$branch"; rc=1; continue; }
     if git merge --ff-only -q origin/main; then echo "OK \$repo \$branch@\$head -> main@\$(git rev-parse --short HEAD)"
