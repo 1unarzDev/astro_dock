@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# The robot's computers: every ssh host of the registry (ASTRO_REGISTRY, e.g. config/devices.yaml; the
+# The robot's computers: every ssh host of the registry (ASTRO_REGISTRY, the vessel profile's devices.yaml; the
 # name is the ssh destination). apply fast-forwards astro_dock and the profile's repos to origin/main
 # and builds in each host's container; --image first recreates that container on REF, after committing
 # the old one as a rollback image. Logs: ~/.local/state/astro_dock/hosts/ on this computer.

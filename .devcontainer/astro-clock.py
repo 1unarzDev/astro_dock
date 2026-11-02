@@ -4,8 +4,7 @@
     astro-clock.py [HOST ...]
 
 Without hosts it asks the time server (time_server role) and every STATIC_LEASES host from the
-vessel's network env (ASTRO_NETWORK_ENV, else `hw.sh env`, else the legacy
-config/boat-network.env). Hosts set up by `setup.linux.sh --components clock`
+vessel's network env (ASTRO_NETWORK_ENV, else `hw.sh env`). Hosts set up by `setup.linux.sh --components clock`
 with chrony answer; others show "no reply". Containers share the host clock,
 so this runs the same inside one. Exit 1 when a host is off by more than
 50 ms, unsynchronised, or silent.
@@ -20,17 +19,16 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LEGACY_ENV = ROOT / 'config' / 'boat-network.env'
 NTP_EPOCH = 2208988800  # seconds from 1900 to 1970
 LIMIT = 0.050
 
 
 def network_env():
-    """The vessel's network env path: ASTRO_NETWORK_ENV, else `hw.sh env`, else the legacy file."""
+    """The vessel's network env path: ASTRO_NETWORK_ENV, else `hw.sh env` (else none)."""
     if os.environ.get('ASTRO_NETWORK_ENV'):
         return Path(os.environ['ASTRO_NETWORK_ENV'])
     run = subprocess.run([str(ROOT / 'hw.sh'), 'env'], capture_output=True, text=True)
-    return Path(run.stdout.strip()) if run.returncode == 0 and run.stdout.strip() else LEGACY_ENV
+    return Path(run.stdout.strip()) if run.returncode == 0 and run.stdout.strip() else Path('/nonexistent')
 
 
 def role_address(key):
