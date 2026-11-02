@@ -36,6 +36,10 @@ FAKE_DOCKER = '''#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_SSH_LOG"
 case $1 in ps) echo c0ffee ;; exec) cat >/dev/null ;; esac
 '''
+FAKE_SYSTEMCTL = '''#!/usr/bin/env bash
+echo "systemctl $*" >> "$FAKE_SSH_LOG"
+[[ $2 != is-active ]] || echo active
+'''
 FAKE_SETUP = '''#!/usr/bin/env bash
 echo "setup $* ASTRO_NTP_ALLOW=$ASTRO_NTP_ALLOW" >> "$FAKE_SSH_LOG"
 '''
@@ -95,19 +99,23 @@ class Logic(unittest.TestCase):
 
 
 class Station(unittest.TestCase):
-    def take(self, *args, prefix=(), **env):
+    def take(self, *args, prefix=(), after=(), **env):
+        """station take ARGS, then each argv of ``after`` (stdout appended to run.stdout) in its state."""
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp, 'calls.log')
             log.touch()
             Path(tmp, 'modules', 'k1').mkdir(parents=True)
-            run = subprocess.run(
-                [*prefix, str(ROOT / 'hw.sh'), 'station', 'take', *args], capture_output=True, text=True,
-                env={**os.environ, 'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES),
-                     'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', 'HW_KERNEL_RELEASE': 'k1',
-                     'HW_MODULES_ROOT': str(Path(tmp, 'modules')), 'FAKE_SSH_LOG': str(log),
-                     'HW_SSH': executable(Path(tmp, 'ssh'), '#!/usr/bin/env bash\n{ echo "== $*"; cat; } >> "$FAKE_SSH_LOG"\n'),
-                     'HW_SSH_COPY_ID': 'true', 'HW_DOCKER': executable(Path(tmp, 'docker'), FAKE_DOCKER),
-                     'HW_SETUP': executable(Path(tmp, 'setup'), FAKE_SETUP), **env})
+            env = {**os.environ, 'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES),
+                   'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', 'HW_KERNEL_RELEASE': 'k1',
+                   'HW_MODULES_ROOT': str(Path(tmp, 'modules')), 'FAKE_SSH_LOG': str(log),
+                   'HW_SSH': executable(Path(tmp, 'ssh'), '#!/usr/bin/env bash\n{ echo "== $*"; cat; } >> "$FAKE_SSH_LOG"\n'),
+                   'HW_SSH_COPY_ID': 'true', 'HW_DOCKER': executable(Path(tmp, 'docker'), FAKE_DOCKER),
+                   'HW_SETUP': executable(Path(tmp, 'setup'), FAKE_SETUP),
+                   'HW_SYSTEMCTL': executable(Path(tmp, 'systemctl'), FAKE_SYSTEMCTL), **env}
+            run = subprocess.run([*prefix, str(ROOT / 'hw.sh'), 'station', 'take', *args],
+                                 capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+            for argv in after:
+                run.stdout += subprocess.run(argv, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL).stdout
             station = Path(tmp, 'fixture/station.yaml')
             return run, log.read_text(), station.read_text() if station.exists() else ''
 
@@ -130,6 +138,25 @@ class Station(unittest.TestCase):
             self.assertRegex(calls, rf'== .*{target} .*station\.yaml')
         self.assertNotIn('10.0.1.2 ', calls)                          # the operator host op is not a boat host
         self.assertIn('docker exec -i c0ffee sh -c', calls)           # the key into the dev container
+
+    def test_take_runs_the_heartbeat_as_a_station_service_and_release_stops_it(self):
+        unit = 'astro-operator-heartbeat.service'
+        hw = str(ROOT / 'hw.sh')
+        run, calls, _ = self.take(ASTRO_VESSEL='a', HW_IP_ADDR=ADDR, HW_IP_ROUTE=ROUTE, after=(
+            ['sh', '-c', f'cat "$XDG_CONFIG_HOME/systemd/user/{unit}"'], [hw, 'whoami'],
+            [hw, 'station', 'release'],
+            ['env', 'ASTRO_HOST=st1', 'ROS_DOMAIN_ID=7', 'ASTRO_COMPOSE_PROJECT=p', 'ASTRO_HEARTBEAT=ros2 run gamma beacon',
+             str(ROOT / 'devices/heartbeat.sh'), 'run']))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('Environment="ASTRO_HEARTBEAT=ros2 run gamma beacon"\n', run.stdout)   # hosts.yaml's
+        self.assertRegex(run.stdout, r'Environment=ASTRO_HOST=\S+ ASTRO_COMPOSE_PROJECT=fixture_project ROS_DOMAIN_ID=7\n')
+        self.assertIn(f'ExecStart={ROOT}/devices/heartbeat.sh run\nExecStop={ROOT}/devices/heartbeat.sh stop', run.stdout)
+        self.assertIn(f'systemctl --user enable {unit}\nsystemctl --user restart {unit}', calls)
+        self.assertIn(f'heartbeat active ({unit}', run.stdout)                       # whoami
+        self.assertIn(f'systemctl --user disable --now {unit}', calls)              # release
+        # The unit's command: the heartbeat in the dev container as this station, on the vessel's domain.
+        self.assertIn('docker exec -e ASTRO_HOST=st1 -e ASTRO_HOSTNAME=st1 -e ROS_DOMAIN_ID=7 c0ffee bash -c '
+                      'set -m; ros2 run gamma beacon &', calls)
 
     def test_dry_run_changes_nothing(self):
         run, calls, station = self.take('--dry-run', ASTRO_VESSEL='a', HW_IP_ADDR=ADDR, HW_IP_ROUTE=ROUTE)

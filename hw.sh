@@ -11,6 +11,7 @@ HW_PROGRAM=${HW_PROGRAM:-${0##*/}}
 # shellcheck source=devices/lib.sh
 source "$HW_ROOT/devices/lib.sh"
 HW_REQUIRED=(status plan apply verify rollback)
+HW_HEARTBEAT_UNIT=astro-operator-heartbeat.service   # station take's systemd --user service
 
 # hw_driver NAME: source devices/NAME.sh and refuse it unless it implements the whole contract.
 hw_driver() {
@@ -36,7 +37,8 @@ HW_COMMANDS=(
     "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
     "secrets check|the secrets file and the missing key names (never values)"
     "hot REPO [--host NAME] [--dry-run]|push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)"
-    "station take [--dry-run]|make this computer the operator station (boat link, gateway and time roles, keys, station file)"
+    "station take [--dry-run]|make this computer the operator station (boat link, gateway and time roles, keys, station file, heartbeat service)"
+    "station release|stop this computer's operator heartbeat service"
 )
 
 # command_usage [NAME]: the usage lines of every command, or of NAME only.
@@ -83,6 +85,7 @@ whoami_report() {
     printf 'fleet     %s; members %s\n' "$HW_FLEET" "$HW_MEMBERS"
     printf 'host      %s (%s)\n' "${ASTRO_HOST:-none}" "$HW_SELF_HOW"
     [[ -z $HW_SELF_MEMBER ]] || printf 'station   %s\n' "$HW_SELF_MEMBER"
+    heartbeat_report
     if [[ -n $ASTRO_VESSEL ]]; then
         printf 'vessel    %s (%s)\n' "$ASTRO_VESSEL" "$HW_SCOPE_HOW"
         printf 'network   %s\n' "${ASTRO_NETWORK_ENV:-none}"
@@ -90,6 +93,14 @@ whoami_report() {
     else
         printf 'vessel    none: pass --vessel V (device verbs and env need one)\n'
     fi
+}
+
+# The operator heartbeat service of station take, when installed here.
+heartbeat_report() {
+    local state
+    [[ -f ${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$HW_HEARTBEAT_UNIT ]] || return 0
+    state=$(${HW_SYSTEMCTL:-systemctl} --user is-active "$HW_HEARTBEAT_UNIT" 2>/dev/null) || true
+    printf 'heartbeat %s (%s; %s station release stops it)\n' "${state:-unknown}" "$HW_HEARTBEAT_UNIT" "$HW_PROGRAM"
 }
 
 # secrets check: the fleet's secrets.keys (KEY, or KEY? when optional) against the environment and the

@@ -9,13 +9,16 @@
 #   station take [--dry-run] make this computer the operator station: kernel modules first, the boat
 #                            link by the vessel subnet, the gateway and operator time roles (setup's
 #                            gateway and clock stages), the operator key on the boat hosts and in the dev
-#                            container, and the station file on every boat host.
+#                            container, the station file on every boat host, and the hosts profile's
+#                            operator_heartbeat command as a systemd --user service (devices/heartbeat.sh
+#                            runs it in the dev container).
+#   station release          stop and disable that heartbeat service.
 # Boat hosts: the registry's ssh hosts without the operator role. They are reached as the TUI reaches
 # them (key_hosts: LAN address, operator key) once the key exists, else by registry name.
 
 field_init() {
     set +e
-    SSH=${HW_SSH:-ssh} DOCKER=${HW_DOCKER:-docker}
+    SSH=${HW_SSH:-ssh} DOCKER=${HW_DOCKER:-docker} SYSTEMCTL=${HW_SYSTEMCTL:-systemctl}
     [[ -r ${ASTRO_REGISTRY:-} ]] || die "The profile names no readable registry (ASTRO_REGISTRY)"
     STAMP=$(date +%Y%m%d-%H%M%S)
     LOG=$(hw_state hosts)/${FUNCNAME[1]%_main}-$STAMP.log
@@ -216,7 +219,7 @@ station_file() {
 }
 
 station_take() {
-    local dry=false subnet='' link file roles=(operator gateway) boat rc=0 name container workspace target jump body
+    local dry=false subnet='' link file roles=(operator gateway) boat rc=0 name container workspace target jump body heartbeat
     case ${1:-} in --dry-run) dry=true ;; '') ;; *) die "Usage: $HW_PROGRAM station take [--dry-run]" ;; esac
     station_kernel
     need_scope
@@ -236,6 +239,11 @@ station_take() {
     log "operator key $KEY -> $(cut -d' ' -f1 <<<"$boat" | tr '\n' ' ')and the dev container"
     log "station file ~/.config/$file on this computer and each boat host:"
     sed 's/^/    /' <<<"$body"
+    heartbeat=$(heartbeat_unit)
+    if [[ -n $heartbeat ]]; then
+        log "operator heartbeat: $HW_HEARTBEAT_UNIT, a systemd --user service:"
+        sed 's/^/    /' <<<"$heartbeat"
+    else log "operator heartbeat: none (the hosts profile names no operator_heartbeat command)"; fi
     if $dry; then log "dry run: nothing changed"; return 0; fi
 
     ASTRO_NTP_ALLOW=operator "${HW_SETUP:-$HW_ROOT/setup.linux.sh}" --components clock,gateway --yes 2>&1 | tee -a "$LOG"
@@ -253,6 +261,7 @@ station_take() {
             <<<"$body" 2>>"$LOG"; then log "OK $name: station file"
         else log "FAIL $name: station file (unreachable?)"; rc=1; fi
     done <<<"$boat"
+    [[ -z $heartbeat ]] || heartbeat_install "$heartbeat" || rc=1
     log "station take rc=$rc log=$LOG"
     return $rc
 }
@@ -281,10 +290,48 @@ station_container_key() {
     log "OK dev container: operator key installed"
 }
 
+# The unit of the hosts profile's operator_heartbeat command (none without one): this station's
+# registry name (else its hostname) on the vessel's ROS domain, wherever the TUI runs; it retries while
+# the dev container is down.
+heartbeat_unit() {
+    local domain command
+    command=$(cfg operator_heartbeat)
+    [[ -n $command ]] || return 0
+    domain=$(unset ROS_DOMAIN_ID; hw_load_env "$ASTRO_NETWORK_ENV" ROS_DOMAIN_ID; printf '%s' "${ROS_DOMAIN_ID:-}")
+    printf '[Unit]\nDescription=Operator heartbeat of %s for %s (hw.sh station take)\n\n' "${ASTRO_HOST:-$ME}" "$ASTRO_VESSEL"
+    printf '[Service]\nEnvironment="ASTRO_HEARTBEAT=%s"\n' "$command"
+    printf 'Environment=ASTRO_HOST=%s ASTRO_COMPOSE_PROJECT=%s%s\n' \
+        "${ASTRO_HOST:-$ME}" "$(cfg compose_project)" "${domain:+ ROS_DOMAIN_ID=$domain}"
+    printf 'ExecStart=%s run\nExecStop=%s stop\nRestart=always\nRestartSec=3\n\n' \
+        "$HW_ROOT/devices/heartbeat.sh" "$HW_ROOT/devices/heartbeat.sh"
+    printf '[Install]\nWantedBy=default.target\n'
+}
+
+heartbeat_install() {
+    local dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+    mkdir -p -- "$dir" && printf '%s\n' "$1" >"$dir/.$HW_HEARTBEAT_UNIT.tmp" \
+        && mv -- "$dir/.$HW_HEARTBEAT_UNIT.tmp" "$dir/$HW_HEARTBEAT_UNIT" \
+        && $SYSTEMCTL --user daemon-reload && $SYSTEMCTL --user enable "$HW_HEARTBEAT_UNIT" >>"$LOG" 2>&1 \
+        && $SYSTEMCTL --user restart "$HW_HEARTBEAT_UNIT" \
+        || { log "FAIL this computer: operator heartbeat service $HW_HEARTBEAT_UNIT"; return 1; }
+    log "OK this computer: operator heartbeat service $HW_HEARTBEAT_UNIT"
+}
+
+station_release() {
+    [[ -z ${1:-} ]] || die "Usage: $HW_PROGRAM station release"
+    field_init
+    if $SYSTEMCTL --user disable --now "$HW_HEARTBEAT_UNIT" 2>/dev/null; then
+        log "OK this computer: operator heartbeat service $HW_HEARTBEAT_UNIT stopped"
+    else
+        log "operator heartbeat service $HW_HEARTBEAT_UNIT: not installed here"
+    fi
+}
+
 station_main() {
     case ${1:-} in
         take) shift; station_take "$@" ;;
+        release) shift; station_release "$@" ;;
         -h|--help|'') command_usage station | sed '1s/^      /Usage:/' ;;
-        *) die "Usage: $HW_PROGRAM station take [--dry-run]" ;;
+        *) die "Usage: $HW_PROGRAM station take [--dry-run] | station release" ;;
     esac
 }

@@ -10,5 +10,6 @@ sources:
   gamma: {url: https://example.invalid/gamma.git}
   delta: {url: https://example.invalid/delta.git}
 compose_project: fixture_project
+operator_heartbeat: ros2 run gamma beacon
 operator_key: fixture/ssh
 operator_registry: fixture/devices.yaml
