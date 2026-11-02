@@ -374,16 +374,20 @@ stage_repos() {
     approve "Clone and build these repositories?" || { SKIPPED+=(repos); return; }
     exclude="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null || true)"
     while read -r name url branch; do
-        names+=("src/$name")
         if [[ -d "$SCRIPT_DIR/src/$name" ]]; then
             echo "src/$name exists; keeping it."
-        else
-            run git clone --branch "$branch" "$url" "$SCRIPT_DIR/src/$name"
+        elif ! GIT_TERMINAL_PROMPT=0 run git clone --branch "$branch" "$url" "$SCRIPT_DIR/src/$name"; then
+            # A listed repository may not be published yet: the others still clone and build.
+            echo "Cannot clone $url yet; skipping src/$name (rerun the repos stage once it exists)." >&2
+            SKIPPED+=("repos:$name")
+            continue
         fi
+        names+=("src/$name")
         [[ -z "$exclude" ]] || git -C "$SCRIPT_DIR" check-ignore -q "src/$name/" && continue
         quote_command sh -c "echo /src/$name/ >> $exclude"
         $DRY_RUN || echo "/src/$name/" >>"$exclude"
     done <<<"$list"
+    ((${#names[@]})) || { SKIPPED+=(repos-build); return; }
     build="colcon build --symlink-install --packages-up-to \$(colcon list --names-only --base-paths ${names[*]})"
     if command -v colcon >/dev/null 2>&1; then
         (cd "$SCRIPT_DIR" && run bash -c "$build")

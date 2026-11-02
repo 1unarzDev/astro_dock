@@ -18,6 +18,7 @@ FIXTURE = ROOT / 'tests/data/profiles'
 GIT = '''#!/usr/bin/env bash
 if [ "$1" = clone ]; then
     echo "git $*" >> "$LOG"
+    case "$*" in *unpublished*) exit 128 ;; esac
     case "${@: -1}" in */profiles) ;; *) mkdir -p "${@: -1}"; exit 0 ;; esac
 fi
 exec %s "$@"
@@ -100,6 +101,15 @@ class SetupRepos(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertFalse([c for c in calls if c.startswith('git clone')])
         self.assertEqual(self.excluded().count('/src/alpha/'), 1)
+
+    def test_a_repo_not_published_yet_is_skipped_and_the_rest_build(self):
+        run, calls = self.setup('--host', 'a-pc', HW_REPOS_ALL='alpha later',
+                                HW_SOURCES_LATER_URL='https://example.invalid/unpublished.git')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('Cannot clone https://example.invalid/unpublished.git yet; skipping src/later', run.stderr)
+        self.assertEqual(calls[-1], 'colcon %s build --symlink-install --packages-up-to alpha_pkg' % self.ws)
+        self.assertNotIn('/src/later/', self.excluded())
+        self.assertIn('repos:later', run.stdout)
 
     def test_without_colcon_it_builds_in_the_compose_projects_dev_container(self):
         run, calls = self.setup('--host', 'a-pc', colcon=False, running='c0ffee')
