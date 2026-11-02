@@ -25,6 +25,11 @@ It returns None, ``{"context": text}`` (start) or ``{"deny": reason}`` (pre). Th
 blocks the call; contexts are joined. Stdlib only, Python 3.8, no ROS: well under 50 ms. Exits 0
 always (a deny is JSON, not an exit code): a missing, broken or slow package never blocks a call;
 its error goes to ``$XDG_STATE_HOME/astro/agents-hook.log``.
+
+The canonical copy lives in the mhseals_agents repo (``src/mhseals_agents/hooks/hook.py``); when
+the workspace has it, ``main`` hands the call to it (``canonical``). This file's own logic is the
+fallback: no checkout, a broken one, or one the package hooks don't guard the way they guard
+this file (delegating to an unguarded file would let an agent edit the rules away).
 """
 
 import importlib.util
@@ -37,6 +42,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+CANONICAL = Path('src') / 'mhseals_agents' / 'hooks' / 'hook.py'
 EVENTS = {'SessionStart': 'start', 'PreToolUse': 'pre', 'PostToolUse': 'post', 'PostToolUseFailure': 'post'}
 SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports Bash; older builds the rest
 SHELLS = ('bash', 'sh', 'zsh')
@@ -188,15 +194,49 @@ def run(agent, text, root=ROOT):
     return render(event, *dispatch(event, root)) if event else ''
 
 
+def _edit_denied(path, root):
+    probe = normalize('claude', {'hook_event_name': 'PreToolUse', 'tool_name': 'Edit', 'cwd': str(root),
+                                 'tool_input': {'file_path': str(path)}})
+    return dispatch(probe, root)[0] is not None
+
+
+def canonical(root=ROOT):
+    """The mhseals_agents hook module to hand calls to, or None to use this file's logic.
+
+    Only when the package hooks deny editing it, or deny editing neither it nor this file."""
+    path = root / CANONICAL
+    if not path.is_file() or path.resolve() == Path(__file__).resolve():
+        return None
+    if not _edit_denied(path, root) and _edit_denied(Path(__file__).resolve(), root):
+        log('canonical hook %s: not guarded like .agents/hook.py, using the built-in logic' % path)
+        return None
+    spec = importlib.util.spec_from_file_location('agents_hook_canonical', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def respond(args, text, root=ROOT):
+    """The hook's stdout for command-line ``args`` and stdin ``text``."""
+    if args[:1] == ['--playbook']:
+        start = normalize(args[1] if len(args) > 1 else 'agent',
+                          {'hook_event_name': 'SessionStart', 'source': 'playbook'})
+        return '\n\n'.join(dispatch(start, root)[1])
+    return run(args[0] if args else '', text, root)
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
+    out = None
     try:
-        if args[:1] == ['--playbook']:
-            start = normalize(args[1] if len(args) > 1 else 'agent',
-                              {'hook_event_name': 'SessionStart', 'source': 'playbook'})
-            out = '\n\n'.join(dispatch(start)[1])
-        else:
-            out = run(args[0] if args else '', sys.stdin.read())
+        text = '' if args[:1] == ['--playbook'] else sys.stdin.read()
+        try:
+            module = canonical()
+            out = module.respond(args, text, ROOT) if module else None
+        except BaseException as error:      # a broken canonical copy falls back to this file
+            log('canonical hook: %r' % (error,))
+        if out is None:
+            out = respond(args, text)
     except BaseException as error:
         log('dispatch: %r' % (error,))
         out = ''

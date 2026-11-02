@@ -8,5 +8,8 @@ controls (only commands that actually run: text in a grep, an echo, a commit mes
 - Before your first robot command, run `python3 .agents/hook.py --playbook` and follow it. Repo-only work
   needs none of it.
 - A blocked command's reason names the command to use instead. Use that command; don't work around the block.
+- When the workspace has the agent-loop repo (`src/mhseals_agents`), `.agents/hook.py` runs its canonical
+  hook (`hooks/hook.py`) as long as the package hooks guard it like this one, and its `./start` prints the
+  orchestrator role, routing and runbooks for a fresh session.
 - Codex runs project hooks only once they are trusted: open Codex in this workspace and approve them with
   `/hooks` (again after `.codex/hooks.json` changes). Until then Codex has no block, only this file.
