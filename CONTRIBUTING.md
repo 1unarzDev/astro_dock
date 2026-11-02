@@ -57,6 +57,8 @@ from my_robot.tasks import Task
 - Use the `pytest` framework for testing.
 - Ensure tests cover edge cases and potential failure points.
 - `tests/smoke.sh` (under a minute, nothing contacted) gates landing; the full suite runs in CI and never blocks.
+  With the workspace agent tools it skips a tree that already passed (`tcache`), and `--impact` runs only the
+  tests `timpact` selects. The root `conftest.py` opts pytest into their quarantine plugin when importable.
 
 ### Documentation
 - Update the README.md and other relevant documentation with any new features or changes.

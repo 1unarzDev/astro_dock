@@ -33,6 +33,7 @@ CONFIG = ('~/.config/mhseals', r'\.config/mhseals')
 KEEPER = ('the mhseals keeper pattern', r'mhseals_testing harness|mhseals\.\*harness')
 GITMODULES = ('.gitmodules URLs', r'github\.com/MHSeals/[\w.-]+')
 HOOK_TABLE = ('mhseals_testing agent-hook regression table', r'ssh blastoise\b|mhseals_testing')
+AGENT_TOOLS = ('the workspace agent tools (quarantine plugin, tcache, timpact)', r'(?i:mhseals_agents)')
 LEGACY_LINKS = ('legacy config/ links into the blastoise profile (astro-clock.py LEGACY_ENV, containers without BASH_ENV '
                 'or the prebuilt ASTRO_REGISTRY), for one release',
                 r'^\.\./profiles/blastoise/(?:network\.env|devices\.yaml)$')
@@ -58,7 +59,9 @@ PENDING = {
     'config/boat-network.env': (LEGACY_LINKS,),
     'config/devices.yaml': (LEGACY_LINKS,),
     'config/run.yaml': (IMAGE,),
+    'conftest.py': (AGENT_TOOLS,),
     'tests/test_agents_hook.py': (HOOK_TABLE, DATA, CONTAINER),
+    'tests/smoke.sh': (AGENT_TOOLS,),
     'tests/test_run_env.py': (DATA,),
 }
 
