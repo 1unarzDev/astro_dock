@@ -82,7 +82,7 @@ colcon build --symlink-install
 help
 ```
 
-Container shells load ROS, the image overlays and the workspace at startup, and reload them after a successful `colcon build` or `astro-ros-install`; run `ros_env` to reload by hand. `help` browses the commands that astro_dock and each workspace package describe in a `help.yaml` (package root or `share/<package>/`), fills in their parameters, and runs one after you confirm it; `help --list` prints them as text.
+Container shells load ROS, the image overlays and the workspace at startup, and reload them after a successful `colcon build` or `astro-ros-install`; run `ros_env` to reload by hand. `help` browses the commands that astro_dock and each workspace package describe in a `help.yaml` (package root or `share/<package>/`), fills in their parameters, and runs one after you confirm it; `help --list` prints them as text. `colcon_defaults.yaml` makes every build from the workspace root a symlink-install, so Python, YAML and launch edits are live; an interactive shell warns when `install/` holds old copies of `src/` from a build without it (`.devcontainer/install-check.py`).
 
 Camera images already include the ZED wrapper. Only clone it when developing the driver, and match the revision pinned in the corresponding Dockerfile.
 

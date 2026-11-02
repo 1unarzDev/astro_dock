@@ -195,5 +195,8 @@ help() {
   eval "$line"
 }
 
+# An interactive shell says when install/ holds old copies of src/ (a build without --symlink-install).
+[[ $- != *i* || ! -f "$ASTRO_DIR/install-check.py" ]] || python3 -I "$ASTRO_DIR/install-check.py" "$ROS_WS" || true
+
 [[ ! -f "$ASTRO_DIR/astro-banner.sh" ]] || source "$ASTRO_DIR/astro-banner.sh"
 
