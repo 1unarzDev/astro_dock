@@ -242,13 +242,16 @@ class Layering(unittest.TestCase):
 # Commands hw.sh and the setup repos stage replaced: nothing tracked here, nor in a repository checked out under src/, may name them.
 REMOVED = re.compile(r'\b(?:(?:router_setup|ubiquiti_setup|link_measure|lidar_setup|promote_jetson|boat_hosts'
                      r'|clone_optional)\.sh|optional_repos\.yaml)\b')
+# A repository's dated records (an agents repo's research notes, decisions and events) keep the names of their day.
+RECORDS = ('research', 'decisions', 'state')
 
 
 class RemovedCommands(unittest.TestCase):
     def test_no_file_names_a_removed_command(self):
         def tracked(repo):
             run = subprocess.run(['git', '-C', str(repo), 'ls-files', '-z'], capture_output=True, check=True)
-            return [repo / name for name in run.stdout.decode().split('\0') if name]
+            names = [name for name in run.stdout.decode().split('\0') if name]
+            return [repo / name for name in names if repo == ROOT or name.split('/', 1)[0] not in RECORDS]
         files = tracked(ROOT) + [f for repo in sorted(ROOT.glob('src/*/')) if (repo / '.git').exists()
                                  for f in tracked(repo)]
         hits = []
