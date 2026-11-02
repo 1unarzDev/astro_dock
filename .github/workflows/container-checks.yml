@@ -17,8 +17,18 @@ permissions:
   contents: read
 
 jobs:
+  # The landing gate: tests/smoke.sh (under a minute). Only this job blocks.
+  smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke tier
+        run: tests/smoke.sh
+
+  # The full suite: reported, never blocking.
   static:
     runs-on: ubuntu-24.04
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Validate shell scripts

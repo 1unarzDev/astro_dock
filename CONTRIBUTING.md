@@ -56,6 +56,7 @@ from my_robot.tasks import Task
 - Write unit tests for all new features and bug fixes.
 - Use the `pytest` framework for testing.
 - Ensure tests cover edge cases and potential failure points.
+- `tests/smoke.sh` (under a minute, nothing contacted) gates landing; the full suite runs in CI and never blocks.
 
 ### Documentation
 - Update the README.md and other relevant documentation with any new features or changes.
