@@ -34,7 +34,8 @@ clock() {
         "$root/setup.linux.sh" --non-interactive --yes --components clock "$@" 2>&1
 }
 
-read -r server subnet < <(. "$network_env"; echo "$TIME_SERVER $LAN_SUBNET")
+read -r subnet < <(. "$network_env"; echo "$LAN_SUBNET")
+server="$("$root/hw.sh" env TIME_SERVER_IP)"                     # the registry's time_server role
 
 # The LAN time server: serves the subnet at local stratum 10, not orphan.
 out="$(ASTRO_NTP_ALLOW=lan clock)"
@@ -49,8 +50,8 @@ grep -Fxq "confdir $sources" "$etc/chrony.conf" || fail "confdir not added"
 grep -Fxq "sourcedir $sources" "$etc/chrony.conf" || fail "sourcedir not added"
 
 # The LAN server also follows the operator laptops, listed first and never preferred.
-read -r -a operators < <(. "$network_env"; echo "$OPERATOR_TIME_SERVERS")
-((${#operators[@]})) || fail "no operator time servers in the network env"
+read -r -a operators < <("$root/hw.sh" env OPERATOR_IP)          # the operator role's hosts
+((${#operators[@]})) || fail "no operator hosts in the registry"
 for op in "${operators[@]}"; do
     grep -Fxq "server $op iburst" "$sources/boat.sources" || fail "operator $op not a source"
 done
@@ -76,18 +77,21 @@ out="$(ASTRO_NTP_SERVER=boat clock 2>&1)"
 grep -q 'ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan' <<<"$out" || fail "boat alias notice missing"
 grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "boat alias did not follow the LAN server"
 
-# The BOAT_ key names are read for one release; lan refuses a network env without a time server.
+# The old keys (BOAT_ names, TIME_SERVER and OPERATOR_TIME_SERVERS instead of roles) are read for one
+# release; lan refuses a vessel without a time server.
 old="$tmp/old-profiles"
 cp -r "$root/tests/data/profiles" "$old"
-sed -i -E 's/^(LAN_SUBNET|TIME_SERVER|OPERATOR_TIME_SERVERS|TRANSPORT_IP)=/BOAT_\1=/; s/^BOAT_LAN_SUBNET=/BOAT_SUBNET=/' "$old/a/network.env"
-grep -q '^BOAT_SUBNET=' "$old/a/network.env" && ! grep -q '^LAN_SUBNET=' "$old/a/network.env" || fail "old-name fixture"
+sed -i 's/^LAN_SUBNET=/BOAT_SUBNET=/' "$old/a/network.env"
+printf 'BOAT_TIME_SERVER=%s\nBOAT_OPERATOR_TIME_SERVERS="%s"\n' "$server" "${operators[0]}" >> "$old/a/network.env"
+sed -i 's/, time_server\]/]/; s/\[operator, gateway\]/[gateway]/' "$old/a/devices.yaml"
+grep -q '^BOAT_SUBNET=' "$old/a/network.env" && ! grep -q 'time_server\|operator' "$old/a/devices.yaml" || fail "old-name fixture"
 out="$(ASTRO_PROFILES="$old" ASTRO_NTP_SERVER=lan ASTRO_NTP_ALLOW=lan clock)"
 grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "BOAT_TIME_SERVER not read"
 grep -Fxq "server ${operators[0]} iburst" "$sources/boat.sources" || fail "BOAT_OPERATOR_TIME_SERVERS not read"
 grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "BOAT_SUBNET not read"
 sed -i '/^BOAT_TIME_SERVER=/d' "$old/a/network.env"
-if out="$(ASTRO_PROFILES="$old" ASTRO_NTP_SERVER=lan clock)"; then fail "lan accepted an empty TIME_SERVER"; fi
-grep -q 'ASTRO_NTP_SERVER=lan needs TIME_SERVER' <<<"$out" || fail "empty TIME_SERVER message: $out"
+if out="$(ASTRO_PROFILES="$old" ASTRO_NTP_SERVER=lan clock)"; then fail "lan accepted a vessel without a time server"; fi
+grep -q 'ASTRO_NTP_SERVER=lan needs a time server' <<<"$out" || fail "no time server message: $out"
 
 # A public server is neither preferred nor polled fast.
 out="$(ASTRO_NTP_SERVER=time.google.com clock)"

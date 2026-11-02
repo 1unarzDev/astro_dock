@@ -21,7 +21,7 @@ class JetsonPromotionTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
         self.log = root / 'commands'
-        # The fixture fleet's vessel a: image example/astro, gateway s.
+        # The fixture fleet's vessel a: image example/astro, through op (role gateway).
         self.env = dict(os.environ, GH_REPO='example/astro',
                         ASTRO_PROFILES=str(ROOT / 'tests/data/profiles'), ASTRO_VESSEL='a',
                         ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null',
@@ -107,7 +107,7 @@ elif command.startswith('docker pull '):
                         commands.index('"workflow", "run"'))
         self.assertLess(commands.index('"run", "watch"'),
                         commands.index('docker pull'))
-        self.assertIn('"s", "ssh ', commands)              # through the gateway
+        self.assertIn('"op", "ssh ', commands)              # through the gateway
         self.assertIn('crew@jetson.local', commands)
         self.assertIn('rm -rf -- /tmp/astro-jetson.ABC123', commands)
 
@@ -162,7 +162,7 @@ elif command.startswith('docker pull '):
         self.env['HW_GATEWAY'] = ''
         result = self.promote('user@jetson', '123')
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertNotIn('"s", "ssh ', self.commands())
+        self.assertNotIn('"op", "ssh ', self.commands())
         self.assertIn('user@jetson', self.commands())
 
 

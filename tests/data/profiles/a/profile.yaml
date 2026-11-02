@@ -2,3 +2,4 @@ extends: fleet
 kind: vessel
 network_env: network.env
 registry: devices.yaml
+lidar: {mac: 02:aa:00:00:02:01}   # a device fact in the vessel file, over the fleet's lidar.yaml

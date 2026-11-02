@@ -207,6 +207,24 @@ class Profiles(unittest.TestCase):
         (self.root / 'b/profile.yaml').write_text('extends: fleet\n')
         self.assertIn('a member needs kind', self.hw('whoami').stderr)
 
+    def test_a_vessel_file_holds_device_facts_and_roles_read_as_addresses(self):
+        shown = self.hw('--vessel', 'a', 'profile', 'show')
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        self.assertIn('mac: 02:aa:00:00:02:01', shown.stdout)                # a/profile.yaml lidar: over fleet's
+        self.assertIn('target: 10.0.1.10', shown.stdout)                     # radio.yaml $COMPUTER_IP: a-pc's lease
+        for key, value in (('TIME_SERVER_IP', '10.0.1.10'), ('OPERATOR_IP', '10.0.1.2'), ('GATEWAY_IP', '10.0.1.2'),
+                           ('ROUTER_IP', '10.0.1.1')):
+            with self.subTest(key=key):
+                run = self.hw('--vessel', 'a', 'env', key)
+                self.assertEqual((run.returncode, run.stdout), (0, value + '\n'), run.stderr)
+        run = self.hw('--vessel', 'a', 'env', 'CAMERA_HOST_IP')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('is not a key of', run.stderr)
+        with open(self.root / 'a/profile.yaml', 'a') as stream:
+            stream.write('jetson: {colour: x}\n')
+        run = self.hw('--vessel', 'a', 'env')
+        self.assertIn("%s:6: unknown key 'colour'" % (self.root / 'a/profile.yaml'), run.stderr)
+
     def test_topology_must_match_the_members(self):
         (self.root / 'fleet/topology.yaml').write_text('nodes: {a: vessel, s: station}\n')
         self.assertIn('nodes must list every member', self.hw('whoami').stderr)

@@ -32,7 +32,7 @@ verbs() { declare -F | sed -n 's/^declare -f driver_//p' | grep -vx usage | tr '
 # `hw.sh COMMAND --help` prints its own line.
 HW_COMMANDS=(
     "whoami [--root|--registry]|this machine's host and vessel, and how found (or the profile root or registry)"
-    "env [KEY]|the vessel's network env path, or one of its keys"
+    "env [KEY]|the vessel's network env path, or one of its keys or role addresses (<ROLE>_IP)"
     "profile show [NAME]|a merged profile (no secrets)"
     "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
     "secrets check|the secrets file and the missing key names (never values)"
@@ -190,11 +190,8 @@ case ${1:-} in
         [[ -r $ASTRO_NETWORK_ENV ]] || die "The network env $ASTRO_NETWORK_ENV is missing"
         if [[ -z ${2:-} ]]; then printf '%s\n' "$ASTRO_NETWORK_ENV"; exit 0; fi
         [[ $2 =~ ^[A-Z][A-Z0-9_]*$ ]] || die "Not an env key: $2"
-        # Network values only: secrets and other variables are never printed.
-        grep -q "^$2=" "$ASTRO_NETWORK_ENV" || die "$2 is not a key of $ASTRO_NETWORK_ENV"
-        hw_load_env "$ASTRO_NETWORK_ENV"
-        printf '%s\n' "${!2:-}"
-        exit 0
+        # Network values and role keys (<ROLE>_IP) only: secrets and other variables are never printed.
+        exec python3 -I "$HW_ROOT/devices/profile.py" value "$ASTRO_NETWORK_ENV" "${ASTRO_REGISTRY:-}" "$2"
         ;;
     hot|station)
         # shellcheck source=devices/field.sh

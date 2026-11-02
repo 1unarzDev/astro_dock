@@ -5,10 +5,10 @@ revert_seconds: 300
 devices:
   rocket: {address: $UBNT_ROCKET_IP, mac: 02:aa:00:00:00:22, role: ap, cfg: ""}
   bullet: {address: $UBNT_BULLET_IP, mac: 02:aa:00:00:00:21, role: station, cfg: ""}
-reachable: [$ROUTER_IP, $TRANSPORT_IP]
+reachable: [$ROUTER_IP, $COMPUTER_IP]
 credentials: {user: UBNT_USER, password: UBNT_PASSWORD, jump: UBNT_JUMP}
 measure:
-  target: $TRANSPORT_IP
+  target: $COMPUTER_IP
   container: dev
   seconds: 10
   port: 5201

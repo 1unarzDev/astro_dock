@@ -413,21 +413,24 @@ stage_operator_key() {
 stage_clock() {
     local servers allow="${ASTRO_NTP_ALLOW:-}" server file config service lan_server lan_subnet peers=""
     local chrony=false lan=false local_servers=() sources=/etc/chrony/astro-sources operators=() stratum=true serve_lan=false
-    # "lan" names the vessel's time server and subnet (TIME_SERVER, LAN_SUBNET of the profile network
-    # env), read only for the lan and operator modes: generic mode and an unmatched machine have none.
+    # "lan" names the vessel's time server (the registry's time_server role, TIME_SERVER_IP) and subnet
+    # (LAN_SUBNET of the profile network env); the operator role's hosts (OPERATOR_IP) have internet time.
+    # Read only for the lan and operator modes: generic mode and an unmatched machine have none.
     # "boat" is lan's old name, for one release.
     [[ "${ASTRO_NTP_SERVER:-}" != boat ]] || { echo "ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan" >&2; ASTRO_NTP_SERVER=lan; }
     [[ "$allow" != boat ]] || { echo "ASTRO_NTP_ALLOW=boat is now ASTRO_NTP_ALLOW=lan" >&2; allow=lan; }
     if [[ "${ASTRO_NTP_SERVER:-}" == lan || "$allow" == lan || "$allow" == operator ]]; then
         local env
         env="$(network_env)" || { echo "ASTRO_NTP_SERVER/ASTRO_NTP_ALLOW lan and operator need the vessel's network env (hw.sh env)." >&2; exit 1; }
-        # The BOAT_ names are the old ones, read for one release. One value per line: an empty
-        # TIME_SERVER must not shift LAN_SUBNET into its place.
-        { read -r lan_server; read -r lan_subnet; } < <(. "$env"
-            printf '%s\n%s\n' "${TIME_SERVER:-${BOAT_TIME_SERVER:-}}" "${LAN_SUBNET:-${BOAT_SUBNET:-}}")
-        read -r -a operators < <(. "$env"; printf '%s\n' "${OPERATOR_TIME_SERVERS:-${BOAT_OPERATOR_TIME_SERVERS:-}}")
+        # TIME_SERVER, OPERATOR_TIME_SERVERS and the BOAT_ names are the old keys, read for one release.
+        # One value per line: an empty server must not shift LAN_SUBNET into its place.
+        { read -r lan_server; read -r lan_subnet; read -r -a operators; } < <(. "$env"
+            role() { "$SCRIPT_DIR/hw.sh" env "$1" 2>/dev/null || printf '%s\n' "$2"; }
+            role TIME_SERVER_IP "${TIME_SERVER:-${BOAT_TIME_SERVER:-}}"
+            printf '%s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}"
+            role OPERATOR_IP "${OPERATOR_TIME_SERVERS:-${BOAT_OPERATOR_TIME_SERVERS:-}}")
         [[ "${ASTRO_NTP_SERVER:-}" != lan || -n "$lan_server" ]] || {
-            echo "ASTRO_NTP_SERVER=lan needs TIME_SERVER (the vessel's time server) in $env; set it there or name the servers in ASTRO_NTP_SERVER." >&2; exit 1; }
+            echo "ASTRO_NTP_SERVER=lan needs a time server (a registry host with the time_server role) for $env; add the role there or name the servers in ASTRO_NTP_SERVER." >&2; exit 1; }
         [[ "$allow" != lan && "$allow" != operator || -n "$lan_subnet" ]] || {
             echo "ASTRO_NTP_ALLOW=$allow needs LAN_SUBNET (the subnet to serve) in $env; set it there or name the subnet in ASTRO_NTP_ALLOW." >&2; exit 1; }
     fi

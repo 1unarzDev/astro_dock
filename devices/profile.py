@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Layered device profiles for devices/lib.sh. A profile root (the user's profile set: ASTRO_PROFILES, else
 the profiles/ checkout of ASTRO_PROFILES_URL; see hw_profiles_config) holds one directory per profile: NAME/profile.yaml (extends: PARENT, kind: vessel|station, network_env:
-PATH, registry: PATH; paths relative to that directory) and one KIND.yaml per device kind. The fleet is
+PATH, registry: PATH; paths relative to that directory) and one KIND.yaml per device kind. A profile.yaml may
+also carry a KIND: mapping, layered over its own directory's KIND.yaml: a vessel keeps its few device facts
+(a lidar's MAC, model, rpm) in that one file instead of a one-key KIND.yaml per device. The fleet is
 the one profile without `extends` (and without `kind`); every other profile is a member, a vessel or a
 station. The fleet's optional topology.yaml (nodes, links) and secrets.keys are not device kinds.
 
@@ -10,15 +12,25 @@ parents define, except under a mapping the parent leaves empty ({}) or a key it 
 fills those). A child may add a kind. YAML is strict (no duplicate keys, anchors, aliases or merge keys);
 errors name FILE:LINE.
 
+The network env holds addresses; who does what is the registry's roles. Each role also reads as a key,
+<ROLE>_IP: the addresses of its hosts (registry address, else the STATIC_LEASES reservation of the host's
+name), space-separated, so `$TIME_SERVER_IP` follows whichever host has the time_server role. A network
+env key of the same name wins.
+
   profile.py resolve ROOT         load and check every profile, then pick this machine's host and vessel
                                   (shell assignments; see resolve() for the inputs)
   profile.py meta DIR             HW_PROFILE_CHAIN, HW_PROFILE_KINDS, and ASTRO_NETWORK_ENV /
                                   ASTRO_REGISTRY unless already set (shell assignments)
-  profile.py kind DIR KIND ENV    KIND as HW_* assignments; a set HW_* wins; $KEY reads the
-                                  environment, then ENV (an unknown $KEY fails)
-  profile.py show DIR [ENV]       the merged profile as YAML; $KEY reads ENV only (default: the
-                                  profile's own network env; else stays as written), so no secret shows
+  profile.py kind DIR KIND ENV [REGISTRY]
+                                  KIND as HW_* assignments; a set HW_* wins; $KEY reads the
+                                  environment, then ENV and the role keys of REGISTRY (default: the
+                                  chain's) (an unknown $KEY fails)
+  profile.py show DIR [ENV]       the merged profile as YAML; $KEY reads ENV and its role keys only
+                                  (default: the profile's own network env; else stays as written), so no
+                                  secret shows
+  profile.py value ENV REGISTRY KEY  one value of ENV or a role key (fails when neither has KEY)
   profile.py roles REGISTRY HOST  the registry roles of HOST, one per line
+  profile.py hosts REGISTRY ROLE  the registry hosts with ROLE, one per line
 
 Kind keys join with '_' under HW_ (upper case, other characters become '_'): devices.rocket.address is
 HW_DEVICES_ROCKET_ADDRESS. Lists join with spaces; each mapping also gets HW_<PATH>__KEYS.
@@ -55,6 +67,7 @@ class Error(Exception):
 class Map(dict):
     """A mapping that remembers each key's line."""
     lines = {}
+    sections = {}
 
 
 class Loader(yaml.SafeLoader):
@@ -96,20 +109,25 @@ def load(path):
 
 
 def layer(here):
-    """One profile's own profile.yaml, checked; paths made absolute (relative to its directory)."""
+    """One profile's own profile.yaml, checked; paths made absolute (relative to its directory). Its KIND:
+    mappings are kept apart, in .sections."""
     file = here / 'profile.yaml'
     data = load(file) if file.exists() else Map()
-    for key in data:
+    sections = {}
+    for key in list(data):
         if key not in META:
-            raise Error(f'{file}:{data.lines[key]}: unknown key {key!r} (allowed: {", ".join(META)})')
-        if not isinstance(data[key], str) or not data[key]:
+            if not isinstance(data[key], dict) or not NAME.fullmatch(str(key)) or key in NOT_KINDS:
+                raise Error(f'{file}:{data.lines[key]}: unknown key {key!r} (allowed: {", ".join(META)}, '
+                            'or a device kind as a mapping)')
+            sections[key] = data.pop(key)
+        elif not isinstance(data[key], str) or not data[key]:
             raise Error(f'{file}:{data.lines[key]}: {key} must be a non-empty string')
     if 'kind' in data and data['kind'] not in KINDS:
         raise Error(f'{file}:{data.lines["kind"]}: kind must be one of {", ".join(KINDS)}, not {data["kind"]!r}')
     if 'extends' in data and not NAME.fullmatch(data['extends']):
         raise Error(f'{file}:{data.lines["extends"]}: extends must name a profile, not {data["extends"]!r}')
     out = Map(data)
-    out.lines = data.lines
+    out.lines, out.sections = data.lines, sections
     for key in ('network_env', 'registry'):
         if key in out:
             out[key] = os.path.normpath(here / out[key])
@@ -165,19 +183,25 @@ def merge(base, over, file, where=''):
 
 
 def kinds(dirs):
-    """Device kinds: every YAML of the chain but profile.yaml, topology.yaml and a layer's own registry."""
-    registries = {Path(p) for p in (layer(d).get('registry') for d in dirs) if p}
+    """Device kinds: every YAML of the chain but profile.yaml, topology.yaml and a layer's own registry,
+    and every profile.yaml section."""
+    layers = [layer(d) for d in dirs]
+    registries = {Path(p).resolve() for p in (data.get('registry') for data in layers) if p}
     return sorted({p.stem for d in dirs for p in d.glob('*.yaml')
-                   if p.stem not in NOT_KINDS and p.resolve() not in {r.resolve() for r in registries}})
+                   if p.stem not in NOT_KINDS and p.resolve() not in registries}
+                  | {kind for data in layers for kind in data.sections})
 
 
 def resolve_kind(dirs, kind):
+    """KIND merged down the chain: per directory its KIND.yaml, then its profile.yaml section."""
     data, found = Map(), False
     for d in dirs:
         file = d / (kind + '.yaml')
-        if file.exists():
-            data = merge(data, load(file), file) if found else load(file)
-            found = True
+        own = layer(d).sections.get(kind)
+        for part, where in ((load(file) if file.exists() else None, file), (own, d / 'profile.yaml')):
+            if part is not None:
+                data = merge(data, part, where) if found else part
+                found = True
     if not found:
         raise Error(f'profile {dirs[-1].name} has no {kind}.yaml')
     return data
@@ -192,6 +216,30 @@ def network(path):
         if sep and re.fullmatch(r'[A-Z][A-Z0-9_]*', key):
             env[key] = ' '.join(shlex.split(value, comments=True))
     return env
+
+
+def role_keys(registry, env):
+    """{<ROLE>_IP: its hosts' addresses} from a registry over a network env (see the module doc)."""
+    leases = {e.split('=')[1]: e.split('=')[2] for e in env.get('STATIC_LEASES', '').split() if e.count('=') == 2}
+    out = {}
+    for name, spec in (registry_hosts(registry) if registry else {}).items():
+        spec = spec or {}
+        address = str(spec.get('address') or '')
+        address = env.get(address[1:], '') if address.startswith('$') else address
+        address = address or leases.get(name, '')
+        if not address:
+            continue
+        for role in spec.get('roles') or []:
+            key = re.sub(r'[^A-Z0-9]', '_', str(role).upper()) + '_IP'
+            if address not in out.setdefault(key, []):
+                out[key].append(address)
+    return {key: ' '.join(addresses) for key, addresses in out.items()}
+
+
+def network_view(path, registry):
+    """A network env with its role keys (the env's own keys win); a missing registry has none."""
+    env = network(path)
+    return {**role_keys(registry if registry and Path(registry).is_file() else '', env), **env}
 
 
 def expander(env, source, strict=True):
@@ -528,14 +576,21 @@ def main(command, *args):
         for key, var in (('network_env', 'ASTRO_NETWORK_ENV'), ('registry', 'ASTRO_REGISTRY')):
             print('[[ -n ${%s:-} ]] || %s=%s' % (var, var, shlex.quote(meta[key] or '')))
     elif command == 'kind':
-        directory, kind, env_path = args
-        dirs, _ = chain(directory)
-        expand = expander({**network(env_path), **os.environ}, env_path)
+        directory, kind, env_path, *registry = args
+        dirs, meta = chain(directory)
+        registry = (registry or [''])[0] or meta['registry']
+        expand = expander({**network_view(env_path, registry), **os.environ}, env_path)
         print('\n'.join(assignments(resolve_kind(dirs, kind), expand, kind)))
+    elif command == 'value':
+        env_path, registry, key = args
+        view = network_view(env_path, registry)
+        if key not in view:
+            raise Error(f'{key} is not a key of {env_path} or a registry role (<ROLE>_IP)')
+        print(view[key])
     elif command == 'show':
         dirs, meta = chain(args[0])
         env_path = args[1] if len(args) > 1 else (meta['network_env'] or '')
-        expand = expander(network(env_path), env_path, strict=False)
+        expand = expander(network_view(env_path, meta['registry']), env_path, strict=False)
         shown = {'profile': ' -> '.join(d.name for d in dirs), 'network_env': meta['network_env'],
                  'registry': meta['registry']}
         for kind in kinds(dirs):
@@ -545,8 +600,12 @@ def main(command, *args):
         registry, host = args
         entry = registry_hosts(registry).get(host) or {}
         print('\n'.join(str(r) for r in (entry.get('roles') or [])))
+    elif command == 'hosts':
+        registry, role = args
+        print('\n'.join(name for name, spec in registry_hosts(registry).items()
+                        if role in ((spec or {}).get('roles') or [])))
     else:
-        raise Error('usage: profile.py resolve|meta|kind|show|roles ...')
+        raise Error('usage: profile.py resolve|meta|kind|value|show|roles|hosts ...')
 
 
 if __name__ == '__main__':

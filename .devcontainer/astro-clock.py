@@ -3,7 +3,7 @@
 
     astro-clock.py [HOST ...]
 
-Without hosts it asks TIME_SERVER and every STATIC_LEASES host from the
+Without hosts it asks the time server (time_server role) and every STATIC_LEASES host from the
 vessel's network env (ASTRO_NETWORK_ENV, else `hw.sh env`, else the legacy
 config/boat-network.env). Hosts set up by `setup.linux.sh --components clock`
 with chrony answer; others show "no reply". Containers share the host clock,
@@ -33,6 +33,12 @@ def network_env():
     return Path(run.stdout.strip()) if run.returncode == 0 and run.stdout.strip() else LEGACY_ENV
 
 
+def role_address(key):
+    """A role key of the vessel (`hw.sh env TIME_SERVER_IP`), else empty."""
+    run = subprocess.run([str(ROOT / 'hw.sh'), 'env', key], capture_output=True, text=True)
+    return run.stdout.strip() if run.returncode == 0 else ''
+
+
 def lan_hosts(path=None):
     """[(name, address)] from the env file: the time server, then the reservations."""
     path = path or network_env()
@@ -41,8 +47,9 @@ def lan_hosts(path=None):
         key, sep, value = line.partition('=')
         if sep and not line.lstrip().startswith('#'):
             values[key.strip()] = ' '.join(shlex.split(value, comments=True))
-    server = values.get('TIME_SERVER') or values.get('BOAT_TIME_SERVER')    # the old name, for one release
-    hosts = [('time server', server)] if server else []
+    # The registry's time_server role; TIME_SERVER and BOAT_TIME_SERVER are the old keys, for one release.
+    server = values.get('TIME_SERVER') or values.get('BOAT_TIME_SERVER') or role_address('TIME_SERVER_IP')
+    hosts = [('time server', address) for address in server.split()]
     for lease in values.get('STATIC_LEASES', '').split():
         _, name, address = lease.split('=')
         hosts.append((name, address))

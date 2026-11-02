@@ -15,15 +15,26 @@ apply     Validate the candidate on HOST ($(cfg validator)), dispatch $(cfg work
           then pull the family tag on HOST and check it is the candidate.
 verify    Read-only: HOST's family tag is the candidate.
 rollback  apply for an earlier BUILD_RUN_ID.
-SSH goes through gateway '$(cfg gateway)' (HW_GATEWAY= for direct).
+SSH goes through the registry host with role '$(cfg gateway)' (HW_GATEWAY= for direct).
 EOF
+}
+
+# gateway_host: the ssh hop, the registry host with the role jetson.yaml's gateway names (empty: direct).
+gateway_host() {
+    local role host
+    role=$(cfg gateway)
+    [[ -n $role ]] || return 0
+    host=$(python3 -I "$HW_ROOT/devices/profile.py" hosts "${ASTRO_REGISTRY:-}" "$role" | head -n1) || exit 1
+    [[ -n $host ]] || die "No registry host has the role '$role' (jetson.yaml gateway; HW_GATEWAY= for direct)"
+    printf '%s\n' "$host"
 }
 
 # jetson_args HOST [RUN]: check the arguments before anything (gh or ssh) runs.
 jetson_args() {
     local destination
     (($# >= 1 && $# <= 2)) || die "Usage: $HW_PROGRAM $HW_KIND ${FUNCNAME[1]#driver_} USER@HOST [BUILD_RUN_ID] (an L4T R36 Jetson)"
-    HOST=$1 RUN=${2:-} GATEWAY=$(cfg gateway) FAMILY=$(cfg family) IMAGE=$(cfg image)
+    HOST=$1 RUN=${2:-} FAMILY=$(cfg family) IMAGE=$(cfg image)
+    GATEWAY=$(gateway_host) || exit 1
     for destination in "$HOST" ${GATEWAY:+"$GATEWAY"}; do
         [[ $destination =~ ^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$ ]] || die "Not an ssh destination: $destination"
     done

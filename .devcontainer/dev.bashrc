@@ -94,7 +94,9 @@ ros_net() {
   # (a host with Wi-Fi and the vessel link both on the subnet must use the route's
   # one), else the first interface primary address (SIOCGIFADDR) in the subnet;
   # secondaries such as a bridge's own are skipped; the image has no iproute2.
-  transport="$( . "$(__astro_network_env)" 2>/dev/null && echo "${TRANSPORT_IP:-${BOAT_TRANSPORT_IP:-}}")"
+  # The route target is any vessel host: the first reservation (TRANSPORT_IP and BOAT_TRANSPORT_IP, the old keys, win).
+  transport="$( . "$(__astro_network_env)" 2>/dev/null && leases=(${STATIC_LEASES:-}) && first="${leases[0]:-}" &&
+    echo "${TRANSPORT_IP:-${BOAT_TRANSPORT_IP:-${first##*=}}}")"
   override="${ASTRO_DDS_ADDRESS:-}"
   [[ "$override" != "${__ASTRO_DDS_AUTO:-}" ]] || override=
   address="${override:-$(python3 -c '

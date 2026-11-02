@@ -141,7 +141,7 @@ commands:
 
   - name: astro-clock.py
     run: $ROS_WS/.devcontainer/astro-clock.py
-    summary: Clock offset of each LAN host by one SNTP query (default TIME_SERVER and the STATIC_LEASES hosts).
+    summary: Clock offset of each LAN host by one SNTP query (default the time_server role and the STATIC_LEASES hosts).
     notes: Exits 1 when a host is more than 50 ms off, unsynchronised or silent.
     params:
       - name: hosts

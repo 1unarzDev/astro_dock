@@ -159,7 +159,7 @@ hw_load_kind() {
     local out
     [[ -n $HW_PROFILE_CHAIN ]] || die "$HW_SCOPE_ERROR"
     [[ " $HW_PROFILE_KINDS " == *" $1 "* ]] || die "Profile $(basename -- "$HW_PROFILE") has no $1.yaml"
-    out=$(python3 -I "$HW_ROOT/devices/profile.py" kind "$HW_PROFILE" "$1" "$ASTRO_NETWORK_ENV") || exit 1
+    out=$(python3 -I "$HW_ROOT/devices/profile.py" kind "$HW_PROFILE" "$1" "$ASTRO_NETWORK_ENV" "${ASTRO_REGISTRY:-}") || exit 1
     eval "$out"
 }
 
