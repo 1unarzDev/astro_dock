@@ -111,6 +111,11 @@ class RunEnvTest(unittest.TestCase):
             self.assertIsNone(config('ASTRO_REGISTRY'))
             self.assertIsNone(config('ASTRO_NETWORK_ENV'))
             self.assertEqual(config('ASTRO_VESSEL', ASTRO_VESSEL='b'), 'b')
+            # An unregistered hostname names no host; a registry host (by hostname) is the container's ASTRO_HOST.
+            self.assertIsNone(config('ASTRO_HOST'))
+            self.assertEqual(domain({'HW_HOSTNAME': 'a-pc'}), '7')
+            self.assertEqual(config('ASTRO_HOST'), 'a-pc')
+            self.assertEqual(config('ASTRO_HOST', ASTRO_HOST='op'), 'op')
             self.assertEqual(domain({'ASTRO_VESSEL': 'b'}), '42')    # a vessel env without ROS_DOMAIN_ID: no warning
             self.assertNotIn('WARNING', warnings[-1])
             # No vessel (an operator laptop off the LAN, or --host without a vessel): 42, said, and the override wins.

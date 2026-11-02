@@ -96,6 +96,10 @@ elif ! domain="$("$hw" env ROS_DOMAIN_ID 2>"$work_file.err")"; then
     fi
 fi
 [[ -z "$profiles_root" ]] || vessel="$("$hw" whoami 2>/dev/null | sed -n 's/^vessel  *\([a-z0-9][a-z0-9_-]*\) (.*/\1/p')"
+# The registry host this machine is (by hostname or MAC; never a --host or generic guess) as ASTRO_HOST,
+# for what names the machine inside a container (the operator heartbeat); hw.sh there resolves the same.
+astro_host=""
+[[ -z "$profiles_root" ]] || astro_host="$("$hw" whoami 2>/dev/null | sed -n 's/^host  *\([A-Za-z0-9][A-Za-z0-9._-]*\) (\(hostname\|MAC\) .*/\1/p')"
 if [[ -n "$domain" ]]; then
     [[ "$domain" =~ ^[0-9]+$ ]] && ((domain <= 232)) || { echo "Invalid ROS_DOMAIN_ID in the vessel's network env: $domain" >&2; exit 1; }
     echo "ROS domain $domain (the vessel's network env)${ASTRO_ROS_DOMAIN_ID:+; ASTRO_ROS_DOMAIN_ID=$ASTRO_ROS_DOMAIN_ID overrides it}"
@@ -113,9 +117,10 @@ if [[ -n "$vessel" ]]; then
     network_env="$(in_ws "$("$hw" env 2>/dev/null)")" || network_env=""
     registry="$(in_ws "$("$hw" whoami --registry 2>/dev/null)")" || registry=""
 fi
-if [[ -n "$domain$vessel" ]]; then
+if [[ -n "$domain$vessel$astro_host" ]]; then
     [[ -z "$vessel" ]] || echo "Vessel $vessel for the dev container${ASTRO_VESSEL:+ (ASTRO_VESSEL=$ASTRO_VESSEL there overrides it)}"
     lines=()
+    [[ -z "$astro_host" ]] || lines+=("      ASTRO_HOST: \"\${ASTRO_HOST:-$astro_host}\"")
     [[ -z "$domain" ]] || lines+=("      ROS_DOMAIN_ID: \"\${ASTRO_ROS_DOMAIN_ID:-$domain}\"")
     [[ -z "$vessel" ]] || lines+=("      ASTRO_VESSEL: \"\${ASTRO_VESSEL:-$vessel}\"")
     [[ -z "$network_env" ]] || lines+=("      ASTRO_NETWORK_ENV: \"$network_env\"")
@@ -130,7 +135,7 @@ if [[ -n "$domain$vessel" ]]; then
             for (stop = start + 1; stop <= NR && line[stop] !~ /^([^ ]|  ?[^ ])/; stop++)
                 if (line[stop] == "    environment:") env = stop
             for (i = 1; i <= NR; i++) {
-                if (i > start && i < stop && line[i] ~ /^      (ROS_DOMAIN_ID|ASTRO_VESSEL|ASTRO_NETWORK_ENV|ASTRO_REGISTRY):/) continue
+                if (i > start && i < stop && line[i] ~ /^      (ROS_DOMAIN_ID|ASTRO_VESSEL|ASTRO_HOST|ASTRO_NETWORK_ENV|ASTRO_REGISTRY):/) continue
                 print line[i]
                 if (env ? i == env : i == start) {
                     if (!env) print "    environment:"
