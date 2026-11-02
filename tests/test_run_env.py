@@ -52,7 +52,7 @@ class RunEnvTest(unittest.TestCase):
 
     def test_prebuild_takes_the_vessel_domain(self):
         """The vessel's network env names the domain (fixture a: 7), injected without PyYAML with the
-        vessel itself; every other host keeps astro_dock's default 42 (a stale adapter, no vessel, no
+        vessel itself; every other host keeps ROS 2's default 0 (a stale adapter, no vessel, no
         profiles, macOS without PyYAML); ASTRO_ROS_DOMAIN_ID and ASTRO_VESSEL still win when Compose starts."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -99,9 +99,9 @@ class RunEnvTest(unittest.TestCase):
                 self.assertEqual(run.returncode, 0, run.stderr)
                 warnings.append(run.stderr)
                 return config(**extra)
-            # A stale adapter (pulled, prebuild not rerun) has no domain: the fleet default.
+            # A stale adapter (pulled, prebuild not rerun) has no domain: ROS 2's default.
             shutil.copy(root / '.devcontainer/docker-compose.override.linux.yml', override)
-            self.assertEqual(config(), '42')
+            self.assertEqual(config(), '0')
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}), '7')
             self.assertNotIn('WARNING', warnings[-1])
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
@@ -116,10 +116,10 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(domain({'HW_HOSTNAME': 'a-pc'}), '7')
             self.assertEqual(config('ASTRO_HOST'), 'a-pc')
             self.assertEqual(config('ASTRO_HOST', ASTRO_HOST='op'), 'op')
-            self.assertEqual(domain({'ASTRO_VESSEL': 'b'}), '42')    # a vessel env without ROS_DOMAIN_ID: no warning
+            self.assertEqual(domain({'ASTRO_VESSEL': 'b'}), '0')    # a vessel env without ROS_DOMAIN_ID: no warning
             self.assertNotIn('WARNING', warnings[-1])
-            # No vessel (an operator laptop off the LAN, or --host without a vessel): 42, said, and the override wins.
-            self.assertEqual(domain({}), '42')
+            # No vessel (an operator laptop off the LAN, or --host without a vessel): 0, said, and the override wins.
+            self.assertEqual(domain({}), '0')
             self.assertIsNone(config('ASTRO_VESSEL'))
             self.assertIn('WARNING: This host resolves no vessel (see ./hw.sh whoami): [ERROR] No vessel for this machine', warnings[-1])
             self.assertIn('ASTRO_ROS_DOMAIN_ID', warnings[-1])
@@ -128,10 +128,10 @@ class RunEnvTest(unittest.TestCase):
             # macOS: the mac adapter (its own environment block) takes the vessel's domain without PyYAML ...
             self.assertEqual(domain({'ASTRO_VESSEL': 'a', 'PATH': stubs('mac-yaml', 'Darwin')}), '7')
             # ... and without PyYAML hw.sh says so, and the fleet default stays.
-            self.assertEqual(domain({'ASTRO_VESSEL': 'a', 'PATH': mac}), '42')
+            self.assertEqual(domain({'ASTRO_VESSEL': 'a', 'PATH': mac}), '0')
             self.assertIn('PyYAML is missing', warnings[-1])
             # No profiles at all (a generic checkout): astro_dock's default, said once, no warning.
-            self.assertEqual(domain({'ASTRO_PROFILES': '', 'ASTRO_PROFILES_CONFIG': '/nonexistent'}), '42')
+            self.assertEqual(domain({'ASTRO_PROFILES': '', 'ASTRO_PROFILES_CONFIG': '/nonexistent'}), '0')
             self.assertNotIn('WARNING', warnings[-1])
 
     def test_every_process_gets_the_vessel_registry(self):

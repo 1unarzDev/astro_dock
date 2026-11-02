@@ -84,12 +84,12 @@ if [[ "$host_ws" =~ ^/[A-Za-z0-9_./@+-]+$ ]]; then
 fi
 # The ROS domain: the vessel's ROS_DOMAIN_ID (its network env, hw.sh env), injected into the adapter
 # here with the vessel itself (ASTRO_VESSEL, so the container keeps the vessel this host resolved, also
-# off its LAN); else astro_dock's default of docker-compose.yml and config/run.yaml, which a stale
+# off its LAN); else ROS 2's default 0 (docker-compose.yml, run_env.py), which a stale
 # adapter, a host without a vessel and a checkout without profiles keep. ASTRO_ROS_DOMAIN_ID and
 # ASTRO_VESSEL (prebuild's or Compose's environment) override them. No PyYAML here: macOS has none.
 hw="$script_dir/../hw.sh"
 domain_fix="export ASTRO_ROS_DOMAIN_ID=N where the dev container opens (prebuild and Compose read it), or rerun prebuild with ASTRO_VESSEL=NAME (hw.sh --vessel)"
-domain_default="ROS domain ${ASTRO_ROS_DOMAIN_ID:-of the astro_dock default (docker-compose.yml, config/run.yaml)}"
+domain_default="ROS domain ${ASTRO_ROS_DOMAIN_ID:-0 (the ROS 2 default)}"
 domain=""
 vessel=""
 reason() { sed -e 's/\x1b\[[0-9;]*m//g' -e '$!d' "$work_file.err"; }

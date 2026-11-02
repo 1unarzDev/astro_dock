@@ -11,6 +11,8 @@ import yaml
 
 WS = '/home/roboboat/roboboat_ws'
 KEYS = {'ros.domain_id': int, 'ros.discovery_range': str, 'data.root': str, 'transport.mode': str}
+# The domain is the vessel's (its profile; prebuild layers it in): without one, ROS 2's own default.
+DEFAULTS = {'ros.domain_id': 0}
 ENV = {'ASTRO_ROS_DOMAIN_ID': 'ros.domain_id', 'ROS_DOMAIN_ID': 'ros.domain_id',
        'ROS_AUTOMATIC_DISCOVERY_RANGE': 'ros.discovery_range', 'MHSEALS_DATA': 'data.root'}
 # Transport controls a shell overlay could otherwise keep alongside the managed profile.
@@ -79,7 +81,7 @@ def validate(values):
 
 def resolve(files, env):
     """Layer files in order, validate that baseline, then apply explicit env overrides."""
-    values = {}
+    values = dict(DEFAULTS)
     for path in files:
         values.update(flatten(load(path), path))
     missing = set(KEYS) - set(values)
