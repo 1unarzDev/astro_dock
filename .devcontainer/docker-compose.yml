@@ -32,6 +32,10 @@ services:
       - ..:/home/roboboat/roboboat_ws
       # Operator config survives container rebuilds; prebuild.sh creates the host directory.
       - ${HOME}/.config/mhseals:/home/roboboat/.config/mhseals
+      # Worktrees at their host paths, testable in place (hw.sh overlay, hw.sh pyenv); prebuild also
+      # mounts this workspace at its host path so their .git links resolve. prebuild creates both.
+      - ${HOME}/worktrees:${HOME}/worktrees
+      - ${HOME}/.cache/wt:${HOME}/.cache/wt
     user: roboboat
     working_dir: /home/roboboat/roboboat_ws
     command: ["bash", "/home/roboboat/roboboat_ws/.devcontainer/stop-children.sh"]

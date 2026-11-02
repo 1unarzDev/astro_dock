@@ -5,6 +5,7 @@
 geographiclib-tools
 rsync  # bag transfers to the operator station; fetch_bags.sh pulls them
 openssh-client
+ccache  # hw.sh overlay compiles C++ worktree packages through it
 iperf3  # hw.sh radio measure throughput between the operator laptop and the boat
 python3-scipy
 python3-rich

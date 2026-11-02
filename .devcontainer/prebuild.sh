@@ -8,7 +8,7 @@ if (($#)); then
     selection="$2"
 fi
 # Host operator config dir, bind-mounted by docker-compose.yml (Docker would create it root-owned).
-mkdir -p "${HOME}/.config/mhseals"
+mkdir -p "${HOME}/.config/mhseals" "${HOME}/worktrees" "${HOME}/.cache/wt"
 os_type=linux
 
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -65,6 +65,20 @@ if command -v getent >/dev/null; then
         gid_list="$(IFS=,; echo "${device_gids[*]}")"
         sed -i.bak "/^  dev:$/a\\
     group_add: [${gid_list}]
+" "$work_file"
+    fi
+fi
+# This workspace also at its host path, where the worktrees' .git files point (their gitdirs live here).
+host_ws="$(cd "$script_dir/.." && pwd -P)"
+if [[ "$host_ws" =~ ^/[A-Za-z0-9_./@+-]+$ ]]; then
+    if [[ -n "$(sed -n '/^  dev:$/,/^  [^ ]/{/^    volumes:$/p;}' "$work_file")" ]]; then
+        sed -i.bak "/^  dev:$/,/^  [^ ]/{/^    volumes:$/a\\
+      - ${host_ws}:${host_ws}
+}" "$work_file"
+    else
+        sed -i.bak "/^  dev:$/a\\
+    volumes:\\
+      - ${host_ws}:${host_ws}
 " "$work_file"
     fi
 fi
