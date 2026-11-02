@@ -26,8 +26,8 @@ blocks the call; contexts are joined. Stdlib only, Python 3.8, no ROS: well unde
 always (a deny is JSON, not an exit code): a missing, broken or slow package never blocks a call;
 its error goes to ``$XDG_STATE_HOME/astro/agents-hook.log``.
 
-The canonical copy lives in the mhseals_agents repo (``src/mhseals_agents/hooks/hook.py``); when
-the workspace has it, ``main`` hands the call to it (``canonical``). This file's own logic is the
+The canonical copy lives in the team's agent-loop repo (``src/<repo>/hooks/hook.py``); when the
+workspace has exactly one, ``main`` hands the call to it (``canonical``). This file's own logic is the
 fallback: no checkout, a broken one, or one the package hooks don't guard the way they guard
 this file (delegating to an unguarded file would let an agent edit the rules away).
 """
@@ -42,7 +42,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL = Path('src') / 'mhseals_agents' / 'hooks' / 'hook.py'
+CANONICAL = 'src/*/hooks/hook.py'      # the agent-loop repo's copy of this hook
 EVENTS = {'SessionStart': 'start', 'PreToolUse': 'pre', 'PostToolUse': 'post', 'PostToolUseFailure': 'post'}
 SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports Bash; older builds the rest
 SHELLS = ('bash', 'sh', 'zsh')
@@ -201,12 +201,16 @@ def _edit_denied(path, root):
 
 
 def canonical(root=ROOT):
-    """The mhseals_agents hook module to hand calls to, or None to use this file's logic.
+    """The agent-loop repo's hook module to hand calls to, or None to use this file's logic.
 
-    Only when the package hooks deny editing it, or deny editing neither it nor this file."""
-    path = root / CANONICAL
-    if not path.is_file() or path.resolve() == Path(__file__).resolve():
+    Only for exactly one copy, and only when the package hooks deny editing it, or deny editing
+    neither it nor this file."""
+    found = sorted(root.glob(CANONICAL))
+    if len(found) > 1:
+        log('canonical hook: %d copies (%s), using the built-in logic' % (len(found), ', '.join(map(str, found))))
+    if len(found) != 1 or found[0].resolve() == Path(__file__).resolve():
         return None
+    path = found[0]
     if not _edit_denied(path, root) and _edit_denied(Path(__file__).resolve(), root):
         log('canonical hook %s: not guarded like .agents/hook.py, using the built-in logic' % path)
         return None
