@@ -39,6 +39,8 @@ HW_COMMANDS=(
     "hot REPO [--host NAME] [--dry-run]|push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)"
     "station take [--dry-run]|make this computer the operator station (boat link, gateway and time roles, keys, station file, heartbeat service)"
     "station release|stop this computer's operator heartbeat service"
+    "overlay PATH [--base REF] [--all] [--dry-run]|colcon-build a worktree's packages touched against REF (origin/main) as an overlay on the workspace install, in the dev container; prints the source line"
+    "pyenv PATH|the PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon"
 )
 
 # command_usage [NAME]: the usage lines of every command, or of NAME only.
@@ -145,6 +147,11 @@ if [[ "${1:-} ${2:-}" == "station take" ]]; then
     # shellcheck source=devices/field.sh
     source "$HW_ROOT/devices/field.sh"
     station_kernel
+fi
+# overlay and pyenv work on a worktree and need no profiles.
+if [[ ${1:-} == overlay || ${1:-} == pyenv ]]; then
+    if [[ " ${*:2:2} " =~ \ (-h|--help)\  ]]; then command_usage "$1" | sed '1s/^      /Usage:/'; exit 0; fi
+    exec bash "$HW_ROOT/devices/overlay.sh" "$@"
 fi
 hw_init
 if [[ " ${*:2:2} " =~ \ (-h|--help)\  && -n $(command_usage "${1:-}") ]]; then

@@ -6,6 +6,8 @@ boat hosts of a registry and the build plan of a hot patch. Reads, never changes
   field.py roles REGISTRY       every role the registry names (its roles: and the hosts' roles)
   field.py plan REPO            stdin: `git diff --name-status` lines; out: the packages to build (line
                                 one, may be empty), then why, one line each
+  field.py packages REPO        stdin: repo-relative paths; out: NAME<TAB>DIR of the packages holding
+                                them, once each (hw.sh overlay)
 """
 import ipaddress
 import os
@@ -111,6 +113,21 @@ def package_of(repo, path):
         here = here.parent
 
 
+def packages_of(repo, paths):
+    """'NAME<TAB>DIR' of each package holding one of paths (repo-relative), once each, in order."""
+    out, repo = [], Path(repo).resolve()
+    for path in paths:
+        name = package_of(repo, path) if path else None
+        if name is None:
+            continue
+        here = (repo / path).parent
+        while not (here / 'package.xml').is_file():
+            here = here.parent
+        line = f'{name}\t{here}'
+        out += [] if line in out else [line]
+    return out
+
+
 def plan(lines, repo):
     """(packages to build, reasons) for name-status lines. An edit (M) of an existing .py/.yaml/launch
     file is live under symlink-install, docs and tests are not installed; anything else in a package
@@ -143,8 +160,10 @@ def main(command, *args):
         packages, reasons = plan(sys.stdin.read().splitlines(), args[0])
         print(' '.join(packages))
         print('\n'.join(reasons))
+    elif command == 'packages':
+        print('\n'.join(packages_of(args[0], sys.stdin.read().splitlines())))
     else:
-        raise Error('usage: field.py link SUBNET | boat-hosts REGISTRY | roles REGISTRY | plan REPO')
+        raise Error('usage: field.py link SUBNET | boat-hosts REGISTRY | roles REGISTRY | plan REPO | packages REPO')
 
 
 if __name__ == '__main__':
