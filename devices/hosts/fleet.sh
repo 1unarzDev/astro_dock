@@ -128,12 +128,18 @@ EOF
 }
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
-# "name container workspace" per ssh host of the registry (the given names, else all).
+# "name container workspace" per ssh host of the registry (the given names, else all). A registry that
+# names neither gets this checkout's: its dev container, and its path under $HOME (~/astro_dock here).
 fleet_hosts() {
-    python3 -I - "$ASTRO_REGISTRY" "$@" <<'PY'
+    local container workspace=- home
+    container=$(sed -n 's/^    container_name: //p' "$HW_ROOT/.devcontainer/docker-compose.yml" | head -n1)
+    home=$(cd -- "$HOME" 2>/dev/null && pwd -P) || home=$HOME     # HW_ROOT is physical (/home -> /var/home)
+    [[ $HW_ROOT != "$home"/* ]] || workspace="~/${HW_ROOT#"$home"/}"
+    python3 -I - "$ASTRO_REGISTRY" "${container:--}" "$workspace" "$@" <<'PY'
 import sys, yaml
 data = yaml.safe_load(open(sys.argv[1])) or {}
-defaults, hosts, wanted = data.get('defaults') or {}, data.get('hosts') or {}, sys.argv[2:]
+own = {'container': sys.argv[2], 'workspace': sys.argv[3]}
+defaults, hosts, wanted = {**own, **(data.get('defaults') or {})}, data.get('hosts') or {}, sys.argv[4:]
 for name in wanted or hosts:
     spec = {**defaults, **(hosts.get(name) or {})}
     if wanted or spec.get('ssh', True):

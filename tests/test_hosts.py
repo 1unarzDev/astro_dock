@@ -2,6 +2,7 @@
 scripts also run against scratch repositories (the fixture fleet as a git repository)."""
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -190,6 +191,16 @@ class Hosts(unittest.TestCase):
         self.assertIn('== a bash -s', calls)
         self.assertIn('== b docker exec -i box bash -s', calls)
         self.assertNotIn('== r ', calls)
+
+    def test_a_registry_without_defaults_takes_this_checkouts_container_and_home_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = Path(tmp, 'devices.yaml')
+            registry.write_text('hosts:\n  a: {user: x}\n')
+            result, calls = self.run_script('apply', ASTRO_REGISTRY=str(registry), HOME=str(ROOT.parent))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        container = re.search(r'(?m)^    container_name: (\S+)', (ROOT / '.devcontainer/docker-compose.yml').read_text())
+        self.assertIn('== a docker exec -i %s bash -s' % container.group(1), calls)
+        self.assertIn('dir=$HOME/%s;' % ROOT.name, calls)
 
     def test_the_vessel_registry_names_hosts_to_deploy(self):
         result, calls = self.run_script('plan')
