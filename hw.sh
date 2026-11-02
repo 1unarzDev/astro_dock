@@ -35,6 +35,8 @@ HW_COMMANDS=(
     "profile show [NAME]|a merged profile (no secrets)"
     "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
     "secrets check|the secrets file and the missing key names (never values)"
+    "hot REPO [--host NAME]|push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE"
+    "station take [--dry-run]|make this computer the operator station (boat link, gateway and time roles, keys, station file)"
 )
 
 # command_usage [NAME]: the usage lines of every command, or of NAME only.
@@ -127,6 +129,12 @@ if [[ "${1:-} ${2:-}" == "profile sync" && ! " ${3:-} " =~ \ (-h|--help)\  ]]; t
     hw_profiles_sync
     exit 0
 fi
+# station take says "reboot needed" before anything else.
+if [[ "${1:-} ${2:-}" == "station take" ]]; then
+    # shellcheck source=devices/field.sh
+    source "$HW_ROOT/devices/field.sh"
+    station_kernel
+fi
 hw_init
 if [[ " ${*:2:2} " =~ \ (-h|--help)\  && -n $(command_usage "${1:-}") ]]; then
     command_usage "$1" | sed '1s/^      /Usage:/'
@@ -169,6 +177,15 @@ case ${1:-} in
         hw_load_env "$ASTRO_NETWORK_ENV"
         printf '%s\n' "${!2:-}"
         exit 0
+        ;;
+    hot|station)
+        # shellcheck source=devices/field.sh
+        source "$HW_ROOT/devices/field.sh"
+        need_scope
+        hw_load_kind hosts
+        hw_driver "$(cfg driver)"
+        "${1}_main" "${@:2}"
+        exit
         ;;
 esac
 [[ $1 =~ ^[a-z0-9_]+$ ]] || die "Not a device kind: $1"
