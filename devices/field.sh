@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Field commands over the hosts kind (hw.sh sources this, then devices/hosts/fleet.sh):
-#   hot REPO [--host NAME]   this computer's working tree of src/REPO (uncommitted and untracked files
+#   hot REPO [--host NAME] [--dry-run]
+#                            this computer's working tree of src/REPO (uncommitted and untracked files
 #                            too) to the boat hosts that run it, over the LAN only: a git bundle over ssh,
 #                            checked out on field/YYYYMMDD in each host's workspace after a backup of its
 #                            dirty state. Only edits of existing .py/.yaml/launch files: no colcon
@@ -136,14 +137,37 @@ hot_one() {
     if [[ ${PIPESTATUS[1]} == 0 ]]; then log "OK $name build $pkgs"; else log "FAIL $name build $pkgs"; return 1; fi
 }
 
+# hot_dry HOSTS: the hosts, the files the snapshot changes against origin/main (HEAD without one) and
+# their build plan; no host is contacted.
+hot_dry() {
+    local base files plan name container workspace target jump
+    base=$(git -C "$HOT_DIR" rev-parse -q --verify 'refs/remotes/origin/main^{commit}' || git -C "$HOT_DIR" rev-parse HEAD)
+    while read -r name container workspace target jump; do
+        [[ $jump == - ]] && jump='' || jump=" via $jump"
+        log "dry run: $name ($target$jump) container $container workspace $workspace"
+    done <<<"$1"
+    files=$(git -C "$HOT_DIR" diff --no-renames --name-status "$base" "$HOT_SHA")
+    if [[ -z $files ]]; then log "dry run: no change against ${base:0:7}; nothing sent"; return 0; fi
+    sed "s/^/dry run: changed /" <<<"$files" | tee -a "$LOG"
+    plan=$(field_py plan "$HOT_DIR" <<<"$files") || die "Cannot plan the build"
+    if [[ -z $(head -1 <<<"$plan") ]]; then
+        log "dry run: no build (only .py/.yaml/launch edits, docs or tests)"
+    else
+        tail -n +2 <<<"$plan" | sed "s/^/dry run: builds for /" | tee -a "$LOG"
+        log "dry run: colcon build --symlink-install --packages-select $(head -1 <<<"$plan")"
+    fi
+    log "dry run: against ${base:0:7}; nothing sent"
+}
+
 hot_main() {
-    local only=() rc=0 hosts name repos
+    local only=() rc=0 hosts name repos dry=false
     [[ -n ${1:-} && $1 != -* ]] || hot_usage 2
     HOT_REPO=$1
     shift
     while (($#)); do
         case $1 in
             --host) [[ -n ${2:-} ]] || hot_usage 2; only+=("$2"); shift 2 ;;
+            --dry-run) dry=true; shift ;;
             -h|--help) hot_usage ;;
             *) hot_usage 2 ;;
         esac
@@ -155,7 +179,6 @@ hot_main() {
     field_init
     HOT_BRANCH=field/$(date +%Y%m%d) HOT_SHA=$(hot_snapshot "$HOT_DIR") || exit 1
     HOT_REF=refs/hot/$STAMP HOT_ORIGIN=$(git -C "$HOT_DIR" remote get-url origin 2>/dev/null)
-    git -C "$HOT_DIR" update-ref "$HOT_REF" "$HOT_SHA" || die "Cannot record $HOT_REF"
     hosts=$(field_hosts "${only[@]}")
     if ((${#only[@]} == 0)); then           # the boat hosts whose roles' repos include it
         hosts=$(while read -r name rest; do
@@ -165,10 +188,11 @@ hot_main() {
         done <<<"$hosts")
     fi
     if [[ -z $hosts ]]; then
-        git -C "$HOT_DIR" update-ref -d "$HOT_REF"
         die "No boat host runs $HOT_REPO${only[*]:+ among ${only[*]}} (boat hosts: $(field_py boat-hosts "$ASTRO_REGISTRY" | tr '\n' ' '))"
     fi
     log "hot $HOT_REPO ${HOT_SHA:0:7} ($(git -C "$HOT_DIR" status --porcelain | wc -l) local changes on $(git -C "$HOT_DIR" rev-parse --abbrev-ref HEAD)) -> $(cut -d' ' -f1 <<<"$hosts" | tr '\n' ' ')"
+    if $dry; then hot_dry "$hosts"; return; fi
+    git -C "$HOT_DIR" update-ref "$HOT_REF" "$HOT_SHA" || die "Cannot record $HOT_REF"
     while read -r name rest; do hot_one "$name" $rest </dev/null || rc=1; done <<<"$hosts"
     git -C "$HOT_DIR" update-ref -d "$HOT_REF"
     log "hot rc=$rc log=$LOG (land it through git; $HW_PROGRAM hosts apply returns the hosts to main)"

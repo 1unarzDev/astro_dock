@@ -84,7 +84,8 @@ class Logic(unittest.TestCase):
             (pkg / 'launch').mkdir(parents=True)
             (pkg / 'package.xml').write_text('<package><name>pkg_a</name></package>')
             live = ['M\tpkg_dir/pkg_a/node.py', 'M\tpkg_dir/config/x.yaml', 'M\tpkg_dir/launch/a.launch.xml',
-                    'M\tREADME.md', 'A\tnotes.txt']
+                    'M\tREADME.md', 'A\tnotes.txt', 'A\tpkg_dir/README.md', 'M\tpkg_dir/doc/x.rst',
+                    'A\tpkg_dir/test/test_new.py', 'D\tpkg_dir/tests/old.cpp']
             self.assertEqual(field.plan(live, tmp), ([], []))
             for change in ('A\tpkg_dir/pkg_a/new.py', 'D\tpkg_dir/config/x.yaml', 'M\tpkg_dir/setup.py',
                            'M\tpkg_dir/CMakeLists.txt', 'M\tpkg_dir/src/drive.cpp', 'M\tpkg_dir/package.xml'):
@@ -215,6 +216,20 @@ class Hot(unittest.TestCase):
         self.assertEqual((self.pc / 'pkg_dir/pkg_a/node.py').read_text(), 'SPEED = 1\n')
         backups = list(self.tmp.glob('hosts/crew@10.0.1.10/.local/state/astro_dock/hosts/hot-*/alpha.diff'))
         self.assertTrue(backups and 'SPEED = 9' in backups[0].read_text())
+
+    def test_dry_run_prints_hosts_files_and_plan_and_sends_nothing(self):
+        (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')
+        (self.repo / 'pkg_dir/README.md').write_text('docs\n')
+        before = git(self.pc, 'rev-parse', 'HEAD')
+        run, calls = self.hot('--dry-run')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(calls, '')                                        # no ssh at all
+        self.assertIn('dry run: a-pc (crew@10.0.1.10)', run.stdout)
+        self.assertIn('dry run: changed A\tpkg_dir/pkg_a/extra.py', run.stdout)
+        self.assertIn('dry run: builds for pkg_a: A pkg_dir/pkg_a/extra.py', run.stdout)
+        self.assertNotIn('builds for pkg_a: A pkg_dir/README.md', run.stdout)
+        self.assertEqual(git(self.pc, 'rev-parse', 'HEAD'), before)
+        self.assertEqual(git(self.repo, 'for-each-ref', 'refs/hot'), '')
 
     def test_unknown_repo_or_host_is_refused(self):
         run, _ = self.hot('--host', 'op')                                  # the operator host: no boat host

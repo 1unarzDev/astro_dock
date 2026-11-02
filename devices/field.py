@@ -21,6 +21,8 @@ import yaml
 LIVE = re.compile(r'\.(py|ya?ml)$|(^|/)launch/')
 # Build inputs even though they match LIVE.
 BUILD_FILES = {'setup.py', 'setup.cfg', 'package.xml', 'CMakeLists.txt'}
+# Docs and tests: never installed, so no change of theirs builds.
+NO_BUILD = re.compile(r'(^|/)(README|CHANGELOG|LICENSE)[^/]*$|\.(md|rst)$|(^|/)(docs?|tests?)/')
 
 
 class Error(Exception):
@@ -111,7 +113,8 @@ def package_of(repo, path):
 
 def plan(lines, repo):
     """(packages to build, reasons) for name-status lines. An edit (M) of an existing .py/.yaml/launch
-    file is live under symlink-install; anything else in a package builds that package."""
+    file is live under symlink-install, docs and tests are not installed; anything else in a package
+    builds that package."""
     packages, reasons = [], []
     for line in lines:
         status, _, path = line.rstrip('\n').partition('\t')
@@ -121,7 +124,7 @@ def plan(lines, repo):
         if package is None:
             continue
         live = status == 'M' and LIVE.search(path) and Path(path).name not in BUILD_FILES
-        if not live:
+        if not live and not NO_BUILD.search(path):
             packages += [] if package in packages else [package]
             reasons.append(f'{package}: {status} {path}')
     return packages, reasons

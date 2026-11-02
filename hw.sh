@@ -35,7 +35,7 @@ HW_COMMANDS=(
     "profile show [NAME]|a merged profile (no secrets)"
     "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
     "secrets check|the secrets file and the missing key names (never values)"
-    "hot REPO [--host NAME]|push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE"
+    "hot REPO [--host NAME] [--dry-run]|push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)"
     "station take [--dry-run]|make this computer the operator station (boat link, gateway and time roles, keys, station file)"
 )
 
