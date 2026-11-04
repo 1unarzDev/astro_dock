@@ -213,7 +213,7 @@ cx add user@robot-host --via laptop
 cx
 ```
 
-Open a terminal or persistent shell on the robot host, change to its `astro_dock` checkout, and use `devcontainer exec --workspace-folder . bash` to enter the ROS workspace. Managed sessions keep running when the viewer disconnects. [`net/mdns.sh`](net/mdns.sh) sets up mDNS (`HOST.local` names) and [`net/share.sh`](net/share.sh) a shared network folder; `cx` uses the network access they and the router provide.
+Open a terminal or persistent shell on the robot host, change to its `astro_dock` checkout, and use `devcontainer exec --workspace-folder . bash` to enter the ROS workspace. Managed sessions keep running when the viewer disconnects. [`net/mdns.sh`](net/mdns.sh) sets up mDNS (`HOST.local` names) and [`net/share.sh`](net/share.sh) a shared network folder; [`net/mesh.sh`](net/mesh.sh) joins or runs a WARP mesh on your own Cloudflare account (`net/mesh.sh join <endpoint>/<code>`; see cx's mesh guide); `cx` uses the network access they and the router provide.
 
 To copy session bags off a host into `bags/<name>`, run `./fetch_bags.sh host:~/astro_dock/bags/<session> <name>`. It reads the remote only, and streams a tar over ssh when the remote has no rsync.
 

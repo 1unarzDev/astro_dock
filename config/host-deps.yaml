@@ -30,5 +30,5 @@ deps:
 allow:
   base: [bash, sh, env, cat, cut, tr, sed, awk, grep, find, sort, uniq, head, tail, wc, tee, xargs, tar, gzip, date, sleep, mkdir, rm, cp, mv, ln, ls, stat, chmod, chown, kill, ps, id, uname, hostname, mktemp, dirname, basename, readlink, realpath, touch, test, true, false, printf, echo, sudo, nproc, du, df, diff, cmp, install, getent, tput, stdbuf, base64, cksum, md5sum, sha256sum, mount, find, which, command, less, nice, timeout, rmdir, seq, reset, pwd, whoami, dir]
   # words the scan reads as commands in prose or in a name (comment-like text, other programs' subcommands)
-  prose: [file, link, info, import, pg, cmd, cannot, starts, stay, restores, code]
-  workspace_stage: [cmake, makepkg, yay, systemd-run, docker, systemctl, journalctl, loginctl, timedatectl, udevadm, nmcli, chronyd, chronyc, colcon, ccache, avahi-daemon, gh, ssh-copy-id, sshpass, python3, hw.sh, mv]
+  prose: [file, link, info, import, pg, cmd, cannot, starts, stay, restores, code, join]
+  workspace_stage: [cmake, makepkg, yay, systemd-run, docker, systemctl, journalctl, loginctl, timedatectl, udevadm, nmcli, chronyd, chronyc, colcon, ccache, avahi-daemon, gh, ssh-copy-id, sshpass, python3, hw.sh, mv, cx]

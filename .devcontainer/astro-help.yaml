@@ -130,6 +130,11 @@ commands:
     summary: Create a Samba network folder advertised over mDNS (interactive; run on the host).
     notes: Asks for the share name, user and password; mounts it at /mnt/NAME and keeps the login in ~/.smbcredentials.
 
+  - name: net/mesh.sh
+    run: $ROS_WS/net/mesh.sh
+    summary: Join a WARP mesh with the code its owner sent, leave it, or own one on your Cloudflare account (run on the host).
+    notes: join and leave need only curl and sh; setup, invite, devices, revoke and teardown run cx mesh, or cx's standalone util without cx.
+
   - name: fetch_bags.sh
     run: $ROS_WS/fetch_bags.sh
     summary: Copy a host's session bags into bags/NAME (reads the remote only; rsync, else tar over ssh).
