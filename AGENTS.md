@@ -1,5 +1,8 @@
 # Agents
 
+astro_dock is a general robotics workspace: keep it abstracted and agnostic to any one team, robot, network or
+machine. Team- and machine-specific facts belong in the team's repos and profiles under `src/`, never in astro_dock.
+
 This workspace drives real robots. Logic lives in `.agents/`; `.claude/` and `.codex/` only wire each tool to it.
 `.agents/hook.py` loads each workspace package's hook (`src/<repo>/<package>/agent_hook.py`): at session start
 it says how to reach the robot, and before each shell command it blocks the commands that bypass the robot's
