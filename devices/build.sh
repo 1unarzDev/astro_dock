@@ -5,7 +5,8 @@
 #   DIR when DIR has none, e.g. a preview snapshot), its environment (DIR/.devcontainer/dev.bashrc, else
 #   /opt/ros/$ROS_DISTRO alone), stale symlink-install links pruned, then colcon build --symlink-install.
 #   From clean when the container's image or the colcon defaults changed since DIR's last build (a pulled
-#   image leaves CMake caches on its old /opt/ros libraries); ASTRO_BUILD_CLEAN_UNSTAMPED=1 also cleans a
+#   image leaves CMake caches on its old /opt/ros libraries), or when build/ depends on an underlay file
+#   (AMENT_PREFIX_PATH outside DIR) that is gone; ASTRO_BUILD_CLEAN_UNSTAMPED=1 also cleans a
 #   build/ that no stamp vouches for (a throwaway workspace; never the dev or boat workspaces).
 # Sourced (hosts apply), it only defines hw_build_body: the script that runs in the container.
 BUILD_HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -73,7 +74,7 @@ while (($#)); do
         --ws) [[ -n ${2:-} ]] || die '--ws requires a directory'; ws=$2; shift 2 ;;
         --container) [[ -n ${2:-} ]] || die '--container requires a name'; container=$2; shift 2 ;;
         --dry-run) dry=true; shift ;;
-        -h|--help) sed -n '2,9s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         --) shift; break ;;
         *) die "unknown argument $1 (hw.sh build --ws DIR [--container NAME] [-- COLCON_ARGS])" ;;
     esac
