@@ -139,6 +139,17 @@ class ImageTest(unittest.TestCase):
         (self.ids / 'uidnew').unlink()
         self.assertEqual(self.resolve('--local').stdout.strip(), 'reg/img:tag')       # a stale variant: the tag
 
+    def test_pull_checks_with_docker_pull_when_no_digest_is_read(self):
+        # no buildx here (the stand-in refuses it): docker pull checks, and its failure keeps the local image
+        self.image('reg_img_tag', '2026-11-02', '["l1"]', 'reg/img:tag')
+        done = self.resolve('--pull')
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, 'reg/img:tag'), done.stderr)
+        self.assertIn('with docker pull', done.stderr)
+        self.assertIn('keeping the local image', done.stderr)
+        quiet = subprocess.run(['bash', str(self.dc / 'dev-image.sh'), '--pull'], capture_output=True, text=True,
+                               env={**self.env, 'ASTRO_NO_PULL': '1'}, timeout=30)
+        self.assertEqual(quiet.stderr, '')
+
     def test_missing_pieces_name_their_fix(self):
         missing = self.resolve('--local')
         self.assertEqual(missing.returncode, 2)

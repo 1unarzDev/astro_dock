@@ -18,10 +18,15 @@ tag="$(docker compose -f "$dir/docker-compose.yml" -f "$override" config --image
 [[ -n $tag ]] || { echo "dev-image: the Compose config names no dev image (docker compose -f $dir/docker-compose.yml -f $override config)" >&2; exit 2; }
 # Pull the dev image when the registry has a newer one than this machine (devcontainer up never pulls
 # an image it already has; a months-old local tag kept stations on an old CLI, 11-04). Offline: keep it.
+# Without buildx (a separate package on some distros) or the registry's digest, docker pull itself checks
+# (it downloads only what changed); the digest was unread silently, so a stale tag stayed (11-04).
 if $pull && [[ $tag == */* && "${ASTRO_NO_PULL:-0}" != 1 ]]; then
     local_digest="$(docker image inspect --format '{{range .RepoDigests}}{{.}} {{end}}' "$tag" 2>/dev/null || true)"
     remote_digest="$(timeout 20 docker buildx imagetools inspect "$tag" 2>/dev/null | awk '/^Digest:/ {print $2; exit}' || true)"
-    if [[ -n "$remote_digest" && "$local_digest" != *"$remote_digest"* ]]; then
+    if [[ -z "$remote_digest" ]]; then
+        echo "Checking the registry for a newer $tag with docker pull (no digest from docker buildx imagetools); set ASTRO_NO_PULL=1 to skip." >&2
+        docker pull -q "$tag" >&2 || echo "WARNING: could not reach the registry for $tag; keeping the local image." >&2
+    elif [[ "$local_digest" != *"$remote_digest"* ]]; then
         echo "Pulling the newer $tag (registry $remote_digest); set ASTRO_NO_PULL=1 to skip." >&2
         docker pull -q "$tag" >&2 || echo "WARNING: could not pull $tag; keeping the local image." >&2
     fi
