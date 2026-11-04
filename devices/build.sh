@@ -39,6 +39,22 @@ if [[ -n ${ASTRO_BUILD_IMAGE:-} && -d build ]]; then
         rm -rf build install log
     fi
 fi
+# A build/ that links against underlay files gone from this environment (a container recreated on a newer image,
+# an in-place build no image stamp saw change) fails with "No rule to make target <underlay>/lib/libX.so.N"
+# (11-04): build from clean. The underlay is AMENT_PREFIX_PATH outside the workspace.
+if [[ -d build ]]; then
+    gone=''
+    while IFS= read -r -d: prefix; do
+        [[ -n $prefix && $prefix == /* && $prefix != "$PWD"/* ]] || continue
+        gone=$(find build -name build.make -path '*/CMakeFiles/*' -exec grep -ohE ": ${prefix//./\\.}/[^ :]+$" {} + \
+                   2>/dev/null | cut -c3- | sort -u | while IFS= read -r f; do [[ -e $f ]] || { echo "$f"; break; }; done)
+        [[ -z $gone ]] || break
+    done <<< "${AMENT_PREFIX_PATH:-}:"
+    if [[ -n $gone ]]; then
+        echo "build: build/ depends on $gone, which this environment no longer has; building from clean"
+        rm -rf build install log
+    fi
+fi
 echo "pruned $(find build install -xtype l 2>/dev/null | wc -l) stale links"
 find build install -xtype l -delete 2>/dev/null || true
 if [[ ${ASTRO_BUILD_TAIL:-20} == 0 ]]; then colcon build --symlink-install "$@" || exit

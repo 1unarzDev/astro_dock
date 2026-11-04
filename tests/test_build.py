@@ -79,6 +79,24 @@ class BuildTest(unittest.TestCase):
         run_body(self.ws, self.log, ASTRO_BUILD_IMAGE='sha256:a', ASTRO_BUILD_CLEAN_UNSTAMPED='1')
         self.assertFalse((self.ws / 'build/pkg/keep').exists())
 
+    def test_a_build_on_underlay_files_gone_builds_from_clean(self):
+        # 11-04: a newer image left build.make on /opt/ros/<distro>/lib/libfastcdr.so.2.2.7, with no stamp to see it
+        underlay = self.ws.parent / 'underlay'
+        (underlay / 'lib').mkdir(parents=True)
+        lib = underlay / 'lib/libfastcdr.so.2.2.7'
+        lib.write_text('')
+        made = self.ws / 'build/pkg/CMakeFiles/pkg.dir/build.make'
+        made.parent.mkdir(parents=True)
+        made.write_text(f'libpkg.so: {lib}\nlibpkg.so: {self.ws}/src/gone.cpp\n')
+        env = dict(AMENT_PREFIX_PATH=f'{self.ws}/install/pkg:{underlay}')
+        kept = run_body(self.ws, self.log, **env)
+        self.assertNotIn('from clean', kept.stdout)      # its own sources never count
+        self.assertTrue(made.exists())
+        lib.unlink()
+        gone = run_body(self.ws, self.log, **env)
+        self.assertIn(f'depends on {lib}', gone.stdout)
+        self.assertFalse(made.exists())
+
     def test_a_failed_colcon_fails_the_build_and_writes_no_stamp(self):
         (self.log.parent / 'colcon').write_text('#!/bin/sh\nexit 3\n')
         done = run_body(self.ws, self.log, ASTRO_BUILD_IMAGE='sha256:a')
