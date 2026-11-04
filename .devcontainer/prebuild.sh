@@ -171,6 +171,18 @@ else
     mv "$work_file" "$script_dir/docker-compose.override.yml"
 fi
 echo "Selected ${os_type} adapter: $override_file"
+# Pull the dev image when the registry has a newer one than this machine (devcontainer up never pulls
+# an image it already has; a months-old local tag kept stations on an old CLI, 11-04). Offline: keep it.
+dev_image="$(docker compose -f "$script_dir/docker-compose.yml" -f "$script_dir/docker-compose.override.yml" \
+    config --images dev 2>/dev/null | head -n 1 || true)"
+if [[ -n "$dev_image" && "$dev_image" == */* && "${ASTRO_NO_PULL:-0}" != 1 ]]; then
+    local_digest="$(docker image inspect --format '{{range .RepoDigests}}{{.}} {{end}}' "$dev_image" 2>/dev/null || true)"
+    remote_digest="$(timeout 20 docker buildx imagetools inspect "$dev_image" 2>/dev/null | awk '/^Digest:/ {print $2; exit}')"
+    if [[ -n "$remote_digest" && "$local_digest" != *"$remote_digest"* ]]; then
+        echo "Pulling the newer $dev_image (registry $remote_digest); set ASTRO_NO_PULL=1 to skip."
+        docker pull -q "$dev_image" || echo "WARNING: could not pull $dev_image; keeping the local image." >&2
+    fi
+fi
 # Warn when the running dev container is not built on the image its tag now names (after a
 # pull). Dev Containers adds a UID layer on top, so the tag's layers must prefix the container's.
 running="$(docker inspect --format '{{.Image}}' roboboat_dev 2>/dev/null || true)"

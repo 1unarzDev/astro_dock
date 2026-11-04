@@ -19,7 +19,7 @@ deps:
   tmux:     {cmds: [tmux], side: host, pacman: tmux, apt: tmux, dnf: tmux, brew: tmux}
   xvfb:     {cmds: [xvfb-run], side: host, pacman: xorg-server-xvfb, apt: xvfb, dnf: xorg-x11-server-Xvfb, brew: '-'}
   iproute2: {cmds: [ip], side: host, pacman: iproute2, apt: iproute2, dnf: iproute, brew: '-'}
-  procps:   {cmds: [pgrep, pkill], side: host, pacman: procps-ng, apt: procps, dnf: procps-ng, brew: '-'}
+  procps:   {cmds: [pgrep, pkill, top], side: host, pacman: procps-ng, apt: procps, dnf: procps-ng, brew: '-'}
   psmisc:   {cmds: [fuser], side: host, pacman: psmisc, apt: psmisc, dnf: psmisc, brew: '-'}
   util-linux: {cmds: [flock, setsid, script, nice, timeout], side: host, pacman: util-linux, apt: util-linux, dnf: util-linux, brew: '-'}
   iperf3:   {cmds: [iperf3], side: host, pacman: iperf3, apt: iperf3, dnf: iperf3, brew: iperf3}

@@ -21,12 +21,10 @@ WHICH = re.compile(r'(?:command -v|\bwhich|shutil\.which\()\s*[\'"]?([A-Za-z][A-
 def shell_files():
     out = [ROOT / 'hw.sh', ROOT / 'fetch_bags.sh']   # the setup scripts are the installers, not callers
     out += sorted((ROOT / 'net').glob('*.sh')) + sorted((ROOT / 'devices').glob('**/*.sh'))
-    for sub in ('mhseals_testing/tools', 'mhseals_agents/tools'):
-        d = ROOT / 'src' / sub
-        out += [p for p in sorted(d.iterdir()) if p.is_file()] if d.is_dir() else []
-    for p in ('mhseals_agents/start', 'mhseals_agents/ev'):
-        if (ROOT / 'src' / p).is_file():
-            out.append(ROOT / 'src' / p)
+    for d in sorted((ROOT / 'src').glob('*/tools')):   # every repo's tools/, whatever the team calls its repos
+        out += [p for p in sorted(d.iterdir()) if p.is_file()]
+    for name in ('start', 'ev'):   # an agent-loop repo's entry points, in whichever repo carries them
+        out += sorted(p for p in (ROOT / 'src').glob('*/' + name) if p.is_file())
     return out
 
 
