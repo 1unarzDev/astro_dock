@@ -1,0 +1,19 @@
+# What astro_dock's host tools need (names from config/host-deps.yaml); devices/deps.sh merges every repo's deps.yaml.
+deps:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - lsof
+  - python
+  - usbutils
+  - rsync
+  - openssh
+  - iproute2
+  - iputils
+  - procps
+  - psmisc
+  - util-linux
+  - iperf3
+  - avahi-utils
+  - hjson

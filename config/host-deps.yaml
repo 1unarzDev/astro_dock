@@ -1,0 +1,34 @@
+# The package table: what each dependency name is called per package manager. It holds no list of what to
+# install: each repo declares the names it needs in its own deps.yaml (astro_dock's, src/*/deps.yaml), and
+# devices/deps.sh merges them (setup.linux.sh, setup.mac.sh install them; tests/test_host_deps.py checks the
+# tools' commands against them). One line per name, package names per package manager
+# (brew '-' = not needed on macOS; a name may be several packages joined by spaces).
+#   cmds   the commands it provides (what the tools call)
+#   side   host (station or laptop), container (.devcontainer/packages.txt), boat (the boat host's own)
+# Docker, NVIDIA toolkit, avahi daemon and chrony have their own stages in setup.linux.sh.
+deps:
+  ca-certificates: {cmds: [], side: host, pacman: ca-certificates, apt: ca-certificates, dnf: ca-certificates, brew: '-'}
+  curl:     {cmds: [curl], side: host, pacman: curl, apt: curl, dnf: curl, brew: curl}
+  git:      {cmds: [git], side: host, pacman: git, apt: git, dnf: git, brew: git}
+  jq:       {cmds: [jq], side: host, pacman: jq, apt: jq, dnf: jq, brew: jq}
+  lsof:     {cmds: [lsof], side: host, pacman: lsof, apt: lsof, dnf: lsof, brew: lsof}
+  python:   {cmds: [python3], side: host, pacman: python, apt: 'python3 python3-venv python3-yaml', dnf: 'python3 python3-pyyaml', brew: python}
+  usbutils: {cmds: [lsusb], side: host, pacman: usbutils, apt: usbutils, dnf: usbutils, brew: '-'}
+  rsync:    {cmds: [rsync], side: host, pacman: rsync, apt: rsync, dnf: rsync, brew: rsync}
+  openssh:  {cmds: [ssh, ssh-keygen], side: host, pacman: openssh, apt: openssh-client, dnf: openssh-clients, brew: '-'}
+  tmux:     {cmds: [tmux], side: host, pacman: tmux, apt: tmux, dnf: tmux, brew: tmux}
+  xvfb:     {cmds: [xvfb-run], side: host, pacman: xorg-server-xvfb, apt: xvfb, dnf: xorg-x11-server-Xvfb, brew: '-'}
+  iproute2: {cmds: [ip], side: host, pacman: iproute2, apt: iproute2, dnf: iproute, brew: '-'}
+  procps:   {cmds: [pgrep, pkill], side: host, pacman: procps-ng, apt: procps, dnf: procps-ng, brew: '-'}
+  psmisc:   {cmds: [fuser], side: host, pacman: psmisc, apt: psmisc, dnf: psmisc, brew: '-'}
+  util-linux: {cmds: [flock, setsid, script, nice, timeout], side: host, pacman: util-linux, apt: util-linux, dnf: util-linux, brew: '-'}
+  iperf3:   {cmds: [iperf3], side: host, pacman: iperf3, apt: iperf3, dnf: iperf3, brew: iperf3}
+  iputils:  {cmds: [ping], side: host, pacman: iputils, apt: iputils-ping, dnf: iputils, brew: '-'}
+  avahi-utils: {cmds: [avahi-browse], side: host, pacman: avahi, apt: avahi-utils, dnf: avahi-tools, brew: '-'}
+  hjson:    {cmds: [hjson], side: host, pacman: '-', apt: '-', dnf: '-', brew: hjson}
+# Commands the tools call that are not host packages: shell builtins, coreutils/base system, or provided elsewhere.
+allow:
+  base: [bash, sh, env, cat, cut, tr, sed, awk, grep, find, sort, uniq, head, tail, wc, tee, xargs, tar, gzip, date, sleep, mkdir, rm, cp, mv, ln, ls, stat, chmod, chown, kill, ps, id, uname, hostname, mktemp, dirname, basename, readlink, realpath, touch, test, true, false, printf, echo, sudo, nproc, du, df, diff, cmp, install, getent, tput, stdbuf, base64, cksum, md5sum, sha256sum, mount, find, which, command, less, nice, timeout, rmdir, seq, reset, pwd, whoami, dir]
+  # words the scan reads as commands in prose or in a name (comment-like text, other programs' subcommands)
+  prose: [file, link, info, import, pg, cmd, cannot, starts, stay, restores, code]
+  workspace_stage: [cmake, makepkg, yay, systemd-run, docker, systemctl, journalctl, loginctl, timedatectl, udevadm, nmcli, chronyd, chronyc, colcon, ccache, avahi-daemon, gh, ssh-copy-id, sshpass, python3, hw.sh, mv]

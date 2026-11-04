@@ -15,7 +15,10 @@ fi
 
 echo "Installing packages..."
 brew install --cask docker visual-studio-code
-brew install jq hjson
+# The host tools every repo declares in its deps.yaml, as brew packages (devices/deps.sh).
+brew_deps=$("$(dirname "$0")/devices/deps.sh" packages brew)
+# shellcheck disable=SC2086
+brew install $brew_deps
 
 # Start Docker Desktop if not running
 if ! pgrep -x "Docker" > /dev/null; then

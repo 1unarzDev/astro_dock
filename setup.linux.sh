@@ -51,7 +51,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,compose,repos,gateway,boat,jetson,operator-key
+  --components LIST         clock,docker,gpu,devices,devtools,deps,compose,repos,gateway,boat,jetson,operator-key
   --vessel NAME             The vessel profile (default: this machine's, as ./hw.sh whoami finds it)
   --host NAME               This machine's registry host, or any other name for a generic control
                             station (default: found by hostname, MAC or boat-LAN address)
@@ -337,20 +337,38 @@ ensure_mdns() {
 
 stage_devtools() {
     heading "Developer command-line tools"
-    echo "This installs Git, curl, jq, Python, basic USB/device diagnostics, and mDNS (.local) resolution."
+    echo "This installs the host tools every repo declares in its deps.yaml (devices/deps.sh names them; config/host-deps.yaml maps them to packages) and mDNS (.local) resolution."
     echo "It does not install VS Code, Node, or clone repositories."
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(devtools); return; }
     approve "Install host developer tools?" || { SKIPPED+=(devtools); return; }
     if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -Syu --needed --noconfirm ca-certificates curl git jq lsof python usbutils
+        run sudo pacman -Syu --needed --noconfirm $("$SCRIPT_DIR/devices/deps.sh" packages pacman)
     elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
         run sudo apt-get update
-        run sudo apt-get install -y ca-certificates curl git jq lsof python3 usbutils
+        run sudo apt-get install -y $("$SCRIPT_DIR/devices/deps.sh" packages apt)
     else
-        run sudo dnf -y install ca-certificates curl git jq lsof python3 usbutils
+        run sudo dnf -y install $("$SCRIPT_DIR/devices/deps.sh" packages dnf)
     fi
     ensure_mdns dev
+    run "$SCRIPT_DIR/devices/deps.sh" hooks
     COMPLETED+=(devtools)
+}
+
+# Only the declared host tools (after a pull or a new repo changed a deps.yaml): no mDNS, no prompts beyond one.
+stage_deps() {
+    heading "Declared host tools"
+    echo "This installs the host tools the repos declare in their deps.yaml (missing now: $("$SCRIPT_DIR/devices/deps.sh" missing | tr '\n' ' ')) and sets the git hooks that recommend this after a pull."
+    $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(deps); return; }
+    approve "Install the declared host tools?" || { SKIPPED+=(deps); return; }
+    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
+        run sudo pacman -S --needed --noconfirm $("$SCRIPT_DIR/devices/deps.sh" packages pacman)
+    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
+        run sudo apt-get install -y $("$SCRIPT_DIR/devices/deps.sh" packages apt)
+    else
+        run sudo dnf -y install $("$SCRIPT_DIR/devices/deps.sh" packages dnf)
+    fi
+    run "$SCRIPT_DIR/devices/deps.sh" hooks
+    COMPLETED+=(deps)
 }
 
 stage_compose() {
@@ -751,6 +769,7 @@ main() {
     has_component gpu && stage_gpu
     has_component devices && stage_devices
     has_component devtools && stage_devtools
+    has_component deps && stage_deps
     has_component compose && stage_compose
     has_component repos && stage_repos
     has_component gateway && stage_gateway
