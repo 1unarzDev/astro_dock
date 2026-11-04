@@ -225,21 +225,15 @@ docker inspect $2 --format '{{.Config.Image}} volumes: {{range .Mounts}}{{.Name}
 EOF
 }
 
-# Runs in the container: links left by removed packages break symlink-install builds. Containers
-# created before Compose set BASH_ENV need dev.bashrc sourced explicitly.
-build() {
-    cat <<'EOF'
-source "$ROS_WS/.devcontainer/dev.bashrc" >/dev/null 2>&1
-set -o pipefail; cd "$ROS_WS"
-echo "pruned $(find build install -xtype l 2>/dev/null | wc -l) stale links"
-find build install -xtype l -delete 2>/dev/null
-colcon build --symlink-install 2>&1 | tail -20
-EOF
-}
+# Runs in the container: the workspace's one build (devices/build.sh: dev.bashrc, stale links pruned,
+# colcon build --symlink-install, from clean when the container's image changed since the last build).
+# shellcheck source=devices/build.sh
+source "$HW_ROOT/devices/build.sh"
+build() { hw_build_body; }
 
 build_on() {
     log "== $1: colcon build --symlink-install"
-    build | $SSH "$1" docker exec -i "$2" bash -s 2>&1 | tee -a "$LOG"
+    build | $SSH "$1" "docker exec -i -e ASTRO_BUILD_IMAGE=\$(docker inspect --format '{{.Image}}' $2) $2 bash -s" 2>&1 | tee -a "$LOG"
     if [[ ${PIPESTATUS[1]} == 0 ]]; then log "OK $1 build"; else log "FAIL $1 build"; return 1; fi
 }
 

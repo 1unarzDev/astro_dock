@@ -41,6 +41,8 @@ HW_COMMANDS=(
     "station release|stop this computer's operator heartbeat service"
     "overlay PATH [--base REF] [--all] [--dry-run]|colcon-build a worktree's packages touched against REF (origin/main) as an overlay on the workspace install, in the dev container; prints the source line"
     "pyenv PATH|the PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon"
+    "build --ws DIR [--container NAME] [-- ARGS]|the workspace's colcon build of DIR (in NAME), from clean when its image or colcon defaults changed"
+    "image [--pull] [--local]|the dev image the Compose config names (--pull: when the registry has a newer one; --local: the local image built on it)"
 )
 
 # command_usage [NAME]: the usage lines of every command, or of NAME only.
@@ -153,6 +155,9 @@ if [[ ${1:-} == overlay || ${1:-} == pyenv ]]; then
     if [[ " ${*:2:2} " =~ \ (-h|--help)\  ]]; then command_usage "$1" | sed '1s/^      /Usage:/'; exit 0; fi
     exec bash "$HW_ROOT/devices/overlay.sh" "$@"
 fi
+# build and image need no profiles either: the workspace's build entry point and its dev image.
+if [[ ${1:-} == build ]]; then exec bash "$HW_ROOT/devices/build.sh" "${@:2}"; fi
+if [[ ${1:-} == image ]]; then exec bash "$HW_ROOT/.devcontainer/dev-image.sh" "${@:2}"; fi
 hw_init
 if [[ " ${*:2:2} " =~ \ (-h|--help)\  && -n $(command_usage "${1:-}") ]]; then
     command_usage "$1" | sed '1s/^      /Usage:/'

@@ -65,7 +65,7 @@ class Hosts(unittest.TestCase):
         self.assertNotIn('profiles', calls)                                 # the fixture root: no profiles step
         self.assertIn('dir=$HOME/astro_dock;', calls)                       # the registry's workspace
         self.assertIn('git merge --ff-only -q origin/main', calls)
-        self.assertIn('== host-a docker exec -i dev bash -s', calls)
+        self.assertIn("== host-a docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{.Image}}' dev) dev bash -s", calls)
         self.assertIn('find build install -xtype l -delete', calls)
         self.assertIn('colcon build --symlink-install', calls)
         self.assertNotIn('docker compose', calls)
@@ -189,7 +189,7 @@ class Hosts(unittest.TestCase):
             result, calls = self.run_script('apply', ASTRO_REGISTRY=str(registry))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('== a bash -s', calls)
-        self.assertIn('== b docker exec -i box bash -s', calls)
+        self.assertIn("== b docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{.Image}}' box) box bash -s", calls)
         self.assertNotIn('== r ', calls)
 
     def test_a_registry_without_defaults_takes_this_checkouts_container_and_home_path(self):
@@ -199,7 +199,7 @@ class Hosts(unittest.TestCase):
             result, calls = self.run_script('apply', ASTRO_REGISTRY=str(registry), HOME=str(ROOT.parent))
         self.assertEqual(result.returncode, 0, result.stderr)
         container = re.search(r'(?m)^    container_name: (\S+)', (ROOT / '.devcontainer/docker-compose.yml').read_text())
-        self.assertIn('== a docker exec -i %s bash -s' % container.group(1), calls)
+        self.assertIn("== a docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{{{.Image}}}}' {0}) {0} bash -s".format(container.group(1)), calls)
         self.assertIn('dir=$HOME/%s;' % ROOT.name, calls)
 
     def test_the_vessel_registry_names_hosts_to_deploy(self):

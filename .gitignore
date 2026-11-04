@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 build/
 log/
+.astro-build
 refs/
 bags/
 router_setup_state/
