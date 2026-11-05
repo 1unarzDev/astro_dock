@@ -203,7 +203,7 @@ class Hosts(unittest.TestCase):
         default = re.search(r'(?m)^    container_name: \$\{ASTRO_CONTAINER:-(\w+)\}$',
                             (ROOT / '.devcontainer/docker-compose.yml').read_text()).group(1)
         self.assertNotIn('docker-compose.yml', (ROOT / 'devices/hosts/fleet.sh').read_text().split('fleet_hosts() {')[1].split('\n}')[0])
-        for extra, container in (({}, 'fixture_dev'), ({'HW_CONTAINER_NAME': ''}, default)):
+        for extra, container in (({}, 'fixture_dev'), ({'HW_CONTAINER_NAME': ''}, default), ({'ASTRO_CONTAINER': 'mine'}, 'mine')):
             with self.subTest(container=container), tempfile.TemporaryDirectory() as tmp:
                 registry = Path(tmp, 'devices.yaml')
                 registry.write_text('hosts:\n  a: {user: x}\n')
