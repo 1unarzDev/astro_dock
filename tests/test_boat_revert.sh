@@ -26,7 +26,7 @@ printf '#!/bin/sh\n:\n' >"$tmp/bin/setuserpasswd"
 chmod +x "$tmp/bin"/*
 
 # The router driver with the fixture vessel a's values; sourcing it runs nothing.
-HW_ROOT=$root ASTRO_ENV_FILE=/dev/null ASTRO_SECRETS=/nonexistent
+HW_ROOT=$root ASTRO_SECRETS=/nonexistent
 export ASTRO_PROFILES="$root/tests/data/profiles" ASTRO_VESSEL=a
 source "$root/devices/lib.sh"
 hw_init

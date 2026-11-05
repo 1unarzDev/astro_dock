@@ -127,12 +127,10 @@ secrets_check() {
 
 need_scope() { [[ -z $HW_SCOPE_ERROR ]] || die "$HW_SCOPE_ERROR"; }
 
-# Global flags: --vessel V, --host H (--profile V is --vessel's old name, for one release).
+# Global flags: --vessel V, --host H.
 while (($#)); do
     case $1 in
-        --vessel|--profile) [[ -n ${2:-} ]] || die "$1 requires a name"
-            [[ $1 == --vessel ]] || warn "--profile is now --vessel"
-            ASTRO_VESSEL=$2; unset ASTRO_PROFILE ASTRO_PROFILE_DIR; shift 2 ;;
+        --vessel) [[ -n ${2:-} ]] || die "--vessel requires a name"; ASTRO_VESSEL=$2; unset ASTRO_PROFILE_DIR; shift 2 ;;
         --host) [[ -n ${2:-} ]] || die "--host requires a name"; ASTRO_HOST=$2; shift 2 ;;
         *) break ;;
     esac

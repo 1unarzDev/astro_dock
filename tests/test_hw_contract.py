@@ -28,6 +28,11 @@ class Contract(unittest.TestCase):
         (self.profile / 'profile.yaml').write_text('network_env: %s\n' % (self.tmp / 'net.env'))
         self.mark = self.tmp / 'ran'
 
+    def secrets(self, text):
+        path = self.tmp / 'secrets.env'
+        path.write_text(text)
+        path.chmod(0o600)
+
     def driver(self, name, body):
         path = self.tmp / 'drivers' / (name + '.sh')
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,7 +40,7 @@ class Contract(unittest.TestCase):
 
     def hw(self, *args, **extra):
         env = {**os.environ, 'ASTRO_PROFILE_DIR': str(self.profile), 'HW_DRIVERS': str(self.tmp / 'drivers'),
-               'ASTRO_ENV_FILE': str(self.tmp / 'no.env'), 'MARK': str(self.mark), **extra}
+               'ASTRO_SECRETS': str(self.tmp / 'secrets.env'), 'MARK': str(self.mark), **extra}
         return subprocess.run(['bash', str(ROOT / 'hw.sh'), *args], capture_output=True, text=True, env=env)
 
     def test_a_driver_missing_required_functions_fails_before_any_verb(self):
@@ -76,12 +81,12 @@ class Contract(unittest.TestCase):
     def test_secrets_come_from_the_env_file_the_profile_names_and_the_environment_wins(self):
         (self.profile / 'thing.yaml').write_text('driver: fake/ok\ncredentials: {password: THING_PASSWORD}\n')
         self.driver('fake/ok', VERBS + 'driver_extra() { echo "[$(secret credentials.password)]"; }\n')
-        (self.tmp / 'no.env').write_text('THING_PASSWORD="from file"\n')
+        self.secrets('THING_PASSWORD="from file"\n')
         self.assertEqual(self.hw('thing', 'extra').stdout, '[from file]\n')
         self.assertEqual(self.hw('thing', 'extra', THING_PASSWORD='').stdout, '[]\n')
 
     def test_env_prints_only_network_env_keys(self):
-        (self.tmp / 'no.env').write_text('THING_PASSWORD=hunter22\n')
+        self.secrets('THING_PASSWORD=hunter22\n')
         run = self.hw('env', 'ADDR')
         self.assertEqual((run.returncode, run.stdout), (0, '10.0.0.7\n'), run.stderr)
         for key in ('THING_PASSWORD', 'HOME'):
@@ -92,7 +97,7 @@ class Contract(unittest.TestCase):
                 self.assertNotIn('hunter22', run.stdout + run.stderr)
 
     def test_profile_selection(self):
-        env = {**os.environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent',
+        env = {**os.environ, 'ASTRO_SECRETS': '/nonexistent',
                'ASTRO_PROFILES': str(FIXTURE), 'HW_HOSTNAME': 'innovation', 'HW_SYSFS_NET': '/nonexistent'}
         run = subprocess.run(['bash', str(ROOT / 'hw.sh'), 'env'], capture_output=True, text=True,
                              env={**env, 'ASTRO_VESSEL': 'nonexistent'})
@@ -122,7 +127,7 @@ class Contract(unittest.TestCase):
         if SHIPPED is None:
             self.skipTest('no profiles/ checkout (generic checkout)')
         environ = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
-        env = {**environ, 'ASTRO_ENV_FILE': '/dev/null', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_PROFILES': str(SHIPPED)}
+        env = {**environ, 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_PROFILES': str(SHIPPED)}
         members = sorted(p.parent for p in SHIPPED.glob('*/profile.yaml'))
         self.assertTrue(members)
         for profile in members:
