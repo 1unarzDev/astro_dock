@@ -199,11 +199,12 @@ class Hosts(unittest.TestCase):
         self.assertNotIn('== r ', calls)
 
     def test_a_registry_without_defaults_takes_this_checkouts_container_and_home_path(self):
-        """The profile's container.name, else docker-compose.yml's generic default; never a sed of the file."""
+        """The profile's container.name, else docker-compose.yml's generic default; never a sed of the file, and never
+        this machine's exported ASTRO_CONTAINER (that names a local container, not the remote host's)."""
         default = re.search(r'(?m)^    container_name: \$\{ASTRO_CONTAINER:-(\w+)\}$',
                             (ROOT / '.devcontainer/docker-compose.yml').read_text()).group(1)
         self.assertNotIn('docker-compose.yml', (ROOT / 'devices/hosts/fleet.sh').read_text().split('fleet_hosts() {')[1].split('\n}')[0])
-        for extra, container in (({}, 'fixture_dev'), ({'HW_CONTAINER_NAME': ''}, default), ({'ASTRO_CONTAINER': 'mine'}, 'mine')):
+        for extra, container in (({}, 'fixture_dev'), ({'HW_CONTAINER_NAME': ''}, default), ({'ASTRO_CONTAINER': 'mine'}, 'fixture_dev')):
             with self.subTest(container=container), tempfile.TemporaryDirectory() as tmp:
                 registry = Path(tmp, 'devices.yaml')
                 registry.write_text('hosts:\n  a: {user: x}\n')
