@@ -1,4 +1,4 @@
 [submodule "src/ros_tcp_endpoint"]
 	path = src/ros_tcp_endpoint
 	url = https://github.com/MHSeals/ROS-TCP-Endpoint.git
-	branch = main-ros2
+	branch = main
