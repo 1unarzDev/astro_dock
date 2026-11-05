@@ -120,6 +120,9 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(config('names'), ('fixture_dev', 'fixture=127.0.1.1', USER_HOME + '/.config/fixture'))
             self.assertTrue((root / '.config/fixture').is_dir())
             self.assertEqual(config('names', ASTRO_CONTAINER='mine')[0], 'mine')
+            # ASTRO_ALIAS names the alias; ASTRO_HOSTNAME (this machine's name) leaves it alone.
+            self.assertEqual(config('names', ASTRO_ALIAS='team')[1], 'team=127.0.1.1')
+            self.assertEqual(config('names', ASTRO_HOSTNAME='laptop')[1], 'fixture=127.0.1.1')
             # A profile hw.sh rejects falls back to the generic names, and says so with hw.sh's reason.
             domain({'ASTRO_VESSEL': 'a', 'HW_CONTAINER_NAME': 'a b'})
             self.assertIn("container.name 'a b' is not a plain name", warnings[-1])

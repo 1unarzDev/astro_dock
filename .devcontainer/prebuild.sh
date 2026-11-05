@@ -49,7 +49,7 @@ host_name="${host_name%%.*}"
 }
 # Inject into the generated adapter only, for every service it defines, so each
 # container is named after its device. docker-compose.yml keeps its base alias
-# (ASTRO_HOSTNAME); Docker adds the actual hostname to /etc/hosts itself.
+# (ASTRO_ALIAS); Docker adds the actual hostname to /etc/hosts itself.
 sed -i.bak -E "/^  (dev):$/a\\
     hostname: ${host_name}\\
     extra_hosts: [\"${host_name}:127.0.1.1\"]
@@ -118,7 +118,7 @@ names=""
 if [[ -n "$profiles_root" || -n "$profiles_error" ]] && ! names="$("$hw" hosts compose)"; then
     names=""
     echo "WARNING: hw.sh hosts compose failed (above): the dev container gets docker-compose.yml's generic names" \
-        "(container, hostname, config dir) unless ASTRO_CONTAINER, ASTRO_HOSTNAME, ASTRO_CONFIG_DIR are set. Fix it and rerun prebuild." >&2
+        "(container, hostname alias, config dir) unless ASTRO_CONTAINER, ASTRO_ALIAS, ASTRO_CONFIG_DIR are set. Fix it and rerun prebuild." >&2
 fi
 { echo '# Written by prebuild.sh from the profile (hw.sh hosts compose); rerun prebuild to change it.'
   [[ -z "$names" ]] || printf '%s\n' "$names"; } > "$script_dir/.env"
