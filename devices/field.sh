@@ -16,6 +16,9 @@
 # Boat hosts: the registry's ssh hosts without the operator role. They are reached as the TUI reaches
 # them (key_hosts: LAN address, operator key) once the key exists, else by registry name.
 
+# shellcheck source=devices/build.sh
+source "$HW_ROOT/devices/build.sh"     # hw_build_body: the workspace's one build, as hosts apply runs it
+
 field_init() {
     set +e
     SSH=${HW_SSH:-ssh} DOCKER=${HW_DOCKER:-docker} SYSTEMCTL=${HW_SYSTEMCTL:-systemctl}
@@ -134,9 +137,10 @@ hot_one() {
     pkgs=$(head -1 <<<"$reasons") reasons=$(tail -n +2 <<<"$reasons")
     if [[ -z $pkgs ]]; then log "OK $name: no build (only .py/.yaml/launch edits, live under symlink-install)"; return 0; fi
     sed "s/^/$name: builds for /" <<<"$reasons" | tee -a "$LOG"
-    log "== $name: colcon build --packages-select $pkgs"
-    printf 'source "$ROS_WS/.devcontainer/dev.bashrc" >/dev/null 2>&1\nset -o pipefail; cd "$ROS_WS"\ncolcon build --symlink-install --packages-select %s 2>&1 | tail -20\n' "$pkgs" \
-        | field_ssh "$target" "$jump" docker exec -i "$container" bash -s 2>&1 | tee -a "$LOG"
+    log "== $name: colcon build --symlink-install --packages-select $pkgs"
+    # shellcheck disable=SC2086  # pkgs: one package per word
+    hw_build_body | field_ssh "$target" "$jump" docker exec -i -e "ASTRO_BUILD_IMAGE=\$(docker inspect --format '{{.Image}}' $container)" \
+        "$container" bash -s -- --packages-select $pkgs 2>&1 | tee -a "$LOG"
     if [[ ${PIPESTATUS[1]} == 0 ]]; then log "OK $name build $pkgs"; else log "FAIL $name build $pkgs"; return 1; fi
 }
 
