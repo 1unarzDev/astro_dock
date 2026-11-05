@@ -1,7 +1,20 @@
 name: Validate container configuration
 
+# Landing fast-forwards main without a PR, so push to main runs the same checks.
 on:
   pull_request:
+    paths:
+      - ".devcontainer/**"
+      - "setup.linux.sh"
+      - "hw.sh"
+      - "devices/**"
+      - ".gitmodules"
+      - "tests/**"
+      - "fetch_bags.sh"
+      - ".github/workflows/**"
+      - ".github/scripts/**"
+  push:
+    branches: [main]
     paths:
       - ".devcontainer/**"
       - "setup.linux.sh"
