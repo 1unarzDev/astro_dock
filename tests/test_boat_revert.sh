@@ -133,10 +133,20 @@ esac
 EOF
 printf '#!/bin/sh\n[ "$1 $2 $3" = "-4 -o addr" ] && printf "%%s\\n" "$ADDRS" | tr ";" "\\n"\nexit 0\n' >"$tmp/host/ip"
 chmod +x "$tmp/host"/*
-boat() { ADDRS="$1" PATH="$tmp/host:$PATH" "$root/setup.linux.sh" --dry-run --non-interactive --components boat 2>&1; }
+boat() { ADDRS="$1" PATH="$tmp/host:$PATH" "$root/setup.linux.sh" --dry-run --non-interactive --components "${2:-boat}" 2>&1; }
 line() { echo "2: eth0    inet $1/${subnet#*/} scope global eth0"; }
 out=$(boat "$(line "$other");$(line "$gw")")
 grep -q "holds the gateway address" <<<"$out" || fail "gateway second address not detected"
 out=$(boat "$(line "$other")")
 ! grep -q "holds the gateway address" <<<"$out" || fail "non-gateway host treated as gateway"
 echo "stage_boat gateway ok"
+
+# network.env is data: setup reads it through hw.sh env, so shell code in it never runs.
+cp -r "$ASTRO_PROFILES" "$tmp/profiles"
+printf 'EVIL=$(touch %s/ran)\nTOO=`touch %s/ran`\n' "$tmp" "$tmp" >>"$tmp/profiles/a/network.env"
+for stage in boat gateway; do
+    out=$(ASTRO_PROFILES="$tmp/profiles" boat "$(line "$other")" "$stage")
+    [[ ! -e $tmp/ran ]] || fail "$stage ran shell code from network.env"
+    grep -q "$subnet" <<<"$out" || fail "$stage did not read LAN_SUBNET: $out"
+done
+echo "network.env not sourced ok"
