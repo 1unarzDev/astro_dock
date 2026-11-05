@@ -122,10 +122,10 @@ if [[ -n "$profiles_root" || -n "$profiles_error" ]] && ! names="$("$hw" hosts c
 fi
 { echo '# Written by prebuild.sh from the profile (hw.sh hosts compose); rerun prebuild to change it.'
   [[ -z "$names" ]] || printf '%s\n' "$names"; } > "$script_dir/.env"
-# As docker-compose.yml resolves them: the environment, else .env (the profile), else the generic default.
-named() { local v; v="$(sed -n "s/^$1=//p" <<<"$names")"; printf '%s' "${!1:-${v:-$2}}"; }
-config_dir="$(named ASTRO_CONFIG_DIR astro)"
-container="$(named ASTRO_CONTAINER astro_dev)"
+# As docker-compose.yml resolves them (devices/lib.sh hw_dev_name: the environment, else .env, else its default).
+source "$script_dir/../devices/lib.sh"
+config_dir="$(hw_dev_name "$script_dir/.." ASTRO_CONFIG_DIR)"
+container="$(hw_dev_name "$script_dir/..")"
 # Host operator config dir, bind-mounted by docker-compose.yml (Docker would create it root-owned).
 mkdir -p "${HOME}/.config/${config_dir}" "${HOME}/worktrees" "${HOME}/.cache/wt"
 [[ -z "$profiles_root" ]] || vessel="$("$hw" whoami 2>/dev/null | sed -n 's/^vessel  *\([a-z0-9][a-z0-9_-]*\) (.*/\1/p')"
