@@ -31,6 +31,8 @@ field_init() {
 }
 
 field_py() { python3 -I "$HW_ROOT/devices/field.py" "$@"; }
+# net_value KEY: one value of the vessel's network env as profile.py reads it (`hw.sh env KEY`), else empty.
+net_value() { python3 -I "$HW_ROOT/devices/profile.py" value "$ASTRO_NETWORK_ENV" "${ASTRO_REGISTRY:-}" "$1" 2>/dev/null; }
 
 # "name container workspace target jump" per boat host (the given names, else all).
 field_hosts() {
@@ -221,7 +223,7 @@ station_take() {
     station_kernel
     need_scope
     field_init
-    subnet=$(hw_load_env "$ASTRO_NETWORK_ENV" LAN_SUBNET; printf '%s' "${LAN_SUBNET:-}")
+    subnet=$(net_value LAN_SUBNET)
     [[ -n $subnet ]] || die "$ASTRO_NETWORK_ENV has no LAN_SUBNET"
     link=$(field_py link "$subnet") || exit 1
     eval "$link"
@@ -295,7 +297,7 @@ heartbeat_unit() {
     local domain command
     command=$(cfg operator_heartbeat)
     [[ -n $command ]] || return 0
-    domain=$(unset ROS_DOMAIN_ID; hw_load_env "$ASTRO_NETWORK_ENV" ROS_DOMAIN_ID; printf '%s' "${ROS_DOMAIN_ID:-}")
+    domain=$(net_value ROS_DOMAIN_ID)
     printf '[Unit]\nDescription=Operator heartbeat of %s for %s (hw.sh station take)\n\n' "${ASTRO_HOST:-$ME}" "$ASTRO_VESSEL"
     printf '[Service]\nEnvironment="ASTRO_HEARTBEAT=%s"\n' "$command"
     printf 'Environment=ASTRO_HOST=%s ASTRO_COMPOSE_PROJECT=%s%s\n' \

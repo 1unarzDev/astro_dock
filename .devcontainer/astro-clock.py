@@ -9,8 +9,8 @@ with chrony answer; others show "no reply". Containers share the host clock,
 so this runs the same inside one. Exit 1 when a host is off by more than
 50 ms, unsynchronised, or silent.
 """
+import importlib.util
 import os
-import shlex
 import socket
 import struct
 import subprocess
@@ -21,6 +21,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NTP_EPOCH = 2208988800  # seconds from 1900 to 1970
 LIMIT = 0.050
+# The network env as profile.py reads it (by path: the stdlib has a `profile` module).
+_spec = importlib.util.spec_from_file_location('astro_profile', ROOT / 'devices' / 'profile.py')
+profile = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(profile)
 
 
 def network_env():
@@ -39,18 +43,9 @@ def role_address(key):
 
 def lan_hosts(path=None):
     """[(name, address)] from the env file: the time server, then the reservations."""
-    path = path or network_env()
-    values = {}
-    for line in Path(path).read_text().splitlines():
-        key, sep, value = line.partition('=')
-        if sep and not line.lstrip().startswith('#'):
-            values[key.strip()] = ' '.join(shlex.split(value, comments=True))
     server = role_address('TIME_SERVER_IP')   # the registry's time_server role
-    hosts = [('time server', address) for address in server.split()]
-    for lease in values.get('STATIC_LEASES', '').split():
-        _, name, address = lease.split('=')
-        hosts.append((name, address))
-    return hosts
+    return ([('time server', address) for address in server.split()]
+            + [(name, address) for _, name, address in profile.leases(profile.network(path or network_env()))])
 
 
 def ntp_time(raw):
