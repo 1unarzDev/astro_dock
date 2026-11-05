@@ -1,30 +1,11 @@
 name: Validate container configuration
 
-# Landing fast-forwards main without a PR, so push to main runs the same checks.
+# Every PR and every push to main (landing fast-forwards main without a PR). No paths
+# filter: smoke reads files anywhere in the tree (README, AGENTS.md, config, net, .agents).
 on:
   pull_request:
-    paths:
-      - ".devcontainer/**"
-      - "setup.linux.sh"
-      - "hw.sh"
-      - "devices/**"
-      - ".gitmodules"
-      - "tests/**"
-      - "fetch_bags.sh"
-      - ".github/workflows/**"
-      - ".github/scripts/**"
   push:
     branches: [main]
-    paths:
-      - ".devcontainer/**"
-      - "setup.linux.sh"
-      - "hw.sh"
-      - "devices/**"
-      - ".gitmodules"
-      - "tests/**"
-      - "fetch_bags.sh"
-      - ".github/workflows/**"
-      - ".github/scripts/**"
 
 permissions:
   contents: read
