@@ -153,12 +153,14 @@ def _load(name, script):
 
 
 def dispatch(event, root=ROOT, budget_s=BUDGET_S, clock=time.monotonic):
-    """Every package's answer to ``event``: ``(deny reason or None, [contexts])``.
+    """Every package's answer to ``event``: ``(deny reason or None, [contexts])``; a start's contexts lead
+    with the agent-loop entry (loop_entry).
 
     Packages run in order until ``budget_s`` is spent; the rest are skipped (and logged), and a
     deny already collected still stands. A package's error, even ``sys.exit``, skips only it.
     """
-    deny, contexts = None, []
+    deny = None
+    contexts = [entry for entry in [loop_entry(root)] if entry] if event['event'] == 'start' else []
     ends = clock() + budget_s
     for name, script in packages(root):
         if clock() > ends:
@@ -222,32 +224,11 @@ def loop_entry(root=ROOT):
             % (', '.join(found), starts))
 
 
-def with_loop_entry(args, text, out, root=ROOT):
-    """``out`` with the agent-loop line first in a session start's context (hook JSON or --playbook)."""
-    entry = loop_entry(root)
-    if not entry:
-        return out
-    if args[:1] == ['--playbook']:
-        return '\n\n'.join(part for part in (entry, out) if part)
-    raw = json.loads(text or '{}')
-    if not isinstance(raw, dict) or raw.get('hook_event_name') != 'SessionStart':
-        return out
-    answer = json.loads(out) if out else {}
-    spec = answer.get('hookSpecificOutput') or {}
-    context = '\n\n'.join(part for part in (entry, spec.get('additionalContext')) if part)
-    return json.dumps({'hookSpecificOutput': {**spec, 'hookEventName': 'SessionStart',
-                                              'additionalContext': context}})
-
-
 def main(argv=None, root=ROOT):
     args = sys.argv[1:] if argv is None else argv
     try:
         text = '' if args[:1] == ['--playbook'] else sys.stdin.read()
         out = respond(args, text, root)
-        try:
-            out = with_loop_entry(args, text, out, root)
-        except BaseException as error:      # the pointer never costs the hook its answer
-            log('loop entry: %r' % (error,))
     except BaseException as error:
         log('dispatch: %r' % (error,))
         out = ''
