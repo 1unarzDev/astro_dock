@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # Jetson (L4T R36) image promotion from jetson.yaml: validate a CI candidate on the hardware over ssh,
 # promote it in hosted CI, then pull it. The registry tag is the only state, so rollback promotes an
-# earlier build (its BUILD_RUN_ID) through the same validation.
+# earlier build (its BUILD_RUN_ID) through the same validation. The validator and the promotion workflow
+# are this checkout's own files, never the profile's.
+VALIDATOR=.devcontainer/boat-validate.sh
+WORKFLOW=promote-jetson.yml
 
 driver_usage() {
     cat <<EOF
@@ -11,7 +14,7 @@ Usage: $HW_PROGRAM $HW_KIND status USER@HOST
 
 status    Read-only: the host's L4T release and the digests of $(cfg image):$(cfg family).
 plan      Resolve the candidate (latest, or BUILD_RUN_ID) and its provenance; touches no host.
-apply     Validate the candidate on HOST ($(cfg validator)), dispatch $(cfg workflow), watch it,
+apply     Validate the candidate on HOST ($VALIDATOR), dispatch $WORKFLOW, watch it,
           then pull the family tag on HOST and check it is the candidate.
 verify    Read-only: HOST's family tag is the candidate.
 rollback  apply for an earlier BUILD_RUN_ID.
@@ -76,7 +79,7 @@ driver_plan() {
     jetson_args "$@"
     candidate
     info "Candidate $CANDIDATE (build run $BUILD_RUN)"
-    info "apply would validate it on $HOST${GATEWAY:+ via $GATEWAY}, dispatch $(cfg workflow) and pull $IMAGE:$FAMILY there"
+    info "apply would validate it on $HOST${GATEWAY:+ via $GATEWAY}, dispatch $WORKFLOW and pull $IMAGE:$FAMILY there"
 }
 
 driver_verify() {
@@ -105,15 +108,15 @@ driver_apply() {
     trap cleanup EXIT
     JETSON_REMOTE=$(remote 'mktemp -d /tmp/astro-jetson.XXXXXX')
     [[ $JETSON_REMOTE =~ ^/tmp/astro-jetson\.[a-zA-Z0-9]+$ ]] || { JETSON_REMOTE=''; die "Bad remote directory"; }
-    remote "cat > $JETSON_REMOTE/boat-validate.sh" <"$HW_ROOT/$(cfg validator)"
+    remote "cat > $JETSON_REMOTE/boat-validate.sh" <"$HW_ROOT/$VALIDATOR"
     echo "Validating $CANDIDATE on $HOST"
     remote "bash $JETSON_REMOTE/boat-validate.sh $CANDIDATE" | tee "$JETSON_TMP/validation.log"
     validation="$(printf 'Host: %s\n' "$HOST"; grep '^PASS:' "$JETSON_TMP/validation.log")"
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    gh workflow run "$(cfg workflow)" --ref main \
+    gh workflow run "$WORKFLOW" --ref main \
         -f family="$FAMILY" -f run_id="$BUILD_RUN" -f digest="$DIGEST" -f validation="$validation"
     for attempt in {1..15}; do
-        promotion_run="$(gh run list --workflow "$(cfg workflow)" --branch main \
+        promotion_run="$(gh run list --workflow "$WORKFLOW" --branch main \
             --event workflow_dispatch --limit 20 --json databaseId,displayTitle,createdAt \
             | jq -r --arg title "$FAMILY promotion $DIGEST" --arg start "$started" \
                 '[.[] | select(.displayTitle == $title and .createdAt >= $start)] | max_by(.databaseId).databaseId // empty')"
