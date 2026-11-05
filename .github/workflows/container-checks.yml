@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  # The landing gate: tests/smoke.sh (under a minute). Only this job blocks.
+  # The landing gate: tests/smoke.sh. Only this job blocks.
   smoke:
     runs-on: ubuntu-24.04
     steps:
