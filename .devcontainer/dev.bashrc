@@ -77,7 +77,7 @@ __astro_network_env >/dev/null
 
 ros_net() {
   [[ -z "${ASTRO_RUN_MANAGED:-}" ]] || return 0
-  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned transport override peers run="${XDG_RUNTIME_DIR:-/tmp}"
+  local profile="$ROS_WS/config/fastdds.xml" subnet address pinned transport override peers host lan run="${XDG_RUNTIME_DIR:-/tmp}"
   __astro_network_env >/dev/null    # here, not in a subshell, so the export reaches this shell
   if [[ ! -d "$run" || ! -w "$run" ]]; then
     # World-writable /tmp: use a private per-user directory, and only if it is ours, a real directory, 0700.
@@ -85,8 +85,18 @@ ros_net() {
     mkdir -m 700 "$run" 2>/dev/null
     [[ -d "$run" && ! -L "$run" && -O "$run" && "$(stat -c %a "$run" 2>/dev/null)" == 700 ]] || return 0
   fi
-  subnet="${ASTRO_DDS_SUBNET:-$( . "$(__astro_network_env)" 2>/dev/null && echo "${LAN_SUBNET:-}")}"
   [[ "${ROS_DISTRO:-jazzy}" == jazzy && -f "$profile" ]] || return 0
+  # The vessel's network env as profile.py reads it (data, never run as shell): its subnet, the first
+  # reservation's address, then the gateway and every reserved address.
+  mapfile -t lan < <(python3 -I -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("astro_profile", sys.argv[1])
+profile = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(profile)
+env = profile.network(sys.argv[2])
+leased = [address for _, _, address in profile.leases(env)]
+print(env.get("LAN_SUBNET", ""), (leased or [""])[0], " ".join([env.get("GATEWAY_IP", ""), *leased]), sep="\n")' "$ROS_WS/devices/profile.py" "$(__astro_network_env)" 2>/dev/null)
+  subnet="${ASTRO_DDS_SUBNET:-${lan[0]:-}}"
   # A user-set ASTRO_DDS_ADDRESS wins; the address ros_net itself exported
   # (remembered in __ASTRO_DDS_AUTO) is not an override and is detected again.
   # Otherwise the kernel's source address toward the vessel
@@ -94,8 +104,7 @@ ros_net() {
   # one), else the first interface primary address (SIOCGIFADDR) in the subnet;
   # secondaries such as a bridge's own are skipped; the image has no iproute2.
   # The route target is any vessel host: the first reservation.
-  transport="$( . "$(__astro_network_env)" 2>/dev/null && leases=(${STATIC_LEASES:-}) && first="${leases[0]:-}" &&
-    echo "${first##*=}")"
+  transport="${lan[1]:-}"
   override="${ASTRO_DDS_ADDRESS:-}"
   [[ "$override" != "${__ASTRO_DDS_AUTO:-}" ]] || override=
   address="${override:-$(python3 -c '
@@ -138,10 +147,8 @@ EOF
     # The vessel hosts (the gateway and every reserved address) are static peers: discovery
     # reaches them by unicast even when the radio drops multicast. Multicast stays on, so
     # other hosts still find each other. A user-set ROS_STATIC_PEERS wins, as for the address.
-    peers="$( . "$(__astro_network_env)" 2>/dev/null
-      for host in "$GATEWAY_IP" ${STATIC_LEASES:-}; do
-        host="${host##*=}"; [[ -z "$host" || "$host" == "$address" ]] || printf '%s;' "$host"
-      done)"
+    peers=
+    for host in ${lan[2]:-}; do [[ "$host" == "$address" ]] || peers+="$host;"; done
     if [[ -z "${ROS_STATIC_PEERS:-}" || "$ROS_STATIC_PEERS" == "${__ASTRO_DDS_PEERS:-}" ]]; then
       export ROS_STATIC_PEERS="${peers%;}" __ASTRO_DDS_PEERS="${peers%;}"
     fi

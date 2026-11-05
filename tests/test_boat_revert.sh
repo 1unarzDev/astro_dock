@@ -149,4 +149,10 @@ for stage in boat gateway; do
     [[ ! -e $tmp/ran ]] || fail "$stage ran shell code from network.env"
     grep -q "$subnet" <<<"$out" || fail "$stage did not read LAN_SUBNET: $out"
 done
+# The dev shell's ros_net (dev.bashrc is BASH_ENV, so every container shell runs it) reads it the same way.
+sed -n -e '/^__astro_network_env() {/,/^}/p' -e '/^ros_net() {/,/^}/p' "$root/.devcontainer/dev.bashrc" >"$tmp/ros_net.sh"
+peers=$(env -i PATH="$PATH" HOME="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" ASTRO_DDS_ADDRESS=10.0.1.10 \
+    ASTRO_NETWORK_ENV="$tmp/profiles/a/network.env" bash -c 'ros2() { :; }; . "$1"; ros_net; echo "${ROS_STATIC_PEERS-}"' _ "$tmp/ros_net.sh")
+[[ ! -e $tmp/ran ]] || fail "ros_net ran shell code from network.env"
+[[ $peers == "$gw;10.0.1.11" ]] || fail "ros_net did not read the gateway and leases: '$peers'"
 echo "network.env not sourced ok"

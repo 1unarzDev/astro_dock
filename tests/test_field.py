@@ -164,6 +164,17 @@ class Station(unittest.TestCase):
         self.assertIn('dry run: nothing changed', run.stdout)
         self.assertEqual((calls, station), ('', ''))
 
+    def test_network_env_is_read_as_profile_py_reads_it(self):
+        """A trailing comment is no part of LAN_SUBNET (hw.sh env's reader, not a shell or quote strip)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp, 'network.env')
+            env.write_text((PROFILES / 'a/network.env').read_text().replace(
+                'LAN_SUBNET=10.0.1.0/24', 'LAN_SUBNET=10.0.1.0/24   # boat LAN'))
+            run, _, _ = self.take('--dry-run', ASTRO_VESSEL='a', ASTRO_NETWORK_ENV=str(env),
+                                  HW_IP_ADDR=ADDR, HW_IP_ROUTE=ROUTE)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('boat link enx9 (10.0.1.104 in 10.0.1.0/24)', run.stdout)
+
     @unittest.skipUnless(namespaces_work(), 'no unprivileged user/network namespaces')
     def test_dummy_station_in_namespaces(self):
         """A random hostname and random interface names: one with internet, one on vessel a's LAN. The
