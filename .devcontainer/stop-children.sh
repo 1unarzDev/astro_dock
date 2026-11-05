@@ -39,7 +39,7 @@ hang_up() {
 stop_children() {
     local pids deadline=$((SECONDS + wait_s))
     pids="$(children)"
-    [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null && hang_up $pids
+    [[ -n "$pids" ]] && { kill -TERM $pids 2>/dev/null; hang_up $pids; }
     while [[ -n "$(children)" && $SECONDS -lt $deadline ]]; do
         sleep 0.2
     done
