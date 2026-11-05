@@ -9,9 +9,9 @@ services:
     container_name: ${ASTRO_CONTAINER:-astro_dev}
     # Robot hosts run headless; the container comes back after reboots unless stopped by hand.
     restart: unless-stopped
-    hostname: ${ASTRO_HOSTNAME:-astro}
+    hostname: ${ASTRO_ALIAS:-astro}
     extra_hosts:
-      - ${ASTRO_HOSTNAME:-astro}:127.0.1.1
+      - ${ASTRO_ALIAS:-astro}:127.0.1.1
     privileged: true
     network_mode: host
     ipc: host
