@@ -24,7 +24,7 @@ gateway_host() {
     local role host
     role=$(cfg gateway)
     [[ -n $role ]] || return 0
-    host=$(python3 -I "$HW_ROOT/devices/profile.py" hosts "${ASTRO_REGISTRY:-}" "$role" | head -n1) || exit 1
+    host=$(python3 -I "$HW_ROOT/devices/profile.py" hosts "${ASTRO_REGISTRY:-}" "${ASTRO_NETWORK_ENV:-}" "$role" | cut -f1 | head -n1) || exit 1
     [[ -n $host ]] || die "No registry host has the role '$role' (jetson.yaml gateway; HW_GATEWAY= for direct)"
     printf '%s\n' "$host"
 }

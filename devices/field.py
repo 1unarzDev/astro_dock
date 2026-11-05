@@ -9,6 +9,7 @@ boat hosts of a registry and the build plan of a hot patch. Reads, never changes
   field.py packages REPO        stdin: repo-relative paths; out: NAME<TAB>DIR of the packages holding
                                 them, once each (hw.sh overlay)
 """
+import importlib.util
 import ipaddress
 import os
 from pathlib import Path
@@ -17,7 +18,10 @@ import shlex
 import subprocess
 import sys
 
-import yaml
+# The registry as profile.py reads it (by path: the stdlib has a `profile` module).
+_spec = importlib.util.spec_from_file_location('astro_profile', Path(__file__).with_name('profile.py'))
+profile = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(profile)
 
 # Live under colcon --symlink-install once they exist: edits need no build.
 LIVE = re.compile(r'\.(py|ya?ml)$|(^|/)launch/')
@@ -75,27 +79,15 @@ def boat_link(addr_lines, route_lines, subnet):
     return {'BOAT_IFACE': devs[0], 'BOAT_ADDR': str(found[0][1].ip), 'UPLINK_IFACE': up[0] if up else ''}
 
 
-def registry(path):
-    data = yaml.safe_load(Path(path).read_text()) or {}
-    return data.get('defaults') or {}, data.get('hosts') or {}, data.get('roles') or {}
-
-
 def boat_hosts(path):
     """The ssh hosts of a registry that are not operator stations, in registry order."""
-    defaults, hosts, _ = registry(path)
-    out = []
-    for name, spec in hosts.items():
-        spec = {**defaults, **(spec or {})}
-        if spec.get('ssh', True) and 'operator' not in (spec.get('roles') or []):
-            out.append(name)
-    return out
+    return [name for name, spec in profile.hosts(path, {}).items() if spec['ssh'] and 'operator' not in spec['roles']]
 
 
 def roles(path):
-    _, hosts, defined = registry(path)
-    out = list(defined)
-    for spec in hosts.values():
-        out += [str(r) for r in (spec or {}).get('roles') or [] if str(r) not in out]
+    out = [str(r) for r in profile.load(Path(path)).get('roles') or {}]
+    for spec in profile.hosts(path, {}).values():
+        out += [r for r in spec['roles'] if r not in out]
     return out
 
 
@@ -169,5 +161,5 @@ def main(command, *args):
 if __name__ == '__main__':
     try:
         main(*sys.argv[1:])
-    except (Error, OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
+    except (Error, profile.Error, OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
         sys.exit(str(error))
