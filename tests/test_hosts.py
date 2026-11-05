@@ -311,6 +311,13 @@ class Registry(unittest.TestCase):
     def test_each_host_merges_defaults_and_resolves_its_address(self):
         self.assertEqual(self.hosts(), self.TABLE)
 
+    def test_leases_print_well_formed_words_with_lower_case_macs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'network.env').write_text('STATIC_LEASES="AA:01=a=10.0.1.10 bb=10.0.1.11 cc=c=10.0.1.12"\n')
+            run = subprocess.run(['python3', '-I', str(ROOT / 'devices/profile.py'), 'leases',
+                                  str(Path(tmp, 'network.env'))], capture_output=True, text=True)
+        self.assertEqual(run.stdout.splitlines(), ['aa:01 a 10.0.1.10', 'cc c 10.0.1.12'])
+
     def test_a_role_selects_its_hosts(self):
         self.assertEqual(list(self.hosts('radio')), ['c'])
 
