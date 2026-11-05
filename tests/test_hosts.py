@@ -199,14 +199,27 @@ class Hosts(unittest.TestCase):
         self.assertNotIn('== r ', calls)
 
     def test_a_registry_without_defaults_takes_this_checkouts_container_and_home_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            registry = Path(tmp, 'devices.yaml')
-            registry.write_text('hosts:\n  a: {user: x}\n')
-            result, calls = self.run_script('apply', ASTRO_REGISTRY=str(registry), HOME=str(ROOT.parent))
+        """The profile's container.name, else docker-compose.yml's generic default; never a sed of the file."""
+        default = re.search(r'(?m)^    container_name: \$\{ASTRO_CONTAINER:-(\w+)\}$',
+                            (ROOT / '.devcontainer/docker-compose.yml').read_text()).group(1)
+        self.assertNotIn('docker-compose.yml', (ROOT / 'devices/hosts/fleet.sh').read_text().split('fleet_hosts() {')[1].split('\n}')[0])
+        for extra, container in (({}, 'fixture_dev'), ({'HW_CONTAINER_NAME': ''}, default)):
+            with self.subTest(container=container), tempfile.TemporaryDirectory() as tmp:
+                registry = Path(tmp, 'devices.yaml')
+                registry.write_text('hosts:\n  a: {user: x}\n')
+                result, calls = self.run_script('apply', ASTRO_REGISTRY=str(registry), HOME=str(ROOT.parent), **extra)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("== a docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{{{.Image}}}}' {0}) {0} bash -s".format(container), calls)
+                self.assertIn('dir=$HOME/%s;' % ROOT.name, calls)
+
+    def test_compose_prints_the_profiles_container_names_without_a_vessel(self):
+        result, _ = self.run_script('compose', ASTRO_VESSEL='', HW_HOSTNAME='nobody')
         self.assertEqual(result.returncode, 0, result.stderr)
-        container = re.search(r'(?m)^    container_name: (\S+)', (ROOT / '.devcontainer/docker-compose.yml').read_text())
-        self.assertIn("== a docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{{{.Image}}}}' {0}) {0} bash -s".format(container.group(1)), calls)
-        self.assertIn('dir=$HOME/%s;' % ROOT.name, calls)
+        self.assertEqual(result.stdout.split(), ['ASTRO_CONTAINER=fixture_dev', 'ASTRO_HOSTNAME=fixture',
+                                                 'ASTRO_CONFIG_DIR=fixture'])
+        result, _ = self.run_script('compose', HW_CONTAINER_NAME='', HW_CONTAINER_HOSTNAME='a b')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("container.hostname 'a b' is not a plain name", result.stderr)
 
     def test_the_vessel_registry_names_hosts_to_deploy(self):
         result, calls = self.run_script('plan')

@@ -7,8 +7,17 @@ if (($#)); then
     [[ $# == 2 && $1 == --config && -n $2 ]] || { echo 'Usage: prebuild.sh [--config FILE]' >&2; exit 2; }
     selection="$2"
 fi
+hw="$script_dir/../hw.sh"
+# The dev container's names (container, hostname alias, operator config directory): the profile's
+# (hw.sh hosts compose: hosts.yaml container:) into .env, which Compose reads for docker-compose.yml's
+# variables; without a profile, or one that names none, its generic defaults. Regenerated on each run.
+names="$("$hw" hosts compose 2>/dev/null)" || names=""
+{ echo '# Written by prebuild.sh from the profile (hw.sh hosts compose); rerun prebuild to change it.'
+  [[ -z "$names" ]] || printf '%s\n' "$names"; } > "$script_dir/.env"
+config_dir="$(sed -n 's/^ASTRO_CONFIG_DIR=//p' <<<"$names")"
+config_dir="${ASTRO_CONFIG_DIR:-${config_dir:-astro}}"   # as docker-compose.yml: the environment wins
 # Host operator config dir, bind-mounted by docker-compose.yml (Docker would create it root-owned).
-mkdir -p "${HOME}/.config/mhseals" "${HOME}/worktrees" "${HOME}/.cache/wt"
+mkdir -p "${HOME}/.config/${config_dir}" "${HOME}/worktrees" "${HOME}/.cache/wt"
 os_type=linux
 
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -49,8 +58,8 @@ host_name="${host_name%%.*}"
     echo "Invalid host name: $host_name" >&2; exit 1;
 }
 # Inject into the generated adapter only, for every service it defines, so each
-# container is named after its device. Keep the base roboboat alias for existing
-# callers; Docker adds the actual hostname to /etc/hosts itself.
+# container is named after its device. docker-compose.yml keeps its base alias
+# (ASTRO_HOSTNAME); Docker adds the actual hostname to /etc/hosts itself.
 sed -i.bak -E "/^  (dev):$/a\\
     hostname: ${host_name}\\
     extra_hosts: [\"${host_name}:127.0.1.1\"]
@@ -87,7 +96,6 @@ fi
 # off its LAN); else ROS 2's default 0 (docker-compose.yml, run_env.py), which a stale
 # adapter, a host without a vessel and a checkout without profiles keep. ASTRO_ROS_DOMAIN_ID and
 # ASTRO_VESSEL (prebuild's or Compose's environment) override them. No PyYAML here: macOS has none.
-hw="$script_dir/../hw.sh"
 domain_fix="export ASTRO_ROS_DOMAIN_ID=N where the dev container opens (prebuild and Compose read it), or rerun prebuild with ASTRO_VESSEL=NAME (hw.sh --vessel)"
 domain_default="ROS domain ${ASTRO_ROS_DOMAIN_ID:-0 (the ROS 2 default)}"
 domain=""
@@ -158,7 +166,7 @@ if [[ -n "$domain$vessel$astro_host" ]]; then
             }
         }' "$work_file" > "$work_file.bak" && mv "$work_file.bak" "$work_file"
 fi
-operator_file="${HOME}/.config/mhseals/run.yaml"
+operator_file="${HOME}/.config/${config_dir}/run.yaml"
 if [[ "$os_type" == linux && ( -n "$selection" || -f "$operator_file" ) ]]; then
     files=(--file "$script_dir/../config/run.yaml")
     [[ ! -f "$work_file.domain" ]] || files+=(--file "$work_file.domain")
@@ -176,12 +184,13 @@ echo "Selected ${os_type} adapter: $override_file"
 "$script_dir/dev-image.sh" --pull >/dev/null || true
 # Warn when the running dev container is not built on the image its tag now names (after a
 # pull). Dev Containers adds a UID layer on top, so the tag's layers must prefix the container's.
-running="$(docker inspect --format '{{.Image}}' roboboat_dev 2>/dev/null || true)"
+compose=(docker compose -f "$script_dir/docker-compose.yml" -f "$script_dir/docker-compose.override.yml")
+container="$("${compose[@]}" config 2>/dev/null | sed -n 's/^    container_name: //p' | head -n1 || true)"
+running="$([[ -z "$container" ]] || docker inspect --format '{{.Image}}' "$container" 2>/dev/null || true)"
 if [[ -n "$running" ]]; then
-    expected="$(docker compose -f "$script_dir/docker-compose.yml" -f "$script_dir/docker-compose.override.yml" \
-        config --images dev 2>/dev/null || true)"
+    expected="$("${compose[@]}" config --images dev 2>/dev/null || true)"
     layers() { docker image inspect --format '{{json .RootFS.Layers}}' "$1" 2>/dev/null || true; }
     tag_layers="$(layers "$expected")"
     [[ -z "$tag_layers" || "$(layers "$running")" == "${tag_layers%]}"* ]] \
-        || echo "WARNING: roboboat_dev is not running the current $expected; recreate it with compose up -d dev." >&2
+        || echo "WARNING: $container is not running the current $expected; recreate it with compose up -d dev." >&2
 fi

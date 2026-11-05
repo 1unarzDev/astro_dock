@@ -207,8 +207,8 @@ case ${1:-} in
 esac
 [[ $1 =~ ^[a-z0-9_]+$ ]] || die "Not a device kind: $1"
 HW_KIND=$1
-# Without a vessel only the fleet-wide `hosts repos` (the repositories per role) runs.
-[[ "$HW_KIND ${2:-}" == "hosts repos" ]] || need_scope
+# Without a vessel only the fleet-wide `hosts repos` (the repositories per role) and `hosts compose` run.
+[[ "$HW_KIND ${2:-}" =~ ^hosts\ (repos|compose)$ ]] || need_scope
 hw_load_kind "$HW_KIND"
 hw_driver "$(cfg driver)"
 verb=${2:-}

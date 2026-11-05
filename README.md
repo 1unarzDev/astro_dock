@@ -34,7 +34,7 @@ Images supply the platform dependencies; the mounted workspace supplies your app
 
 [`docker-compose.yml`](.devcontainer/docker-compose.yml) defines the shared services. `prebuild.sh` copies a host adapter to the ignored `docker-compose.override.yml`, which Dev Containers merges after the base file. Adapters add display sockets, devices, NVIDIA runtime settings or immutable-host mounts; the probe also preserves the host hostname, maps device group IDs, and on Jetson requires JetPack 6. Rerunning it regenerates the override, so keep persistent changes in an adapter or an additional override.
 
-`~/.config/mhseals` on the host (created by `prebuild.sh`) is bind-mounted at `/home/roboboat/.config/mhseals`, so operator config survives container rebuilds.
+`~/.config/$ASTRO_CONFIG_DIR` on the host (created by `prebuild.sh`) is bind-mounted at `/home/roboboat/.config/$ASTRO_CONFIG_DIR`, so operator config survives container rebuilds. The container's names are generic (`astro_dev`, hostname alias `astro`, config directory `astro`) unless the profile's `hosts.yaml` sets `container: {name, hostname, config_dir}`: `prebuild.sh` writes them (`./hw.sh hosts compose`) to `.devcontainer/.env` as `ASTRO_CONTAINER`, `ASTRO_HOSTNAME` and `ASTRO_CONFIG_DIR`, which Compose reads; the same variables in the environment win.
 
 Extend the environment at the layer that owns the change: add application packages under `src/`, reusable dependencies to [`packages.txt`](.devcontainer/packages.txt) (ROS package names such as `nav2_bringup`, or apt package names; no distro prefix) or [`requirements.txt`](.devcontainer/requirements.txt) (pip), or Jetson-only packages to [`jetson-packages.txt`](.devcontainer/jetson-packages.txt), and host mounts or services to a Compose override. Add another `-f` file after the base and host adapter for project-specific settings; later files override earlier values according to Compose's merge rules. For Dev Containers, include that file in `devcontainer.json`'s `dockerComposeFile` list. `ASTRO_IMAGE` selects a custom runtime image without changing the adapter.
 
@@ -271,15 +271,15 @@ Runtime tags select the current validated image, with `-prev` and `-old` as roll
 ./hw.sh jetson apply user@your-jp6-host
 ```
 
-The helper takes the latest successful `main` build's candidate (artifacts expire after 30 days; an optional second argument picks a run), validates it on the Jetson over SSH (ROS, non-root CUDA, live ZED frames; isolated domain 223; stop any camera publisher first; reuses the dev container's `zed_resources` and `zed_settings` volumes, so start `roboboat_dev` once beforehand), then waits for [hosted CI](.github/workflows/promote-jetson.yml) to rotate the tags. `jetson.yaml` sets the family and the SSH gateway (`HW_GATEWAY=` for direct); the host must run L4T R36. `plan` only resolves the candidate, `verify` checks the host's tag, `rollback HOST RUN_ID` promotes an earlier build. Manual diagnostic: `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST`.
+The helper takes the latest successful `main` build's candidate (artifacts expire after 30 days; an optional second argument picks a run), validates it on the Jetson over SSH (ROS, non-root CUDA, live ZED frames; isolated domain 223; stop any camera publisher first; reuses the dev container's `zed_resources` and `zed_settings` volumes, so start the dev container once beforehand), then waits for [hosted CI](.github/workflows/promote-jetson.yml) to rotate the tags. `jetson.yaml` sets the family and the SSH gateway (`HW_GATEWAY=` for direct); the host must run L4T R36. `plan` only resolves the candidate, `verify` checks the host's tag, `rollback HOST RUN_ID` promotes an earlier build. Manual diagnostic: `.devcontainer/boat-validate.sh lunarzdev/astro@sha256:DIGEST`.
 
-For standalone deployment on a Jetson, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 6 adapter (warning when `roboboat_dev` runs an image older than its tag), and Compose restarts `roboboat_dev` after reboots unless it was stopped:
+For standalone deployment on a Jetson, run the same Compose service VS Code uses from the repository root. `prebuild.sh` selects the JetPack 6 adapter (warning when the dev container runs an image older than its tag), and Compose restarts it after reboots unless it was stopped:
 
 ```bash
 .devcontainer/prebuild.sh
 docker compose -p astro_dock_devcontainer -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml up -d --pull always dev
-.devcontainer/boat-validate.sh --container roboboat_dev
-docker exec -it roboboat_dev bash
+.devcontainer/boat-validate.sh --container astro_dev   # or the ASTRO_CONTAINER of .devcontainer/.env
+docker exec -it astro_dev bash
 ```
 
 Rerun `up` to update; for offline deployment, `docker save` / `docker load` the ARM64 image and drop `--pull always`.
@@ -290,7 +290,7 @@ Keep changes scoped, explain their purpose and validation in the pull request, a
 
 ### Static run YAML (off-boat)
 
-`config/run.yaml` holds defaults. `prebuild.sh` layers the operator `~/.config/mhseals/run.yaml` and then `--config /absolute/run.yaml` (or `ASTRO_RUN_CONFIG`) over it, and `python3 -I .devcontainer/run_env.py` projects the result into the Compose override's `dev` environment. Linux/Jazzy only. Example:
+`config/run.yaml` holds defaults. `prebuild.sh` layers the operator `~/.config/$ASTRO_CONFIG_DIR/run.yaml` and then `--config /absolute/run.yaml` (or `ASTRO_RUN_CONFIG`) over it, and `python3 -I .devcontainer/run_env.py` projects the result into the Compose override's `dev` environment. Linux/Jazzy only. Example:
 
 ```yaml
 ros:
@@ -303,6 +303,6 @@ transport:
 ```
 
 - Strict loading: only these four typed keys; unknown or duplicate keys, anchors, aliases and merge keys refuse with file and line.
-- Environment overrides: `ASTRO_ROS_DOMAIN_ID` or `ROS_DOMAIN_ID` (not both), `ROS_AUTOMATIC_DISCOVERY_RANGE`, `MHSEALS_DATA`. Explicit transport controls (`RMW_IMPLEMENTATION`, DDS profiles, `ASTRO_DDS_*`) refuse.
+- Environment overrides: `ASTRO_ROS_DOMAIN_ID` or `ROS_DOMAIN_ID` (not both), `ROS_AUTOMATIC_DISCOVERY_RANGE`, `ASTRO_DATA` (the data root; `data.root` is relative to the workspace unless absolute). Explicit transport controls (`RMW_IMPLEMENTATION`, DDS profiles, `ASTRO_DDS_*`) refuse.
 - `data.root` must sit under the workspace bind. Quote `"OFF"`.
 - Changes take effect after prebuild and container recreation. The DDS address and subnet stay in the vessel's network env (`./hw.sh env`) and `config/fastdds.xml`.

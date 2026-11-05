@@ -10,6 +10,7 @@ sources:
   gamma: {url: https://example.invalid/gamma.git}
   delta: {url: https://example.invalid/delta.git}
 compose_project: fixture_project
+container: {name: fixture_dev, hostname: fixture, config_dir: fixture}   # the dev container's names
 operator_heartbeat: ros2 run gamma beacon
 operator_key: fixture/ssh
 station_file: fixture/station.yaml
