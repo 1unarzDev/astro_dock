@@ -275,8 +275,7 @@ station_write_local() {
 # The dev container of this computer gets the operator key unless it already sees it (a mount).
 station_container_key() {
     local c dir f
-    c=$($DOCKER ps -q --filter "label=com.docker.compose.project=$(cfg compose_project)" \
-        --filter label=com.docker.compose.service=dev 2>/dev/null | head -1)
+    c=$(hw_dev_container "$HW_ROOT")
     [[ -n $c ]] || { log "WARN no dev container running: rerun station take once it is up for its key"; return 0; }
     dir="\${XDG_CONFIG_HOME:-\$HOME/.config}/$(cfg operator_key)"
     if [[ $($DOCKER exec "$c" sh -c "cat \"$dir/id_ed25519.pub\"" 2>/dev/null) == "$(cat -- "$KEY.pub" 2>/dev/null)" ]]; then
@@ -300,8 +299,7 @@ heartbeat_unit() {
     domain=$(net_value ROS_DOMAIN_ID)
     printf '[Unit]\nDescription=Operator heartbeat of %s for %s (hw.sh station take)\n\n' "${ASTRO_HOST:-$ME}" "$ASTRO_VESSEL"
     printf '[Service]\nEnvironment="ASTRO_HEARTBEAT=%s"\n' "$command"
-    printf 'Environment=ASTRO_HOST=%s ASTRO_COMPOSE_PROJECT=%s%s\n' \
-        "${ASTRO_HOST:-$ME}" "$(cfg compose_project)" "${domain:+ ROS_DOMAIN_ID=$domain}"
+    printf 'Environment=ASTRO_HOST=%s%s\n' "${ASTRO_HOST:-$ME}" "${domain:+ ROS_DOMAIN_ID=$domain}"
     printf 'ExecStart=%s run\nExecStop=%s stop\nRestart=always\nRestartSec=3\n\n' \
         "$HW_ROOT/devices/heartbeat.sh" "$HW_ROOT/devices/heartbeat.sh"
     printf '[Install]\nWantedBy=default.target\n'

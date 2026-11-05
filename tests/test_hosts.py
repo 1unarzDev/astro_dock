@@ -80,9 +80,23 @@ class Hosts(unittest.TestCase):
         result, calls = self.run_script('apply', '--image', 'repo/img@sha256:abc', 'a-pc')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(calls.index('docker commit dev astro-rollback:'),
-                        calls.index('ASTRO_IMAGE=repo/img@sha256:abc docker compose -p fixture_project'))
+                        calls.index('ASTRO_IMAGE=repo/img@sha256:abc docker compose -p'))
         self.assertIn('.devcontainer/prebuild.sh', calls)
         self.assertIn('hosts rollback astro-rollback:', calls)
+        # Compose recreates it in its own project (its label), so its volumes stay; without one, VS Code's.
+        lines = calls.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith('project=$(docker inspect'))
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'docker').write_text('#!/bin/sh\n'
+                                           'if [ "$1" = inspect ]; then [ -z "$LABEL" ] || echo "$LABEL"; else echo "docker $*"; fi\n')
+            Path(tmp, 'docker').chmod(0o755)
+            for label, project in (('kept_project', 'kept_project'), ('', Path(tmp).name + '_devcontainer')):
+                with self.subTest(label=label):
+                    up = subprocess.run(['bash', '-ec', '\n'.join(lines[start:start + 3])], cwd=tmp, text=True,
+                                        capture_output=True, env={**os.environ, 'PATH': f'{tmp}:/usr/bin:/bin',
+                                                                  'LABEL': label})
+                    self.assertEqual(up.returncode, 0, up.stderr)
+                    self.assertTrue(up.stdout.startswith(f'docker compose -p {project} -f '), up.stdout)
 
     def test_rollback_recreates_and_builds_without_fast_forward(self):
         result, calls = self.run_script('rollback', 'astro-rollback:1', 'a-pc')

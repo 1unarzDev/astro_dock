@@ -34,7 +34,7 @@ exec bash -c "$*"
 '''
 FAKE_DOCKER = '''#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_SSH_LOG"
-case $1 in ps) echo c0ffee ;; exec) cat >/dev/null ;; esac
+case $1 in ps) [[ $* != *"name=^$ASTRO_CONTAINER\$"* ]] || echo c0ffee ;; exec) cat >/dev/null ;; esac
 '''
 FAKE_SYSTEMCTL = '''#!/usr/bin/env bash
 echo "systemctl $*" >> "$FAKE_SSH_LOG"
@@ -106,7 +106,7 @@ class Station(unittest.TestCase):
             log.touch()
             Path(tmp, 'modules', 'k1').mkdir(parents=True)
             env = {**os.environ, 'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES),
-                   'ASTRO_SECRETS': '/nonexistent', 'HW_KERNEL_RELEASE': 'k1',
+                   'ASTRO_SECRETS': '/nonexistent', 'HW_KERNEL_RELEASE': 'k1', 'ASTRO_CONTAINER': 'fixture_dev',
                    'HW_MODULES_ROOT': str(Path(tmp, 'modules')), 'FAKE_SSH_LOG': str(log),
                    'HW_SSH': executable(Path(tmp, 'ssh'), '#!/usr/bin/env bash\n{ echo "== $*"; cat; } >> "$FAKE_SSH_LOG"\n'),
                    'HW_SSH_COPY_ID': 'true', 'HW_DOCKER': executable(Path(tmp, 'docker'), FAKE_DOCKER),
@@ -145,11 +145,11 @@ class Station(unittest.TestCase):
         run, calls, _ = self.take(ASTRO_VESSEL='a', HW_IP_ADDR=ADDR, HW_IP_ROUTE=ROUTE, after=(
             ['sh', '-c', f'cat "$XDG_CONFIG_HOME/systemd/user/{unit}"'], [hw, 'whoami'],
             [hw, 'station', 'release'],
-            ['env', 'ASTRO_HOST=st1', 'ROS_DOMAIN_ID=7', 'ASTRO_COMPOSE_PROJECT=p', 'ASTRO_HEARTBEAT=ros2 run gamma beacon',
+            ['env', 'ASTRO_HOST=st1', 'ROS_DOMAIN_ID=7', 'ASTRO_HEARTBEAT=ros2 run gamma beacon',
              str(ROOT / 'devices/heartbeat.sh'), 'run']))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('Environment="ASTRO_HEARTBEAT=ros2 run gamma beacon"\n', run.stdout)   # hosts.yaml's
-        self.assertRegex(run.stdout, r'Environment=ASTRO_HOST=\S+ ASTRO_COMPOSE_PROJECT=fixture_project ROS_DOMAIN_ID=7\n')
+        self.assertRegex(run.stdout, r'Environment=ASTRO_HOST=\S+ ROS_DOMAIN_ID=7\n')
         self.assertIn(f'ExecStart={ROOT}/devices/heartbeat.sh run\nExecStop={ROOT}/devices/heartbeat.sh stop', run.stdout)
         self.assertIn(f'systemctl --user enable {unit}\nsystemctl --user restart {unit}', calls)
         self.assertIn(f'heartbeat active ({unit}', run.stdout)                       # whoami

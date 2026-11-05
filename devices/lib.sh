@@ -19,6 +19,15 @@ hw_load_env() {
     done <"$1"
 }
 
+# hw_dev_container ROOT: the ID of the running dev container of the checkout ROOT (none when it is down), by the
+# name docker-compose.yml gives it, as Compose resolves it: ASTRO_CONTAINER, else ROOT/.devcontainer/.env's
+# (prebuild.sh writes the hosts profile's container.name there), else astro_dev.
+hw_dev_container() {
+    local name=${ASTRO_CONTAINER:-}
+    [[ -n $name ]] || name=$(sed -n 's/^ASTRO_CONTAINER=//p' "$1/.devcontainer/.env" 2>/dev/null | tail -n1)
+    ${HW_DOCKER:-docker} ps -q --filter "name=^${name:-astro_dev}\$" 2>/dev/null | head -n1
+}
+
 # hw_secrets: the secrets file (ASTRO_SECRETS, default ~/.config/astro/secrets.env), refused unless
 # private (mode 600 or 400) and outside every git work tree (a symlink is followed: one commit or
 # `git add -f` away from a remote).
