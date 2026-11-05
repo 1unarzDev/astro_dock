@@ -29,7 +29,9 @@ env key of the same name wins.
                                   (default: the profile's own network env; else stays as written), so no
                                   secret shows
   profile.py value ENV REGISTRY KEY  one value of ENV or a role key (fails when neither has KEY)
-  profile.py roles REGISTRY HOST  the registry roles of HOST, one per line
+  profile.py leases ENV           ENV's STATIC_LEASES (see leases()): MAC HOST ADDRESS per line, MAC lower case
+  profile.py roles REGISTRY [HOST]  the registry roles of HOST, else every role it names (its roles: and
+                                  the hosts'), one per line
   profile.py hosts REGISTRY ENV [ROLE]
                                   the registry hosts (those with ROLE), one tab-separated line each:
                                   name user address ssh(yes|no) container workspace via roles; '-' for
@@ -605,8 +607,13 @@ def main(command, *args):
     elif command == 'leases':
         print('\n'.join(' '.join(lease) for lease in leases(network(args[0]))))
     elif command == 'roles':
-        registry, host = args
-        print('\n'.join(hosts(registry, {}).get(host, {}).get('roles', [])))
+        registry, *host = args
+        listed = hosts(registry, {})
+        if host:
+            print('\n'.join(listed.get(host[0], {}).get('roles', [])))
+        else:
+            out = [str(r) for r in load(Path(registry)).get('roles') or {}]
+            print('\n'.join(dict.fromkeys(out + [r for spec in listed.values() for r in spec['roles']])))
     elif command == 'hosts':
         registry, env_path, *role = args
         for name, spec in hosts(registry, network(env_path)).items():
