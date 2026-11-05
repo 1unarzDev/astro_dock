@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# hw.sh build --ws DIR [--container NAME] [--dry-run] [-- COLCON_ARGS...]: the workspace's one colcon build.
-#   Builds the workspace DIR (a path inside the container) in container NAME (default: in place, e.g. a dev
-#   container shell). The same steps as hosts apply's build: the workspace's colcon_defaults.yaml (copied into
-#   DIR when DIR has none, e.g. a preview snapshot), its environment (DIR/.devcontainer/dev.bashrc, else
-#   /opt/ros/$ROS_DISTRO alone), stale symlink-install links pruned, then colcon build --symlink-install.
+# hw.sh build [--ws DIR] [--container NAME] [--dry-run] [-- COLCON_ARGS...]: the workspace's one colcon build.
+#   Builds the workspace DIR (a path inside the container; default with --container: its $ROS_WS) in
+#   container NAME (default: in place, e.g. a dev container shell). The same steps as hosts apply's and
+#   hot's build: the workspace's colcon_defaults.yaml (copied into DIR when DIR has none, e.g. a preview
+#   snapshot), its environment (DIR/.devcontainer/dev.bashrc, else /opt/ros/$ROS_DISTRO alone), stale
+#   symlink-install links pruned, then colcon build --symlink-install.
 #   From clean when the container's image or the colcon defaults changed since DIR's last build (a pulled
 #   image leaves CMake caches on its old /opt/ros libraries), or when build/ depends on an underlay file
 #   (AMENT_PREFIX_PATH outside DIR) that is gone; ASTRO_BUILD_CLEAN_UNSTAMPED=1 also cleans a
 #   build/ that no stamp vouches for (a throwaway workspace; never the dev or boat workspaces).
-# Sourced (hosts apply), it only defines hw_build_body: the script that runs in the container.
+# Sourced (hosts apply, hot), it only defines hw_build_body: the script that runs in the container.
 BUILD_HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 # hw_build_body: the build, for `bash -s -- COLCON_ARGS` in the container. Reads ASTRO_BUILD_WS (else $ROS_WS),
@@ -74,19 +75,19 @@ while (($#)); do
         --ws) [[ -n ${2:-} ]] || die '--ws requires a directory'; ws=$2; shift 2 ;;
         --container) [[ -n ${2:-} ]] || die '--container requires a name'; container=$2; shift 2 ;;
         --dry-run) dry=true; shift ;;
-        -h|--help) sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,11s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         --) shift; break ;;
-        *) die "unknown argument $1 (hw.sh build --ws DIR [--container NAME] [-- COLCON_ARGS])" ;;
+        *) die "unknown argument $1 (hw.sh build [--ws DIR] [--container NAME] [-- COLCON_ARGS])" ;;
     esac
 done
-[[ -n $ws ]] || die 'hw.sh build --ws DIR [--container NAME] [-- COLCON_ARGS]'
+[[ -n $ws || -n $container ]] || die 'hw.sh build --ws DIR | --container NAME [-- COLCON_ARGS]'
 defaults=$(cat "$BUILD_HERE/../colcon_defaults.yaml")
-envs=(-e "ASTRO_BUILD_WS=$ws" -e "ASTRO_BUILD_DEFAULTS=$defaults"
+envs=(${ws:+-e "ASTRO_BUILD_WS=$ws"} -e "ASTRO_BUILD_DEFAULTS=$defaults"
       -e "ASTRO_BUILD_CLEAN_UNSTAMPED=${ASTRO_BUILD_CLEAN_UNSTAMPED:-0}" -e "ASTRO_BUILD_TAIL=${ASTRO_BUILD_TAIL:-20}")
 if [[ -n $container ]]; then
     image=$(docker inspect --format '{{.Image}}' "$container" 2>/dev/null) \
         || die "no container $container (start it first)"
-    $dry && { echo "would build $ws in $container (image $image): colcon build --symlink-install $*"; exit 0; }
+    $dry && { echo "would build ${ws:-\$ROS_WS} in $container (image $image): colcon build --symlink-install $*"; exit 0; }
     hw_build_body | docker exec -i "${envs[@]}" -e "ASTRO_BUILD_IMAGE=$image" "$container" bash -s -- "$@"
 else
     $dry && { echo "would build $ws here: colcon build --symlink-install $*"; exit 0; }

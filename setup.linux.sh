@@ -382,10 +382,10 @@ stage_compose() {
 }
 
 # This computer's repositories (./hw.sh hosts repos: repos.all and its roles'): clone the missing ones
-# under src/, keep them out of git status, then build them here when colcon is on PATH, else in the
-# dev container. The profile set names them (hw.sh checks out a configured one on first use).
+# under src/, keep them out of git status, then build them (hw.sh build) here when colcon is on PATH, else
+# in the dev container. The profile set names them (hw.sh checks out a configured one on first use).
 stage_repos() {
-    local list name url branch exclude names=() build container
+    local list name url branch exclude names=() build container pkgs
     heading "Workspace repositories"
     needs_profile repos || return 0
     list="$("$SCRIPT_DIR/hw.sh" hosts repos "${ROLES[@]}")" || { SKIPPED+=(repos); return; }
@@ -408,16 +408,19 @@ stage_repos() {
         $DRY_RUN || echo "/src/$name/" >>"$exclude"
     done <<<"$list"
     ((${#names[@]})) || { SKIPPED+=(repos-build); return; }
-    build="colcon build --symlink-install --packages-up-to \$(colcon list --names-only --base-paths ${names[*]})"
+    # Their packages (package.xml names) and what they depend on, in the workspace's one build (hw.sh build).
+    pkgs=($(cd "$SCRIPT_DIR" && find "${names[@]}" -name package.xml -not -path '*/build/*' -not -path '*/install/*' \
+        -exec grep -m1 -ohP '<name>\s*\K[^<\s]+' {} + 2>/dev/null | sort -u || true))
+    build=()
     if command -v colcon >/dev/null 2>&1; then
-        (cd "$SCRIPT_DIR" && run bash -c "$build")
+        build=(--ws "$SCRIPT_DIR")
     elif container="$(dev_container)" && [[ -n "$container" ]]; then
-        # BASH_ENV gives docker exec's bash the ROS environment.
-        run docker exec "$container" bash -c "cd \"\$ROS_WS\" && $build"
+        build=(--container "$container")
     else
-        echo "Start the dev container (the Compose dev service), then build inside it: $build" >&2
+        echo "Start the dev container (the Compose dev service), then build: ./hw.sh build --container NAME -- --packages-up-to ${pkgs[*]}" >&2
         SKIPPED+=(repos-build)
     fi
+    if ((${#build[@]} && ${#pkgs[@]})); then run "$SCRIPT_DIR/hw.sh" build "${build[@]}" -- --packages-up-to "${pkgs[@]}"; fi
     COMPLETED+=(repos)
 }
 

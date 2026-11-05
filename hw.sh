@@ -41,7 +41,7 @@ HW_COMMANDS=(
     "station release|stop this computer's operator heartbeat service"
     "overlay PATH [--base REF] [--all] [--dry-run]|colcon-build a worktree's packages touched against REF (origin/main) as an overlay on the workspace install, in the dev container; prints the source line"
     "pyenv PATH|the PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon"
-    "build --ws DIR [--container NAME] [-- ARGS]|the workspace's colcon build of DIR (in NAME), from clean when its image or colcon defaults changed"
+    "build [--ws DIR] [--container NAME] [-- ARGS]|the workspace's colcon build of DIR (in NAME, default its ROS_WS), from clean when its image or colcon defaults changed"
     "image [--pull] [--local]|the dev image the Compose config names (--pull: when the registry has a newer one; --local: the local image built on it)"
 )
 

@@ -223,8 +223,10 @@ class Hot(unittest.TestCase):
         self.assertIn('OK a-pc: no build', run.stdout)
         cam = self.hosts / 'crew@10.0.1.11/astro_dock/src/alpha'          # not there before: created
         self.assertEqual((cam / 'pkg_dir/pkg_a/node.py').read_text(), 'SPEED = 2\n')
-        self.assertIn('colcon build --symlink-install --packages-select pkg_a', calls)
-        self.assertEqual(calls.count('-- docker exec -i dev bash -s'), 1)   # a-cam only
+        # a-cam only, through hosts apply's one build body (devices/build.sh), image stamp included
+        self.assertEqual(calls.count("-- docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{.Image}}' dev)"
+                                     " dev bash -s -- --packages-select pkg_a"), 1)
+        self.assertIn('pruned $(find build install -xtype l', calls)
         # The station's checkout is as it was: same HEAD, the edit still uncommitted, no hot ref left.
         self.assertEqual(git(self.repo, 'rev-parse', 'HEAD'), head)
         self.assertEqual(git(self.repo, 'diff', '--name-only'), 'pkg_dir/pkg_a/node.py')
