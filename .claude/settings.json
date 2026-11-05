@@ -7,6 +7,13 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "timeout": 5, "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.agents/hook.py\" claude"}
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",

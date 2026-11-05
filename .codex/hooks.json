@@ -8,6 +8,13 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "timeout": 5, "command": "d=\"$PWD\"; while [ ! -f \"$d/.agents/hook.py\" ] && [ \"$d\" != / ]; do d=$(dirname \"$d\"); done; [ -f \"$d/.agents/hook.py\" ] && exec python3 -I \"$d/.agents/hook.py\" codex; exit 0"}
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "^Bash$",
