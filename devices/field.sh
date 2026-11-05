@@ -34,7 +34,7 @@ field_hosts() {
     local name container workspace target jump
     declare -A to via
     while read -r name target jump; do to[$name]=$target via[$name]=$jump; done \
-        < <(key_hosts "${XDG_CONFIG_HOME:-$HOME/.config}/$(cfg operator_registry)")
+        < <(key_hosts)
     local boat=" $(field_py boat-hosts "$ASTRO_REGISTRY" | tr '\n' ' ') "
     while read -r name container workspace; do
         [[ $boat == *" $name "* && $name != "$ME" && $name != "${ASTRO_HOST:-}" ]] || continue
@@ -210,14 +210,6 @@ station_kernel() {
     die "Reboot needed: the running kernel $release has no modules in $root (installed: $(ls -- "$root" 2>/dev/null | tr '\n' ' ')); networking roles fail until this computer reboots"
 }
 
-# The station file, under XDG_CONFIG_HOME on each host: the hosts profile's station_file, else
-# station.yaml beside its operator_registry.
-station_file() {
-    local file
-    file=$(cfg station_file)
-    printf '%s\n' "${file:-$(dirname -- "$(cfg operator_registry)")/station.yaml}"
-}
-
 station_take() {
     local dry=false subnet='' link file roles=(operator gateway) boat rc=0 name container workspace target jump body heartbeat
     case ${1:-} in --dry-run) dry=true ;; '') ;; *) die "Usage: $HW_PROGRAM station take [--dry-run]" ;; esac
@@ -229,7 +221,8 @@ station_take() {
     link=$(field_py link "$subnet") || exit 1
     eval "$link"
     field_py roles "$ASTRO_REGISTRY" | grep -qx rtk_base && roles+=(rtk_base)
-    file=$(station_file)
+    file=$(cfg station_file)          # under XDG_CONFIG_HOME on each host
+    [[ -n $file ]] || die "The hosts profile names no station_file (a path under ~/.config)"
     boat=$(field_hosts)
     body=$(printf '# hw.sh station take: this vessel'"'"'s operator station.\noperator: %s\nsince: %s\nroles: [%s]\n' \
         "$ME" "$(date -Iseconds)" "$(IFS=,; echo "${roles[*]}" | sed 's/,/, /g')")
