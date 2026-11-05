@@ -57,21 +57,27 @@ class Hosts(unittest.TestCase):
             return result, log.read_text()
 
     def test_deploy_fast_forwards_configured_repos_and_builds(self):
-        result, calls = self.run_script('apply', 'host-a', HW_REPOS_ALL='repo_x')
+        result, calls = self.run_script('apply', 'a-pc', HW_REPOS_ALL='repo_x')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('== host-a bash -s', calls)
+        self.assertIn('== a-pc bash -s', calls)
         self.assertIn('for repo in astro_dock repo_x', calls)
         self.assertIn('is not a git checkout: the hosts keep their profiles/', result.stderr)
         self.assertNotIn('profiles', calls)                                 # the fixture root: no profiles step
         self.assertIn('dir=$HOME/astro_dock;', calls)                       # the registry's workspace
         self.assertIn('git merge --ff-only -q origin/main', calls)
-        self.assertIn("== host-a docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{.Image}}' dev) dev bash -s", calls)
+        self.assertIn("== a-pc docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{.Image}}' dev) dev bash -s", calls)
         self.assertIn('find build install -xtype l -delete', calls)
         self.assertIn('colcon build --symlink-install', calls)
         self.assertNotIn('docker compose', calls)
 
+    def test_a_name_outside_the_registry_is_never_contacted(self):
+        result, calls = self.run_script('apply', 'host-x')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('FAIL host-x: not a registry host', result.stdout + result.stderr)
+        self.assertEqual(calls, '')
+
     def test_deploy_image_commits_a_rollback_before_compose(self):
-        result, calls = self.run_script('apply', '--image', 'repo/img@sha256:abc', 'host-a')
+        result, calls = self.run_script('apply', '--image', 'repo/img@sha256:abc', 'a-pc')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(calls.index('docker commit dev astro-rollback:'),
                         calls.index('ASTRO_IMAGE=repo/img@sha256:abc docker compose -p fixture_project'))
@@ -79,7 +85,7 @@ class Hosts(unittest.TestCase):
         self.assertIn('hosts rollback astro-rollback:', calls)
 
     def test_rollback_recreates_and_builds_without_fast_forward(self):
-        result, calls = self.run_script('rollback', 'astro-rollback:1', 'host-a')
+        result, calls = self.run_script('rollback', 'astro-rollback:1', 'a-pc')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('ASTRO_IMAGE=astro-rollback:1 docker compose', calls)
         self.assertIn('colcon build', calls)
@@ -120,20 +126,20 @@ class Hosts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp, 'fleet')
             pin = fleet_repo(root)
-            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            result, calls = self.run_script('apply', 'a-pc', ASTRO_PROFILES=str(root))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn('WARN', result.stderr)
             self.assertIn("git clone -q --no-checkout 'https://example.invalid/fleet.git' profiles", calls)
             self.assertIn('checkout -q --detach %s' % pin, calls)
-            result, calls = self.run_script('plan', 'host-a', ASTRO_PROFILES=str(root))
+            result, calls = self.run_script('plan', 'a-pc', ASTRO_PROFILES=str(root))
             self.assertIn('check out profiles %s' % pin[:7], result.stdout)
             self.assertIn('if [ "$p" = %s ]' % pin, calls)
             Path(root, 'a/profile.yaml').write_text(Path(root, 'a/profile.yaml').read_text() + '# local\n')
-            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            result, calls = self.run_script('apply', 'a-pc', ASTRO_PROFILES=str(root))
             self.assertIn('has local changes; the hosts get its commit %s without them' % pin[:7], result.stderr)
             self.assertIn('checkout -q --detach %s' % pin, calls)
             git(root, 'remote', 'remove', 'origin')
-            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            result, calls = self.run_script('apply', 'a-pc', ASTRO_PROFILES=str(root))
             self.assertIn('has no origin: the hosts keep their profiles/', result.stderr)
             self.assertNotIn('profiles', calls)
 
@@ -141,7 +147,7 @@ class Hosts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp, 'fleet')
             fleet_repo(root, origin='https://user:tok3n@example.invalid/fleet.git')
-            result, calls = self.run_script('apply', 'host-a', ASTRO_PROFILES=str(root))
+            result, calls = self.run_script('apply', 'a-pc', ASTRO_PROFILES=str(root))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("git clone -q --no-checkout 'https://user:tok3n@example.invalid/fleet.git' profiles", calls)
             self.assertIn('echo "FAIL profiles: clone https://example.invalid/fleet.git"', calls)
@@ -223,12 +229,10 @@ class Hosts(unittest.TestCase):
                                '  a-pc: {}\n  a-cam: {}\n'
                                '  s: {user: op, address: $GATEWAY_IP}\n'
                                '  a-router: {address: 10.0.1.1, ssh: false}\n')
-            Path(tmp, 'xdg/fixture').mkdir(parents=True)            # the fleet's operator_registry
-            Path(tmp, 'xdg/fixture/devices.yaml').write_text('self: s\n')
             log = Path(tmp, 'ssh.log')
             env = {**os.environ, 'HW_SSH': str(Path(tmp, 'ssh')), 'FAKE_SSH_LOG': str(log),
                    'HW_SSH_COPY_ID': str(Path(tmp, 'copy')), 'XDG_STATE_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent',
-                   'XDG_CONFIG_HOME': str(Path(tmp, 'xdg')), 'ASTRO_REGISTRY': str(devices),
+                   'XDG_CONFIG_HOME': str(Path(tmp, 'xdg')), 'ASTRO_REGISTRY': str(devices), 'ASTRO_HOST': 's',
                    'ASTRO_NETWORK_ENV': str(Path(tmp, 'network.env'))}
             run = lambda: subprocess.run([str(ROOT / 'hw.sh'), 'hosts', 'keys'], capture_output=True,
                                          text=True, env=env)
@@ -240,7 +244,7 @@ class Hosts(unittest.TestCase):
             self.assertIn(f'== -i {key}.pub crew@10.0.1.10', calls)          # ssh-copy-id
             self.assertIn('StrictHostKeyChecking=accept-new crew@10.0.1.10 true', calls)
             self.assertNotIn(f'.pub crew@10.0.1.11', calls)                  # already reached
-            self.assertNotIn('10.0.1.2', calls)                                      # self: s
+            self.assertNotIn('10.0.1.2', calls)                                      # ASTRO_HOST s
             self.assertNotIn('10.0.1.1 ', calls)                                     # no ssh
             self.assertEqual(run().returncode, 0)
             self.assertEqual(key.read_text(), first)                                 # kept, not replaced
@@ -250,6 +254,54 @@ class Hosts(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('plan|apply [--image REF] [HOST...]', result.stdout)
         self.assertEqual(calls, '')
+
+
+class Registry(unittest.TestCase):
+    """profile.py hosts: the one reader of a registry's hosts (defaults merged, address resolved)."""
+    ENV = 'LAN_SUBNET=10.0.1.0/24\nGW=10.0.1.2\nSTATIC_LEASES="AA:01=a=10.0.1.10 bb=b=10.0.1.11"\n'
+    DEVICES = ('defaults: {user: crew, container: box}\nhosts:\n'
+               '  a: {roles: [boat, time_server]}\n'
+               '  b: {user: other, address: $GW, via: a, workspace: ~/ws}\n'
+               '  c: {ssh: false, address: 10.0.1.9, roles: [radio]}\n'
+               '  d: {address: $UNSET, roles: [spare]}\n')
+    # name: (user, address, ssh, container, workspace, via, roles)
+    TABLE = {'a': ('crew', '10.0.1.10', 'yes', 'box', '-', '-', 'boat time_server'),   # lease
+             'b': ('other', '10.0.1.2', 'yes', 'box', '~/ws', 'a', '-'),             # $KEY beats the lease
+             'c': ('crew', '10.0.1.9', 'no', 'box', '-', '-', 'radio'),             # literal
+             'd': ('crew', 'd.local', 'yes', 'box', '-', '-', 'spare')}                  # neither: name.local
+
+    def hosts(self, *role):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'network.env').write_text(self.ENV)
+            Path(tmp, 'devices.yaml').write_text(self.DEVICES)
+            run = subprocess.run(['python3', '-I', str(ROOT / 'devices/profile.py'), 'hosts',
+                                  str(Path(tmp, 'devices.yaml')), str(Path(tmp, 'network.env')), *role],
+                                 capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return {row[0]: tuple(row[1:]) for row in (line.split('\t') for line in run.stdout.splitlines())}
+
+    def test_each_host_merges_defaults_and_resolves_its_address(self):
+        self.assertEqual(self.hosts(), self.TABLE)
+
+    def test_a_role_selects_its_hosts(self):
+        self.assertEqual(list(self.hosts('radio')), ['c'])
+
+    def test_role_keys_skip_a_host_without_an_address(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'network.env').write_text(self.ENV)
+            Path(tmp, 'devices.yaml').write_text(self.DEVICES)
+            run = lambda key: subprocess.run(['python3', '-I', str(ROOT / 'devices/profile.py'), 'value',
+                                              str(Path(tmp, 'network.env')), str(Path(tmp, 'devices.yaml')), key],
+                                             capture_output=True, text=True)
+            self.assertEqual(run('TIME_SERVER_IP').stdout.strip(), '10.0.1.10')
+            self.assertEqual(run('RADIO_IP').stdout.strip(), '10.0.1.9')
+            self.assertEqual(run('SPARE_IP').returncode, 1)                     # never d.local
+
+    def test_no_other_reader_parses_the_registry(self):
+        for path in ('devices/field.py', 'devices/hosts/fleet.sh', 'devices/field.sh'):
+            text = (ROOT / path).read_text()
+            self.assertNotIn('yaml.safe_load', text, path)
+            self.assertNotIn('operator_registry', text, path)
 
 
 if __name__ == '__main__':

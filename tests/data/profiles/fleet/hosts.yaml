@@ -12,4 +12,4 @@ sources:
 compose_project: fixture_project
 operator_heartbeat: ros2 run gamma beacon
 operator_key: fixture/ssh
-operator_registry: fixture/devices.yaml
+station_file: fixture/station.yaml

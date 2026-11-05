@@ -128,23 +128,28 @@ EOF
 }
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
-# "name container workspace" per ssh host of the registry (the given names, else all). A registry that
-# names neither gets this checkout's: its dev container, and its path under $HOME (~/astro_dock here).
+# The registry's hosts as profile.py resolves them, one tab-separated line each:
+# name user address ssh(yes|no) container workspace via roles ('-' for none).
+registry_hosts() { python3 -I "$HW_ROOT/devices/profile.py" hosts "$ASTRO_REGISTRY" "${ASTRO_NETWORK_ENV:-}"; }
+
+# "name container workspace" per ssh host of the registry (the given names, else all; a name the registry
+# lacks gets "- -", which for_hosts fails). A registry that names neither gets this checkout's: its dev
+# container, and its path under $HOME (~/astro_dock here).
 fleet_hosts() {
-    local container workspace=- home
-    container=$(sed -n 's/^    container_name: //p' "$HW_ROOT/.devcontainer/docker-compose.yml" | head -n1)
+    local own workspace=- home name ssh c w rows
+    declare -A line
+    own=$(sed -n 's/^    container_name: //p' "$HW_ROOT/.devcontainer/docker-compose.yml" | head -n1)
     home=$(cd -- "$HOME" 2>/dev/null && pwd -P) || home=$HOME     # HW_ROOT is physical (/home -> /var/home)
     [[ $HW_ROOT != "$home"/* ]] || workspace="~/${HW_ROOT#"$home"/}"
-    python3 -I - "$ASTRO_REGISTRY" "${container:--}" "$workspace" "$@" <<'PY'
-import sys, yaml
-data = yaml.safe_load(open(sys.argv[1])) or {}
-own = {'container': sys.argv[2], 'workspace': sys.argv[3]}
-defaults, hosts, wanted = {**own, **(data.get('defaults') or {})}, data.get('hosts') or {}, sys.argv[4:]
-for name in wanted or hosts:
-    spec = {**defaults, **(hosts.get(name) or {})}
-    if wanted or spec.get('ssh', True):
-        print(name, spec.get('container') or '-', spec.get('workspace') or '-')
-PY
+    rows=$(registry_hosts) || return 1
+    while IFS=$'\t' read -r name _ _ ssh c w _; do
+        [[ -n $name ]] || continue
+        [[ $c != - ]] || c=${own:--}
+        [[ $w != - ]] || w=$workspace
+        line[$name]="$name $c $w"
+        (($#)) || [[ $ssh == no ]] || printf '%s\n' "${line[$name]}"
+    done <<<"$rows"
+    for name; do printf '%s\n' "${line[$name]:-$name - -}"; done
 }
 
 # on_hosts FUNCTION ARGS -- HOST...: run each host's generated script, logging; rc 1 if any failed.
@@ -152,7 +157,7 @@ for_hosts() {
     local fn=$1 rc=0 name container workspace
     shift
     while read -r name container workspace; do
-        [[ $container != - && $workspace != - ]] || { log "FAIL $name: registry gives no container/workspace"; rc=1; continue; }
+        [[ $container != - && $workspace != - ]] || { log "FAIL $name: not a registry host, or the registry gives no container/workspace"; rc=1; continue; }
         HW_HOST=$name "$fn" "$name" "$container" "${workspace/#\~/\$HOME}" || rc=1
     done < <(fleet_hosts "$@")
     return $rc
@@ -303,38 +308,22 @@ driver_verify() {
     return $rc
 }
 
-# "name user@address jump|-" per ssh host the TUI reaches, never this machine (its name, or the
-# operator file's self:). Addresses as the registry readers find them: a literal, a $KEY of the
-# network env, the host's STATIC_LEASES reservation, else name.local.
+# "name user@address jump|-" per ssh host the TUI reaches, never this machine (ASTRO_HOST, or its
+# hostname). Addresses as profile.py resolves them (registry_hosts).
 key_hosts() {
-    python3 -I - "$ASTRO_REGISTRY" "$ASTRO_NETWORK_ENV" "$1" "$(uname -n)" <<'PY'
-import os, shlex, sys, yaml
-devices, env_file, operator, me = sys.argv[1:]
-env = {}
-if os.path.exists(env_file):
-    for line in open(env_file):
-        key, sep, value = line.strip().partition('=')
-        if sep and not key.startswith('#'):
-            env[key] = ' '.join(shlex.split(value))
-leases = dict(entry.split('=')[1:] for entry in env.get('STATIC_LEASES', '').split() if entry.count('=') == 2)
-data = yaml.safe_load(open(devices)) or {}
-mine = {me.split('.')[0]}
-if os.path.exists(operator):
-    mine.add((yaml.safe_load(open(operator)) or {}).get('self'))
-defaults, hosts = data.get('defaults') or {}, data.get('hosts') or {}
-
-def target(name):
-    spec = {**defaults, **(hosts.get(name) or {})}
-    address = spec.get('address') or ''
-    address = env.get(address[1:], '') if address.startswith('$') else address
-    address = address or leases.get(name) or f'{name}.local'
-    return f"{spec['user']}@{address}" if spec.get('user') else address
-
-for name, spec in hosts.items():
-    spec = spec or {}
-    if spec.get('ssh', defaults.get('ssh', True)) and name not in mine:
-        print(name, target(name), target(spec['via']) if spec.get('via') else '-')
-PY
+    local me name user address ssh via rows
+    declare -A target
+    me=$(uname -n) rows=$(registry_hosts) || return 1
+    while IFS=$'\t' read -r name user address _; do
+        [[ -n $name ]] || continue
+        target[$name]=$address
+        [[ $user == - ]] || target[$name]=$user@$address
+    done <<<"$rows"
+    while IFS=$'\t' read -r name _ _ ssh _ _ via _; do
+        [[ -n $name && $ssh == yes && $name != "${ASTRO_HOST:-}" && $name != "${me%%.*}" ]] || continue
+        [[ $via == - ]] || via=${target[$via]:-$via}
+        printf '%s %s %s\n' "$name" "${target[$name]}" "$via"
+    done <<<"$rows"
 }
 
 driver_keys() {
@@ -366,6 +355,6 @@ driver_keys() {
             log "FAIL $name: the TUI cannot reach $target with $key"; rc=1; continue
         fi
         log "OK $name: key installed, host key in $dir/known_hosts"
-    done < <(key_hosts "$config/$(cfg operator_registry)")
+    done < <(key_hosts)
     log "keys rc=$rc log=$LOG"; return $rc
 }
