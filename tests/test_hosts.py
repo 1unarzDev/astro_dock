@@ -216,11 +216,11 @@ class Hosts(unittest.TestCase):
     def test_compose_prints_the_profiles_container_names_without_a_vessel(self):
         result, _ = self.run_script('compose', ASTRO_VESSEL='', HW_HOSTNAME='nobody')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.split(), ['ASTRO_CONTAINER=fixture_dev', 'ASTRO_HOSTNAME=fixture',
+        self.assertEqual(result.stdout.split(), ['ASTRO_CONTAINER=fixture_dev', 'ASTRO_ALIAS=fixture',
                                                  'ASTRO_CONFIG_DIR=fixture'])
-        result, _ = self.run_script('compose', HW_CONTAINER_NAME='', HW_CONTAINER_HOSTNAME='a b')
+        result, _ = self.run_script('compose', HW_CONTAINER_NAME='', HW_CONTAINER_ALIAS='a b')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("container.hostname 'a b' is not a plain name", result.stderr)
+        self.assertIn("container.alias 'a b' is not a plain name", result.stderr)
 
     def test_the_vessel_registry_names_hosts_to_deploy(self):
         result, calls = self.run_script('plan')

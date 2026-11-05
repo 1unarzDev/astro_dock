@@ -29,8 +29,8 @@ repos     Read-only, local: "NAME URL BRANCH" per repository of this computer (f
           generic control station, else none);
           ./setup.linux.sh --components repos clones and builds them on this computer.
 project   The Compose project of the dev container (compose_project).
-compose   The dev container's names as Compose variables (ASTRO_CONTAINER, ASTRO_HOSTNAME, ASTRO_CONFIG_DIR)
-          from container: (name, hostname, config_dir), one KEY=VALUE line each it sets; prebuild.sh
+compose   The dev container's names as Compose variables (ASTRO_CONTAINER, ASTRO_ALIAS, ASTRO_CONFIG_DIR)
+          from container: (name, alias, config_dir), one KEY=VALUE line each it sets; prebuild.sh
           writes them to .devcontainer/.env. Unset ones keep docker-compose.yml's generic defaults.
 Without HOST: every ssh host of ${ASTRO_REGISTRY:-the vessel registry}.
 EOF
@@ -56,7 +56,7 @@ driver_project() { printf '%s\n' "$(cfg compose_project)"; }
 
 driver_compose() {
     local pair value
-    for pair in ASTRO_CONTAINER=name ASTRO_HOSTNAME=hostname ASTRO_CONFIG_DIR=config_dir; do
+    for pair in ASTRO_CONTAINER=name ASTRO_ALIAS=alias ASTRO_CONFIG_DIR=config_dir; do
         value=$(cfg "container.${pair#*=}")
         [[ -n $value ]] || continue
         [[ $value =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "$HW_KIND.yaml: container.${pair#*=} '$value' is not a plain name"
