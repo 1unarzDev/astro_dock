@@ -11,7 +11,7 @@ Usage: $HW_PROGRAM $HW_KIND status|verify [HOST...]
        $HW_PROGRAM $HW_KIND rollback IMAGE [HOST...]
        $HW_PROGRAM $HW_KIND keys [HOST...]
        $HW_PROGRAM $HW_KIND repos [--role ROLE...]
-       $HW_PROGRAM $HW_KIND project
+       $HW_PROGRAM $HW_KIND project|compose
 
 status    Read-only: each repository's branch, head and dirty state, and the container's image.
 plan      Read-only: what apply would do (heads against origin/main via ls-remote; no fetch).
@@ -29,6 +29,9 @@ repos     Read-only, local: "NAME URL BRANCH" per repository of this computer (f
           generic control station, else none);
           ./setup.linux.sh --components repos clones and builds them on this computer.
 project   The Compose project of the dev container (compose_project).
+compose   The dev container's names as Compose variables (ASTRO_CONTAINER, ASTRO_HOSTNAME, ASTRO_CONFIG_DIR)
+          from container: (name, hostname, config_dir), one KEY=VALUE line each it sets; prebuild.sh
+          writes them to .devcontainer/.env. Unset ones keep docker-compose.yml's generic defaults.
 Without HOST: every ssh host of ${ASTRO_REGISTRY:-the vessel registry}.
 EOF
 }
@@ -50,6 +53,16 @@ role_repos() {
 }
 
 driver_project() { printf '%s\n' "$(cfg compose_project)"; }
+
+driver_compose() {
+    local pair value
+    for pair in ASTRO_CONTAINER=name ASTRO_HOSTNAME=hostname ASTRO_CONFIG_DIR=config_dir; do
+        value=$(cfg "container.${pair#*=}")
+        [[ -n $value ]] || continue
+        [[ $value =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "$HW_KIND.yaml: container.${pair#*=} '$value' is not a plain name"
+        printf '%s=%s\n' "${pair%%=*}" "$value"
+    done
+}
 
 driver_repos() {
     local name url branch roles=()
@@ -134,11 +147,12 @@ registry_hosts() { python3 -I "$HW_ROOT/devices/profile.py" hosts "$ASTRO_REGIST
 
 # "name container workspace" per ssh host of the registry (the given names, else all; a name the registry
 # lacks gets "- -", which for_hosts fails). A registry that names neither gets this checkout's: its dev
-# container, and its path under $HOME (~/astro_dock here).
+# container (container.name, else docker-compose.yml's default astro_dev), and its path under $HOME.
 fleet_hosts() {
     local own workspace=- home name ssh c w rows
     declare -A line
-    own=$(sed -n 's/^    container_name: //p' "$HW_ROOT/.devcontainer/docker-compose.yml" | head -n1)
+    own=$(cfg container.name)
+    own=${own:-astro_dev}
     home=$(cd -- "$HOME" 2>/dev/null && pwd -P) || home=$HOME     # HW_ROOT is physical (/home -> /var/home)
     [[ $HW_ROOT != "$home"/* ]] || workspace="~/${HW_ROOT#"$home"/}"
     rows=$(registry_hosts) || return 1

@@ -1,6 +1,6 @@
 ros:                 # domain_id: the vessel's ROS_DOMAIN_ID (its profile), else ROS 2's 0; ASTRO_ROS_DOMAIN_ID overrides
   discovery_range: SUBNET
 data:
-  root: /home/roboboat/roboboat_ws/bags
+  root: bags         # under the workspace (ROS_WS) unless absolute; ASTRO_DATA overrides
 transport:
   mode: static-fastdds
