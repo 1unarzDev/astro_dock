@@ -1,8 +1,10 @@
 """Every external command the station-side tools call is a host dependency in config/host-deps.yaml
 (installed by setup.linux.sh and setup.mac.sh) or on its allowlist (shell builtins, coreutils, other stages)."""
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,7 +16,7 @@ KEYWORDS = set('if then else elif fi for while until do done case esac in functi
 BUILTINS = set('cd echo printf read exit return export local declare readonly unset set shift source . : eval exec trap '
                'wait break continue getopts let type command builtin alias umask ulimit pushd popd test true false '
                'mapfile readarray hash jobs fg bg disown'.split())
-SEP = re.compile(r'(?:^|[|;&(`]|\$\(|\bthen\b|\bdo\b|\belse\b|\bexec\b|\bsetsid\b|\bsudo\b|\bxargs\b|\bnice -n \d+\b|\btimeout \S+)\s*([A-Za-z][A-Za-z0-9_.+-]*)')
+SEP = re.compile(r'(?:^|[|;&(`]|\$\(|\bthen\b|\bdo\b|\belse\b|\bexec\b|\bsetsid\b|\bsudo\b|\bxargs\b|\bnice -n \d+\b|\btimeout \S+)\s*([A-Za-z][A-Za-z0-9_.+-]*)(?![\w.+=-])')   # NAME= assigns
 WHICH = re.compile(r'(?:command -v|\bwhich|shutil\.which\()\s*[\'"]?([A-Za-z][A-Za-z0-9_.+-]*)')
 
 
@@ -98,6 +100,62 @@ class HostDepsTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn('rsync', out.stdout.split())
         self.assertEqual(out.stderr, '')
+
+
+# sudo runs cp and sed (on the fixture nsswitch); every other command, the package managers included, is logged only.
+SUDO = '#!/bin/sh\necho "sudo $*" >> "$LOG"\ncase $1 in cp|sed) exec "$@" ;; esac\n'
+NSSWITCH = ('passwd: files systemd\n'
+            'hosts: mymachines resolve [!UNAVAIL=return] files myhostname dns\n'
+            'networks: files\n')
+
+
+class MdnsTest(unittest.TestCase):
+    """setup.linux.sh --components mdns (ensure_mdns, also run by the devtools and boat stages)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        (self.tmp / 'bin').mkdir()
+        for name, text in {'sudo': SUDO, 'systemctl': '#!/bin/sh\necho "systemctl $*" >> "$LOG"\n'}.items():
+            (self.tmp / 'bin' / name).write_text(text)
+            (self.tmp / 'bin' / name).chmod(0o755)
+        self.nss = self.tmp / 'nsswitch.conf'
+        self.nss.write_text(NSSWITCH)
+
+    def mdns(self):
+        log = self.tmp / 'log'
+        log.write_text('')
+        run = subprocess.run(['bash', str(ROOT / 'setup.linux.sh'), '--components', 'mdns', '--yes', '--non-interactive'],
+                             capture_output=True, text=True, timeout=60,
+                             env={**os.environ, 'PATH': f'{self.tmp / "bin"}:{os.environ["PATH"]}',
+                                  'LOG': str(log), 'HW_NSSWITCH': str(self.nss)})
+        if 'Skipping package mutation on immutable host' in run.stdout:
+            self.skipTest('immutable host')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('Completed: mdns', run.stdout)
+        return log.read_text().splitlines()
+
+    def test_adds_mdns_once_and_keeps_the_other_hosts_entries(self):
+        calls = self.mdns()
+        self.assertEqual(self.nss.read_text(), NSSWITCH.replace(
+            'files myhostname', 'files mdns4_minimal [NOTFOUND=return] myhostname'))
+        self.assertEqual(Path(f'{self.nss}.astro-bak').read_text(), NSSWITCH)
+        self.assertIn('sudo systemctl enable --now avahi-daemon', calls)
+        installs = [c for c in calls if re.match(r'sudo (pacman|apt-get install|dnf)', c)]
+        for c in installs:            # only when Avahi or nss-mdns is missing here; one helper per manager
+            self.assertRegex(c, r'^sudo (pacman -S --needed --noconfirm avahi nss-mdns'
+                                r'|apt-get install -y avahi-daemon libnss-mdns|dnf -y install avahi nss-mdns)$')
+        once = self.nss.read_text()
+        calls = self.mdns()                                            # idempotent: nothing more changes
+        self.assertEqual(self.nss.read_text(), once)
+        self.assertEqual(Path(f'{self.nss}.astro-bak').read_text(), NSSWITCH)
+        self.assertFalse([c for c in calls if c.startswith(('sudo sed', 'sudo cp'))])
+
+    def test_net_has_no_other_mdns_setup(self):
+        self.assertFalse((ROOT / 'net/mdns.sh').exists())
+        for path in sorted((ROOT / 'net').glob('*.sh')):
+            self.assertNotIn('nsswitch', path.read_text(), path.name)
 
 
 if __name__ == '__main__':

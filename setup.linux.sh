@@ -54,7 +54,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,deps,compose,repos,gateway,boat,jetson,operator-key
+  --components LIST         clock,docker,gpu,devices,devtools,deps,mdns,compose,repos,gateway,boat,jetson,operator-key
   --vessel NAME             The vessel profile (default: this machine's, as ./hw.sh whoami finds it)
   --host NAME               This machine's registry host, or any other name for a generic control
                             station (default: found by hostname, MAC or boat-LAN address)
@@ -125,6 +125,20 @@ approve() {
     local answer
     read -r -p "$prompt [y/N] " answer
     [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+# pkg_mgr: this host's package manager (pacman, apt or dnf); pkg_install PKG...: install with it.
+pkg_mgr() {
+    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then echo pacman
+    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then echo apt
+    else echo dnf; fi
+}
+pkg_install() {
+    case "$(pkg_mgr)" in
+        pacman) run sudo pacman -S --needed --noconfirm "$@" ;;
+        apt) run sudo apt-get update && run sudo apt-get install -y "$@" ;;
+        dnf) run sudo dnf -y install "$@" ;;
+    esac
 }
 
 heading() {
@@ -217,7 +231,7 @@ stage_docker() {
     if docker compose version >/dev/null 2>&1; then
         echo "Docker and Compose are installed; keeping them."
     elif [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -Syu --needed --noconfirm docker docker-buildx docker-compose
+        pkg_install docker docker-buildx docker-compose
     elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
         install_docker_debian
     elif [[ "$OS_ID" == fedora ]] || [[ "$OS_LIKE" == *rhel* ]] || [[ "$OS_ID" =~ ^(rhel|rocky|almalinux)$ ]]; then
@@ -251,20 +265,16 @@ stage_gpu() {
     local before
     if command -v nvidia-ctk >/dev/null 2>&1; then
         echo "NVIDIA Container Toolkit is installed; keeping it."
-    elif [[ -e /etc/apt/sources.list.d/nvidia-l4t-apt-source.list ]]; then
-        # JetPack's own apt source carries the toolkit build matched to L4T.
-        run sudo apt-get update
-        run sudo apt-get install -y nvidia-container-toolkit
-    elif [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -Syu --needed --noconfirm nvidia-container-toolkit
-    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
-        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null"
-        run sudo apt-get update
-        run sudo apt-get install -y nvidia-container-toolkit
     else
-        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null"
-        run sudo dnf -y install nvidia-container-toolkit
+        # JetPack's own apt source carries the toolkit build matched to L4T; Arch packages it.
+        if [[ -e /etc/apt/sources.list.d/nvidia-l4t-apt-source.list ]]; then :
+        elif [[ "$(pkg_mgr)" == apt ]]; then
+            run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
+            run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null"
+        elif [[ "$(pkg_mgr)" == dnf ]]; then
+            run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null"
+        fi
+        pkg_install nvidia-container-toolkit
     fi
     before="$(cat /etc/docker/daemon.json 2>/dev/null || true)"
     run sudo nvidia-ctk runtime configure --runtime="$RUNTIME"
@@ -313,28 +323,32 @@ stage_devices() {
 }
 
 # Avahi, so NAME.local resolves; a boat host advertises only its IPv4 boat address (the boat
-# LAN has no routable IPv6, and link-local AAAA answers hang clients), a dev host resolves.
+# LAN has no routable IPv6, and link-local AAAA answers hang clients), a dev host resolves. nsswitch's
+# hosts: line keeps its entries and gains mdns4_minimal after files once (a backup first).
 ensure_mdns() {
-    local role="$1" conf=/etc/avahi/avahi-daemon.conf
+    local role="$1" conf=/etc/avahi/avahi-daemon.conf nss=${HW_NSSWITCH:-/etc/nsswitch.conf}  # HW_NSSWITCH: tests
     if ! command -v avahi-daemon >/dev/null 2>&1 \
         || [[ -z "$(find /lib* /usr/lib* -maxdepth 2 -name libnss_mdns4_minimal.so.2 -print -quit 2>/dev/null)" ]]; then
-        if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-            run sudo pacman -S --needed --noconfirm avahi nss-mdns
-        elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-            run sudo apt-get install -y avahi-daemon libnss-mdns
-        else
-            run sudo dnf -y install avahi nss-mdns
-        fi
+        if [[ "$(pkg_mgr)" == apt ]]; then pkg_install avahi-daemon libnss-mdns; else pkg_install avahi nss-mdns; fi
     fi
     run sudo systemctl enable --now avahi-daemon
     if [[ "$role" == boat ]] && ! { grep -qx 'use-ipv6=no' "$conf" && grep -qx 'publish-aaaa-on-ipv4=no' "$conf"; }; then
         run sudo sed -i -e 's/^#\?use-ipv6=.*/use-ipv6=no/' -e 's/^#\?publish-aaaa-on-ipv4=.*/publish-aaaa-on-ipv4=no/' "$conf"
         run sudo systemctl restart avahi-daemon
     fi
-    if ! grep -Eq '^hosts:.*\bmdns' /etc/nsswitch.conf; then
-        run sudo cp -n /etc/nsswitch.conf /etc/nsswitch.conf.astro-bak
-        run sudo sed -i 's/^\(hosts:.*\bfiles\)/\1 mdns4_minimal [NOTFOUND=return]/' /etc/nsswitch.conf
+    if ! grep -Eq '^hosts:.*\bmdns' "$nss"; then
+        run sudo cp -n "$nss" "$nss.astro-bak"
+        run sudo sed -i 's/^\(hosts:.*\bfiles\)/\1 mdns4_minimal [NOTFOUND=return]/' "$nss"
     fi
+}
+
+stage_mdns() {
+    heading "mDNS (.local names)"
+    echo "This installs Avahi and nss-mdns, enables avahi-daemon and adds mdns4_minimal to nsswitch's hosts: line."
+    $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(mdns); return; }
+    approve "Set up mDNS name resolution?" || { SKIPPED+=(mdns); return; }
+    ensure_mdns dev
+    COMPLETED+=(mdns)
 }
 
 stage_devtools() {
@@ -343,14 +357,7 @@ stage_devtools() {
     echo "It does not install VS Code, Node, or clone repositories."
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(devtools); return; }
     approve "Install host developer tools?" || { SKIPPED+=(devtools); return; }
-    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -Syu --needed --noconfirm $("$SCRIPT_DIR/devices/deps.sh" packages pacman)
-    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-        run sudo apt-get update
-        run sudo apt-get install -y $("$SCRIPT_DIR/devices/deps.sh" packages apt)
-    else
-        run sudo dnf -y install $("$SCRIPT_DIR/devices/deps.sh" packages dnf)
-    fi
+    pkg_install $("$SCRIPT_DIR/devices/deps.sh" packages "$(pkg_mgr)")
     ensure_mdns dev
     run "$SCRIPT_DIR/devices/deps.sh" hooks
     COMPLETED+=(devtools)
@@ -362,13 +369,7 @@ stage_deps() {
     echo "This installs the host tools the repos declare in their deps.yaml (missing now: $("$SCRIPT_DIR/devices/deps.sh" missing | tr '\n' ' ')) and sets the git hooks that recommend this after a pull."
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(deps); return; }
     approve "Install the declared host tools?" || { SKIPPED+=(deps); return; }
-    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -S --needed --noconfirm $("$SCRIPT_DIR/devices/deps.sh" packages pacman)
-    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-        run sudo apt-get install -y $("$SCRIPT_DIR/devices/deps.sh" packages apt)
-    else
-        run sudo dnf -y install $("$SCRIPT_DIR/devices/deps.sh" packages dnf)
-    fi
+    pkg_install $("$SCRIPT_DIR/devices/deps.sh" packages "$(pkg_mgr)")
     run "$SCRIPT_DIR/devices/deps.sh" hooks
     COMPLETED+=(deps)
 }
@@ -493,16 +494,7 @@ stage_clock() {
     fi
     approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
     if $switch; then
-        if ! command -v chronyd >/dev/null && [[ ! -x /usr/sbin/chronyd ]]; then
-            if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-                run sudo pacman -S --needed --noconfirm chrony
-            elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-                run sudo apt-get update
-                run sudo apt-get install -y chrony
-            else
-                run sudo dnf -y install chrony
-            fi
-        fi
+        command -v chronyd >/dev/null || [[ -x /usr/sbin/chronyd ]] || pkg_install chrony
         if systemctl is-enabled --quiet systemd-timesyncd 2>/dev/null || systemctl is-active --quiet systemd-timesyncd; then
             run sudo systemctl disable --now systemd-timesyncd
         fi
@@ -769,6 +761,7 @@ main() {
     has_component devices && stage_devices
     has_component devtools && stage_devtools
     has_component deps && stage_deps
+    has_component mdns && stage_mdns
     has_component compose && stage_compose
     has_component repos && stage_repos
     has_component gateway && stage_gateway
