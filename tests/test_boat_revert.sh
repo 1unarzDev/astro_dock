@@ -141,6 +141,18 @@ out=$(boat "$(line "$other")")
 ! grep -q "holds the gateway address" <<<"$out" || fail "non-gateway host treated as gateway"
 echo "stage_boat gateway ok"
 
+# stage_boat finds the link's reservation through profile.py leases, whatever case the lease writes the MAC in.
+mkdir -p "$tmp/sys/eth0" "$tmp/upper"
+cp -r "$ASTRO_PROFILES"/. "$tmp/upper"
+sed -i 's/02:aa:00:00:00:01=/02:AA:00:00:00:01=/' "$tmp/upper/a/network.env"
+for mac in 02:aa:00:00:00:01 02:aa:00:00:00:99; do
+    echo "$mac" >"$tmp/sys/eth0/address"
+    out=$(ASTRO_PROFILES="$tmp/upper" HW_SYSFS_NET="$tmp/sys" boat "$(line "$other")")
+    if [[ $mac == *01 ]]; then ! grep -q "Add $mac to STATIC_LEASES" <<<"$out" || fail "upper-case lease not found: $out"
+    else grep -q "Add $mac to STATIC_LEASES" <<<"$out" || fail "unleased MAC not reported: $out"; fi
+done
+echo "stage_boat lease ok"
+
 # network.env is data: setup reads it through hw.sh env, so shell code in it never runs.
 cp -r "$ASTRO_PROFILES" "$tmp/profiles"
 printf 'EVIL=$(touch %s/ran)\nTOO=`touch %s/ran`\n' "$tmp" "$tmp" >>"$tmp/profiles/a/network.env"

@@ -628,10 +628,10 @@ EOF
 }
 
 stage_boat() {
-    local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
+    local subnet gateway_ip env lease_mac lease_ip candidate type device="" address uuid mac reserved="" saved session_device session_ip
     needs_profile boat || return 0
-    network_env >/dev/null || exit 1
-    subnet="$(net LAN_SUBNET)" gateway_ip="$(net GATEWAY_IP)" leases="$(net STATIC_LEASES)"
+    env="$(network_env)" || exit 1
+    subnet="$(net LAN_SUBNET)" gateway_ip="$(net GATEWAY_IP)"
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
     echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"
@@ -661,10 +661,10 @@ stage_boat() {
         [[ "$session_device" == "$device" ]] \
             && echo "This session runs over $device; run on the console or under systemd-run/tmux so a dropped link cannot stop the setup." >&2
         uuid="$(nmcli -g GENERAL.CON-UUID device show "$device")"
-        mac="$(cat "/sys/class/net/$device/address")"
-        for lease in $leases; do
-            [[ "${lease%%=*}" == "${mac,,}" ]] && reserved="${lease##*=}"
-        done
+        mac="$(cat "${HW_SYSFS_NET:-/sys/class/net}/$device/address")"
+        while read -r lease_mac _ lease_ip; do
+            [[ "$lease_mac" == "${mac,,}" ]] && reserved="$lease_ip"
+        done < <(python3 -I "$SCRIPT_DIR/devices/profile.py" leases "$env")
         if [[ "$(nmcli -g ipv4.method,ipv4.addresses connection show uuid "$uuid" | tr '\n' ' ')" == "auto  " ]]; then
             echo "$device already takes DHCP (${address%/*})."
         else
@@ -685,7 +685,7 @@ stage_boat() {
             fi
             run sudo systemctl stop astro-boat-revert.timer
         fi
-        [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in $(network_env) for a fixed address." >&2
+        [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in $env for a fixed address." >&2
     fi
     if [[ -z "$device" ]]; then
         echo "Leaving Wi-Fi on: no wired boat link."

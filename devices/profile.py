@@ -602,6 +602,8 @@ def main(command, *args):
         for kind in kinds(dirs):
             shown[kind] = expanded(dict(resolve_kind(dirs, kind)), expand, kind)
         print(yaml.safe_dump(shown, sort_keys=False, default_flow_style=False, width=110).rstrip())
+    elif command == 'leases':
+        print('\n'.join(' '.join(lease) for lease in leases(network(args[0]))))
     elif command == 'roles':
         registry, host = args
         print('\n'.join(hosts(registry, {}).get(host, {}).get('roles', [])))
@@ -613,7 +615,7 @@ def main(command, *args):
                           spec['workspace'], spec['via'], ' '.join(spec['roles'])]
                 print('\t'.join(f or '-' for f in fields))
     else:
-        raise Error('usage: profile.py resolve|meta|kind|value|show|roles|hosts ...')
+        raise Error('usage: profile.py resolve|meta|kind|value|show|leases|roles|hosts ...')
 
 
 if __name__ == '__main__':
