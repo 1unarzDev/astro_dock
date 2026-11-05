@@ -24,6 +24,8 @@ def agent_event(event):
         out.write(json.dumps(event) + '\n')
     if event['event'] == 'start':
         return {'context': 'playbook for ' + event['agent']}
+    if event['event'] == 'prompt':
+        return {'context': 'notice for ' + event['agent'], 'deny': 'never on a prompt'}
     if event['event'] == 'pre' and 'rm -rf /' in event['command']:
         return {'deny': 'use the trash verb'}
 '''
@@ -74,8 +76,7 @@ class Dispatcher(unittest.TestCase):
 
     def add_loop(self, name, executable=True):
         repo = self.root / 'src' / name
-        (repo / 'hooks').mkdir(parents=True)
-        (repo / 'hooks' / 'hook.py').write_text('')
+        repo.mkdir(parents=True)
         (repo / 'start').write_text('#!/bin/sh\n')
         (repo / 'start').chmod(0o755 if executable else 0o644)
 
@@ -104,6 +105,16 @@ class Dispatcher(unittest.TestCase):
         self.assertTrue(self.main_out(['--playbook', 'claude']).startswith(entry))
         pre = claude('PreToolUse', tool_input={'command': 'ls'})
         self.assertEqual(self.main_out(['claude'], pre), '')
+
+    def test_a_prompt_gets_context_only_and_never_a_deny(self):
+        for agent, make in (('claude', claude), ('codex', codex)):
+            out = self.run_hook(agent, make('UserPromptSubmit', prompt='rm -rf /'))
+            self.assertEqual(out, {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit',
+                                                          'additionalContext': 'notice for ' + agent}})
+        self.assertEqual([e['event'] for e in self.events()], ['prompt', 'prompt'])
+        self.add_loop('team_agents')
+        prompt = claude('UserPromptSubmit', prompt='x')
+        self.assertNotIn('Agent loop', self.main_out(['claude'], prompt))      # the loop line is for starts only
 
     def test_allowed_commands_are_silent_and_reach_the_package_as_neutral_events(self):
         self.assertIsNone(self.run_hook('claude', claude('PreToolUse')))
@@ -224,8 +235,9 @@ class Dispatcher(unittest.TestCase):
     def test_shipped_configs_point_every_cli_at_the_dispatcher(self):
         claude_hooks = json.loads((ROOT / '.claude' / 'settings.json').read_text())['hooks']
         codex_hooks = json.loads((ROOT / '.codex' / 'hooks.json').read_text())['hooks']
-        self.assertEqual(set(claude_hooks), {'SessionStart', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'})
-        self.assertEqual(set(codex_hooks), {'SessionStart', 'PreToolUse', 'PostToolUse'})
+        self.assertEqual(set(claude_hooks), {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
+                                            'PostToolUseFailure'})
+        self.assertEqual(set(codex_hooks), {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse'})
         self.assertEqual([g['matcher'] for g in claude_hooks['PreToolUse']], ['Bash', 'Edit|MultiEdit|Write|NotebookEdit'])
         self.assertEqual([g['matcher'] for g in codex_hooks['PreToolUse']], ['^Bash$', '^apply_patch$'])
         for hooks, agent in ((claude_hooks, 'claude'), (codex_hooks, 'codex')):
