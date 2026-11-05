@@ -28,12 +28,12 @@ exec %s "$@"
 COLCON = '''#!/usr/bin/env bash
 echo "colcon $PWD $*" >> "$LOG"
 '''
-# ps prints the container id when the filters name the Compose project's dev service.
+# ps prints the container id when the filter names the dev container (FAKE_NAME).
 DOCKER = '''#!/usr/bin/env bash
 echo "docker $*" >> "$LOG"
 [ "$1" != exec ] || cat > /dev/null
 if [ "$1" = ps ]; then
-    case "$*" in *"label=com.docker.compose.project=$PROJECT "*"label=com.docker.compose.service=dev"*) echo "$RUNNING" ;; esac
+    case "$*" in *"name=^$FAKE_NAME\$"*) echo "$RUNNING" ;; esac
 fi
 exit 0
 '''
@@ -52,6 +52,7 @@ class SetupRepos(unittest.TestCase):
         shutil.copy2(ROOT / 'colcon_defaults.yaml', self.ws)
         (self.ws / '.devcontainer').mkdir()
         (self.ws / '.devcontainer/dev.bashrc').write_text('')
+        (self.ws / '.devcontainer/.env').write_text('ASTRO_CONTAINER=fixture_dev\n')   # prebuild.sh's
         (self.ws / 'src/beta/pkg').mkdir(parents=True)       # already checked out: kept
         (self.ws / 'src/beta/pkg/package.xml').write_text('<package>\n  <name>beta_pkg</name>\n</package>\n')
         (self.ws / 'src/beta/off/pkg').mkdir(parents=True)   # under COLCON_IGNORE: colcon never sees it
@@ -76,7 +77,7 @@ class SetupRepos(unittest.TestCase):
             path.append(str(self.tmp / 'colcon'))
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         env.update(PATH=':'.join(path + [os.environ['PATH']]), LOG=str(self.log), RUNNING=running,
-                   PROJECT='fixture_project', XDG_CONFIG_HOME=str(self.tmp / 'config'),
+                   FAKE_NAME='fixture_dev', XDG_CONFIG_HOME=str(self.tmp / 'config'),
                    ASTRO_SECRETS=str(self.tmp / 'none'), HW_HOSTNAME='innovation',
                    HW_SYSFS_NET=str(self.tmp / 'nosys'), HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
                    **extra)
@@ -119,11 +120,10 @@ class SetupRepos(unittest.TestCase):
         self.assertNotIn('/src/later/', self.excluded())
         self.assertIn('repos:later', run.stdout)
 
-    def test_without_colcon_it_builds_in_the_compose_projects_dev_container(self):
+    def test_without_colcon_it_builds_in_the_dev_container_by_its_name(self):
         run, calls = self.setup('--host', 'a-pc', colcon=False, running='c0ffee')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertIn('docker ps -q --filter label=com.docker.compose.project=fixture_project '
-                      '--filter label=com.docker.compose.service=dev', calls)
+        self.assertIn('docker ps -q --filter name=^fixture_dev$', calls)     # .devcontainer/.env's name
         log = '\n'.join(calls)       # hw.sh build in the container: its ROS_WS, its image stamp
         self.assertIn('docker inspect --format {{.Image}} c0ffee', calls)
         self.assertIn('-e ASTRO_BUILD_IMAGE= c0ffee bash -s -- --packages-up-to alpha_pkg', log)
@@ -132,7 +132,7 @@ class SetupRepos(unittest.TestCase):
         self.assertIn('Start the dev container (the Compose dev service), then build: '
                       './hw.sh build --container NAME -- --packages-up-to alpha_pkg', run.stderr)
         self.assertFalse([c for c in calls if c.startswith('docker exec')])
-        run, calls = self.setup('--host', 'a-pc', colcon=False, running='c0ffee', ASTRO_COMPOSE_PROJECT='other')
+        run, calls = self.setup('--host', 'a-pc', colcon=False, running='c0ffee', ASTRO_CONTAINER='other')
         self.assertFalse([c for c in calls if c.startswith('docker exec')])
 
     def test_dry_run_changes_nothing(self):

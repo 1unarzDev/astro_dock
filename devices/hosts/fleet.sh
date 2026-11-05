@@ -11,7 +11,7 @@ Usage: $HW_PROGRAM $HW_KIND status|verify [HOST...]
        $HW_PROGRAM $HW_KIND rollback IMAGE [HOST...]
        $HW_PROGRAM $HW_KIND keys [HOST...]
        $HW_PROGRAM $HW_KIND repos [--role ROLE...]
-       $HW_PROGRAM $HW_KIND project|compose
+       $HW_PROGRAM $HW_KIND compose
 
 status    Read-only: each repository's branch, head and dirty state, and the container's image.
 plan      Read-only: what apply would do (heads against origin/main via ls-remote; no fetch).
@@ -28,7 +28,6 @@ repos     Read-only, local: "NAME URL BRANCH" per repository of this computer (f
           and those of its roles (--role ROLE, else this host's registry roles, operator for a
           generic control station, else none);
           ./setup.linux.sh --components repos clones and builds them on this computer.
-project   The Compose project of the dev container (compose_project).
 compose   The dev container's names as Compose variables (ASTRO_CONTAINER, ASTRO_ALIAS, ASTRO_CONFIG_DIR)
           from container: (name, alias, config_dir), one KEY=VALUE line each it sets; prebuild.sh
           writes them to .devcontainer/.env. Unset ones keep docker-compose.yml's generic defaults.
@@ -51,8 +50,6 @@ role_repos() {
         done
     done
 }
-
-driver_project() { printf '%s\n' "$(cfg compose_project)"; }
 
 driver_compose() {
     local pair value
@@ -239,7 +236,9 @@ if docker inspect $2 >/dev/null 2>&1; then
 fi
 case $1 in */*) docker pull -q $1 ;; esac  # registry references refresh; local rollback images do not
 .devcontainer/prebuild.sh
-ASTRO_IMAGE=$1 docker compose -p $(cfg compose_project) -f .devcontainer/docker-compose.yml \
+# The existing container's own Compose project, so up replaces it and keeps its volumes; else VS Code's.
+project=\$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' $2 2>/dev/null) || project=
+ASTRO_IMAGE=$1 docker compose -p "\${project:-\$(basename "\$PWD")_devcontainer}" -f .devcontainer/docker-compose.yml \
     -f .devcontainer/docker-compose.override.yml up -d dev
 docker inspect $2 --format '{{.Config.Image}} volumes: {{range .Mounts}}{{.Name}} {{end}}'
 EOF

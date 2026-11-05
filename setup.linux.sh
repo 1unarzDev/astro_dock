@@ -24,13 +24,8 @@ needs_profile() {
     SKIPPED+=("$1")
     return 1
 }
-# The dev container: the running `dev` service of the Compose project (hosts.yaml compose_project).
-dev_container() {
-    local project
-    project="${ASTRO_COMPOSE_PROJECT:-$("$SCRIPT_DIR/hw.sh" hosts project 2>/dev/null || true)}"
-    docker ps -q --filter "label=com.docker.compose.project=${project:-astro_dock_devcontainer}" \
-        --filter label=com.docker.compose.service=dev 2>/dev/null | head -1
-}
+# The running dev container of this checkout, by its name (devices/lib.sh hw_dev_container).
+dev_container() { ( source "$SCRIPT_DIR/devices/lib.sh" && hw_dev_container "$SCRIPT_DIR" ); }
 
 DRY_RUN=false
 ASSUME_YES=false
