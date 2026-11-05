@@ -411,8 +411,10 @@ stage_repos() {
     done <<<"$list"
     ((${#names[@]})) || { SKIPPED+=(repos-build); return; }
     # Their packages (package.xml names) and what they depend on, in the workspace's one build (hw.sh build).
-    pkgs=($(cd "$SCRIPT_DIR" && find "${names[@]}" -name package.xml -not -path '*/build/*' -not -path '*/install/*' \
-        -exec grep -m1 -ohP '<name>\s*\K[^<\s]+' {} + 2>/dev/null | sort -u || true))
+    # A directory with COLCON_IGNORE (or AMENT_/CATKIN_IGNORE) hides its tree from colcon, so from this list too.
+    pkgs=($(cd "$SCRIPT_DIR" && find "${names[@]}" -type d -exec sh -c \
+        'for i in COLCON_IGNORE AMENT_IGNORE CATKIN_IGNORE; do [ ! -e "$1/$i" ] || exit 0; done; exit 1' _ {} \; -prune \
+        -o -name package.xml -exec grep -m1 -ohP '<name>\s*\K[^<\s]+' {} + 2>/dev/null | sort -u || true))
     build=()
     if command -v colcon >/dev/null 2>&1; then
         build=(--ws "$SCRIPT_DIR")
