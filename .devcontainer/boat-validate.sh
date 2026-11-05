@@ -10,7 +10,7 @@ Pull and validate an immutable JetPack 6 candidate digest on the boat. With
 --promote, rotate the jetson-jp6-jazzy release ring.
 An explicit TAG bypasses the release ring. Docker credentials must already be
 available to Docker for promotion. --container checks non-root CUDA and live
-camera images in an already running container, such as roboboat_dev.
+camera images in an already running container, such as the dev container.
 EOF
 }
 
@@ -154,15 +154,15 @@ architecture="$(docker image inspect --format '{{.Architecture}}' "$image")"
 
 # Reuse the compose stack's ZED volumes (docker-compose.override.jetson.yml) so
 # the camera check finds the optimized neural depth engine instead of spending
-# minutes rebuilding it. Prefer the project that runs roboboat_dev.
+# minutes rebuilding it. Prefer the project that runs the dev service.
 zed_volumes=()
-compose_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' roboboat_dev 2>/dev/null || true)"
+compose_project="$(docker ps --filter label=com.docker.compose.service=dev --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | head -n1 || true)"
 for mount in zed_resources:/usr/local/zed/resources zed_settings:/usr/local/zed/settings; do
     filters=(--filter "label=com.docker.compose.volume=${mount%%:*}")
     [[ -n "$compose_project" ]] && filters+=(--filter "label=com.docker.compose.project=$compose_project")
     mapfile -t names < <(docker volume ls -q "${filters[@]}")
     [[ ${#names[@]} -eq 1 ]] || {
-        echo "Expected one compose ${mount%%:*} volume, found ${#names[@]}; start roboboat_dev first." >&2
+        echo "Expected one compose ${mount%%:*} volume, found ${#names[@]}; start the dev container first." >&2
         exit 1
     }
     zed_volumes+=(-v "${names[0]}:${mount#*:}")

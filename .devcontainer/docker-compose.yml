@@ -4,12 +4,14 @@ services:
     # Dev Containers replaces this with a locally built UID-adjusted image.
     # "always" would make Compose incorrectly pull that vsc-* image from a registry.
     pull_policy: ${ASTRO_PULL_POLICY:-missing}
-    container_name: roboboat_dev
+    # The workspace's names, generic by default: prebuild.sh writes the profile's (hosts.yaml container:)
+    # into .devcontainer/.env, so a team keeps its container, hostname alias and operator config directory.
+    container_name: ${ASTRO_CONTAINER:-astro_dev}
     # Robot hosts run headless; the container comes back after reboots unless stopped by hand.
     restart: unless-stopped
-    hostname: roboboat
+    hostname: ${ASTRO_HOSTNAME:-astro}
     extra_hosts:
-      - roboboat:127.0.1.1
+      - ${ASTRO_HOSTNAME:-astro}:127.0.1.1
     privileged: true
     network_mode: host
     ipc: host
@@ -23,7 +25,7 @@ services:
       ROS_AUTOMATIC_DISCOVERY_RANGE: SUBNET
       ROS_DOMAIN_ID: ${ASTRO_ROS_DOMAIN_ID:-0}     # ROS 2's default; prebuild injects the vessel's (its profile)
       ROS_WS: /home/roboboat/roboboat_ws
-      MHSEALS_DATA: /home/roboboat/roboboat_ws/bags
+      ASTRO_DATA: /home/roboboat/roboboat_ws/bags   # the data root (run.yaml data.root)
       # Non-interactive bash (docker exec ... bash -c) sources the same ROS and DDS setup.
       BASH_ENV: /home/roboboat/roboboat_ws/.devcontainer/dev.bashrc
       FASTRTPS_DEFAULT_PROFILES_FILE: /home/roboboat/roboboat_ws/config/fastdds.xml
@@ -31,7 +33,7 @@ services:
     volumes:
       - ..:/home/roboboat/roboboat_ws
       # Operator config survives container rebuilds; prebuild.sh creates the host directory.
-      - ${HOME}/.config/mhseals:/home/roboboat/.config/mhseals
+      - ${HOME}/.config/${ASTRO_CONFIG_DIR:-astro}:/home/roboboat/.config/${ASTRO_CONFIG_DIR:-astro}
       # Worktrees at their host paths, testable in place (hw.sh overlay, hw.sh pyenv); prebuild also
       # mounts this workspace at its host path so their .git links resolve. prebuild creates both.
       - ${HOME}/worktrees:${HOME}/worktrees

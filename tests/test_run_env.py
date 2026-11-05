@@ -11,6 +11,13 @@ sys.path.insert(0, str(ROOT / '.devcontainer'))
 import run_env  # noqa: E402
 
 WS = run_env.WS
+USER_HOME = str(Path(WS).parent)               # the container user's home
+
+
+def names(dev):
+    """(container name, the base hostname alias, the operator config mount target) of a rendered dev service."""
+    config = [v['target'] for v in dev['volumes'] if v['target'].startswith(USER_HOME + '/.config/')]
+    return dev['container_name'], dev['extra_hosts'][0], config[0]
 
 
 class RunEnvTest(unittest.TestCase):
@@ -38,10 +45,14 @@ class RunEnvTest(unittest.TestCase):
                        '-f', str(root / '.devcontainer/docker-compose.override.yml'), 'config', '--format', 'json']
             result = subprocess.run(compose, env={**env, 'ASTRO_ROS_DOMAIN_ID': '99'}, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            values = json.loads(result.stdout)['services']['dev']['environment']
+            dev = json.loads(result.stdout)['services']['dev']
+            values = dev['environment']
+            # No profile: docker-compose.yml's generic names (prebuild names the hostname after the device).
+            self.assertEqual(names(dev), ('astro_dev', 'astro=127.0.1.1', USER_HOME + '/.config/astro'))
+            self.assertTrue((root / '.config/astro').is_dir())
             self.assertEqual(values['ROS_DOMAIN_ID'], '73')
             self.assertEqual(values['ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
-            self.assertEqual(values['MHSEALS_DATA'], WS + '/bags/experiment')
+            self.assertEqual(values['ASTRO_DATA'], WS + '/bags/experiment')
             self.assertEqual(values['RMW_IMPLEMENTATION'], 'rmw_fastrtps_cpp')
             override = root / '.devcontainer/docker-compose.override.yml'
             previous = override.read_bytes()
@@ -92,7 +103,8 @@ class RunEnvTest(unittest.TestCase):
             def config(key='ROS_DOMAIN_ID', **extra):
                 result = subprocess.run(compose, env={**env, **extra}, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                return json.loads(result.stdout)['services']['dev']['environment'].get(key)
+                dev = json.loads(result.stdout)['services']['dev']
+                return names(dev) if key == 'names' else dev['environment'].get(key)
 
             def domain(vessel, **extra):
                 run = subprocess.run(['bash', prebuild], env={**env, **vessel}, capture_output=True, text=True)
@@ -104,6 +116,10 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(config(), '0')
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}), '7')
             self.assertNotIn('WARNING', warnings[-1])
+            # The profile's container names (hosts.yaml container:) through .devcontainer/.env; the environment wins.
+            self.assertEqual(config('names'), ('fixture_dev', 'fixture=127.0.1.1', USER_HOME + '/.config/fixture'))
+            self.assertTrue((root / '.config/fixture').is_dir())
+            self.assertEqual(config('names', ASTRO_CONTAINER='mine')[0], 'mine')
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
             # The container keeps the vessel this host resolved (also off its LAN); Compose's ASTRO_VESSEL wins.
             self.assertEqual(config('ASTRO_VESSEL'), 'a')
@@ -133,6 +149,7 @@ class RunEnvTest(unittest.TestCase):
             # No profiles at all (a generic checkout): astro_dock's default, said once, no warning.
             self.assertEqual(domain({'ASTRO_PROFILES': '', 'ASTRO_PROFILES_CONFIG': '/nonexistent'}), '0')
             self.assertNotIn('WARNING', warnings[-1])
+            self.assertEqual(config('names')[0], 'astro_dev')     # and the generic names again
 
     def test_every_process_gets_the_vessel_registry(self):
         """The vessel's registry and network env reach a run.yaml-managed shell (whose ros_net returns early)
@@ -214,8 +231,13 @@ class RunEnvTest(unittest.TestCase):
                 self.resolve(text)
 
     def test_overrides_and_baseline(self):
+        self.assertEqual(self.resolve('{}')['data.root'], WS + '/bags')          # relative: under ROS_WS
+        self.assertEqual(self.resolve('data: {root: runs/x}')['data.root'], WS + '/runs/x')
+        self.assertEqual(self.resolve('{}', {'ASTRO_DATA': WS + '/y'})['data.root'], WS + '/y')
+        with self.assertRaises(ValueError):
+            self.resolve('data: {root: ../x}')
         self.assertEqual(self.resolve('{}', {'ROS_DOMAIN_ID': '81'})['ros.domain_id'], 81)
-        for env in ({'ROS_DOMAIN_ID': '1', 'ASTRO_ROS_DOMAIN_ID': '2'}, {'MHSEALS_DATA': ''},
+        for env in ({'ROS_DOMAIN_ID': '1', 'ASTRO_ROS_DOMAIN_ID': '2'}, {'ASTRO_DATA': ''},
                     {'RMW_IMPLEMENTATION': 'x'}, {'ROS_DOMAIN_ID': '999'}):
             with self.subTest(env), self.assertRaises(ValueError):
                 self.resolve('{}', env)
