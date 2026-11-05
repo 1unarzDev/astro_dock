@@ -114,7 +114,7 @@ commands:
         required: false
         description: This machine's registry host.
       - name: command
-        description: whoami [--root|--registry], env [KEY], profile show [NAME], profile sync [URL [REF]], secrets check, or KIND VERB (each with --help).
+        description: whoami [--root|--registry], env [KEY], profile show [NAME], profile sync [URL [REF]], secrets check, hot REPO, station take|release, overlay PATH, pyenv PATH, build, image, or KIND VERB (each with --help).
     examples:
       - $ROS_WS/hw.sh whoami
       - $ROS_WS/hw.sh env ROUTER_IP
