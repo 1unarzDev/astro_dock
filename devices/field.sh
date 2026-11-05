@@ -66,7 +66,8 @@ hot_snapshot() {
     local dir=$1 index tree head name email
     head=$(git -C "$dir" rev-parse -q --verify 'HEAD^{commit}') || die "$dir has no commit"
     index=$(mktemp) || exit 1
-    cp -- "$(git -C "$dir" rev-parse --path-format=absolute --git-path index)" "$index" 2>/dev/null
+    # -p: the index keeps its mtime, so git still re-reads a file edited in the tick of its last stat (racy git)
+    cp -p -- "$(git -C "$dir" rev-parse --path-format=absolute --git-path index)" "$index" 2>/dev/null
     tree=$(GIT_INDEX_FILE=$index git -C "$dir" add -A && GIT_INDEX_FILE=$index git -C "$dir" write-tree)
     rm -f -- "$index"
     [[ -n $tree ]] || die "Cannot snapshot $dir"
