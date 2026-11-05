@@ -148,14 +148,13 @@ if [[ "${1:-} ${2:-}" == "station take" ]]; then
     source "$HW_ROOT/devices/field.sh"
     station_kernel
 fi
-# overlay and pyenv work on a worktree and need no profiles.
-if [[ ${1:-} == overlay || ${1:-} == pyenv ]]; then
+# overlay and pyenv work on a worktree, build and image are the workspace's build and its dev image: no profiles.
+if [[ ${1:-} =~ ^(overlay|pyenv|build|image)$ ]]; then
     if [[ " ${*:2:2} " =~ \ (-h|--help)\  ]]; then command_usage "$1" | sed '1s/^      /Usage:/'; exit 0; fi
+    [[ $1 != build ]] || exec bash "$HW_ROOT/devices/build.sh" "${@:2}"
+    [[ $1 != image ]] || exec bash "$HW_ROOT/.devcontainer/dev-image.sh" "${@:2}"
     exec bash "$HW_ROOT/devices/overlay.sh" "$@"
 fi
-# build and image need no profiles either: the workspace's build entry point and its dev image.
-if [[ ${1:-} == build ]]; then exec bash "$HW_ROOT/devices/build.sh" "${@:2}"; fi
-if [[ ${1:-} == image ]]; then exec bash "$HW_ROOT/.devcontainer/dev-image.sh" "${@:2}"; fi
 hw_init
 if [[ " ${*:2:2} " =~ \ (-h|--help)\  && -n $(command_usage "${1:-}") ]]; then
     command_usage "$1" | sed '1s/^      /Usage:/'

@@ -126,9 +126,10 @@ def run(*args, **env):
 
 
 def dispatched():
-    """The commands hw.sh's top-level case handles, besides its own help."""
-    body = re.search(r'^case \$\{1:-\} in\n(.*?)^esac', (ROOT / 'hw.sh').read_text(), re.M | re.S).group(1)
-    arms = re.findall(r'^    ([^\s()]+)\)', body, re.M)
+    """The commands hw.sh's top-level case handles, besides its own help, and those it runs before it (no profiles)."""
+    text = (ROOT / 'hw.sh').read_text()
+    body = re.search(r'^case \$\{1:-\} in\n(.*?)^esac', text, re.M | re.S).group(1)
+    arms = re.findall(r'^    ([^\s()]+)\)', body, re.M) + re.findall(r'^if \[\[ \$\{1:-\} =~ \^\(([\w|]+)\)\$', text, re.M)
     return {name for arm in arms for name in arm.split('|')} - {"''", '-h', '--help', 'help'}
 
 
