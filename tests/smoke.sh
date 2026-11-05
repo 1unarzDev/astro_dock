@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The landing gate (under 60 s, nothing contacted, no containers): shell syntax and the fast unit tests of
-# hw.sh, its drivers, setup's repos stage and the field commands. The full suite runs in CI and never blocks.
+# The landing gate (nothing contacted, no containers): shell syntax and the fast unit tests of
+# hw.sh, its drivers, setup's repos stage, the field commands and the agent command hook. The full suite runs in CI and never blocks.
 #   tests/smoke.sh [--impact]   --impact: syntax, then only the smoke tests timpact selects (ALL: the full smoke)
 # With the workspace agent tools (MHSEALS_AGENTS, else src/mhseals_agents of the main checkout), a tree that
 # already passed is not run again (tcache, tier smoke or smoke-impact); ASTRO_SMOKE_UNCACHED=1 skips that.
@@ -29,7 +29,8 @@ for script in setup.linux.sh hw.sh devices/*.sh devices/*/*.sh .devcontainer/*.s
     bash -n "$script"
 done
 modules=(tests.test_host_deps tests.test_field tests.test_hw_contract tests.test_hosts tests.test_profiles tests.test_setup_repos
-         tests.test_readme tests.test_agnostic tests.test_install_check tests.test_overlay tests.test_build)
+         tests.test_readme tests.test_agnostic tests.test_install_check tests.test_overlay tests.test_build
+         tests.test_agents_hook tests.test_run_env)
 if $impact && ! grep -qx ALL <<<"$selected"; then
     picked=()     # the smoke modules among the selected tests (the rest are the full suite's)
     while read -r test; do
