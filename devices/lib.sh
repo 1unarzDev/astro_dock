@@ -19,13 +19,22 @@ hw_load_env() {
     done <"$1"
 }
 
-# hw_dev_container ROOT: the ID of the running dev container of the checkout ROOT (none when it is down), by the
-# name docker-compose.yml gives it, as Compose resolves it: ASTRO_CONTAINER, else ROOT/.devcontainer/.env's
-# (prebuild.sh writes the hosts profile's container.name there), else astro_dev.
+# hw_compose_default ROOT VAR: the default ROOT/.devcontainer/docker-compose.yml gives ${VAR:-default}.
+hw_compose_default() { sed -n "s/.*\${$2:-\([^}]*\)}.*/\1/p" "$1/.devcontainer/docker-compose.yml" | head -n1; }
+
+# hw_dev_name ROOT [VAR]: a dev container name (VAR, default ASTRO_CONTAINER) as Compose resolves it for the
+# checkout ROOT: the environment, else ROOT/.devcontainer/.env's (prebuild.sh writes the hosts profile's names
+# there), else docker-compose.yml's default.
+hw_dev_name() {
+    local var=${2:-ASTRO_CONTAINER} name
+    name=${!var:-}
+    [[ -n $name ]] || name=$(sed -n "s/^$var=//p" "$1/.devcontainer/.env" 2>/dev/null | tail -n1)
+    printf '%s' "${name:-$(hw_compose_default "$1" "$var")}"
+}
+
+# hw_dev_container ROOT: the ID of the running dev container of the checkout ROOT (none when it is down).
 hw_dev_container() {
-    local name=${ASTRO_CONTAINER:-}
-    [[ -n $name ]] || name=$(sed -n 's/^ASTRO_CONTAINER=//p' "$1/.devcontainer/.env" 2>/dev/null | tail -n1)
-    ${HW_DOCKER:-docker} ps -q --filter "name=^${name:-astro_dev}\$" 2>/dev/null | head -n1
+    ${HW_DOCKER:-docker} ps -q --filter "name=^$(hw_dev_name "$1")\$" 2>/dev/null | head -n1
 }
 
 # hw_secrets: the secrets file (ASTRO_SECRETS, default ~/.config/astro/secrets.env), refused unless
