@@ -30,7 +30,6 @@ HOSTNAME = ('hostname roboboat', r'hostname: roboboat|- roboboat:127\.0\.1\.1|ro
                                  r'|base roboboat alias')
 DATA = ('MHSEALS_DATA', r'MHSEALS_DATA')
 CONFIG = ('~/.config/mhseals', r'\.config/mhseals')
-KEEPER = ('the mhseals keeper pattern', r'mhseals_testing harness|mhseals\.\*harness')
 GITMODULES = ('.gitmodules URLs', r'github\.com/MHSeals/[\w.-]+')
 HOOK_TABLE = ('mhseals_testing agent-hook regression table', r'ssh blastoise\b|mhseals_testing')
 AGENT_TOOLS = ('the workspace agent tools (quarantine plugin, tcache, timpact)', r'(?i:mhseals_agents)')
@@ -47,7 +46,6 @@ PENDING = {
     '.devcontainer/image-user.sh': (IMAGE,),
     '.devcontainer/prebuild.sh': (CONFIG, CONTAINER, HOSTNAME),
     '.devcontainer/run_env.py': (IMAGE, DATA),
-    '.devcontainer/stop-children.sh': (KEEPER,),
     '.github/scripts/check-containers.py': (HOSTNAME,),
     '.github/scripts/test-jetson-validation.py': (CONTAINER,),
     '.github/workflows/images.yml': (IMAGE,),
