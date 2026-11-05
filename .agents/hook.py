@@ -7,7 +7,7 @@
 A package opts in with an ``agent_hook.py`` module at ``src/<repo>/<package>/agent_hook.py``
 that defines ``agent_event(event)``. Each one gets the same neutral event, whichever CLI sent it:
 
-    {agent: claude|codex, event: start|pre|post, session_id, agent_id, cwd, source,
+    {agent: claude|codex, event: start|prompt|pre|post, session_id, agent_id, cwd, source,
      tool, tool_id, command, exit, duration_ms, failed}
 
 plus, before a file edit (Claude Edit, MultiEdit, Write, NotebookEdit; Codex apply_patch, or a shell
@@ -21,17 +21,16 @@ Only ``pre`` is sent for edit tools.
 ``--playbook``: a package can keep its session-start text short and give the whole of it on demand.
 
 ``exit`` is 0 on success, N for ``Exit code N``, else None (interrupted, or not reported).
-It returns None, ``{"context": text}`` (start) or ``{"deny": reason}`` (pre). The first deny
+``prompt`` is a user prompt (UserPromptSubmit): context only, it never denies.
+
+It returns None, ``{"context": text}`` (start, prompt) or ``{"deny": reason}`` (pre). The first deny
 blocks the call; contexts are joined. Stdlib only, Python 3.8, no ROS: well under 50 ms. Exits 0
 always (a deny is JSON, not an exit code): a missing, broken or slow package never blocks a call;
 its error goes to ``$XDG_STATE_HOME/astro/agents-hook.log``.
 
-The canonical copy lives in the team's agent-loop repo (``src/<repo>/hooks/hook.py``); when the
-workspace has exactly one, ``main`` hands the call to it (``canonical``). This file's own logic is the
-fallback: no checkout, a broken one, or one the package hooks don't guard the way they guard
-this file (delegating to an unguarded file would let an agent edit the rules away). Whichever
-answers, a session start's context leads with the agent-loop line (``loop_entry``): every
-``src/<repo>`` with that hook and an executable ``start`` is named, with its ``start`` to run first.
+This file is the only dispatcher: a team adds behaviour with a package hook, never a copy of this
+file. A session start's context leads with the agent-loop line (``loop_entry``): every ``src/<repo>``
+with an executable ``start`` is named, with its ``start`` to run first.
 """
 
 import importlib.util
@@ -44,9 +43,10 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL = 'src/*/hooks/hook.py'      # the agent-loop repo's copy of this hook
-LOOP_START = 'start'                   # its executable entry point for a fresh session
-EVENTS = {'SessionStart': 'start', 'PreToolUse': 'pre', 'PostToolUse': 'post', 'PostToolUseFailure': 'post'}
+LOOP_START = 'src/*/start'      # an agent-loop repo's executable entry point for a fresh session
+EVENTS = {'SessionStart': 'start', 'UserPromptSubmit': 'prompt', 'PreToolUse': 'pre', 'PostToolUse': 'post',
+          'PostToolUseFailure': 'post'}
+CONTEXT = {'start': 'SessionStart', 'prompt': 'UserPromptSubmit'}     # the events a context is read for
 SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports Bash; older builds the rest
 SHELLS = ('bash', 'sh', 'zsh')
 EDIT_TOOLS = {'Edit': 'file_path', 'MultiEdit': 'file_path', 'Write': 'file_path', 'NotebookEdit': 'notebook_path'}
@@ -109,7 +109,7 @@ def normalize(agent, raw):
              'cwd': raw.get('cwd'), 'source': raw.get('source'), 'tool': raw.get('tool_name'),
              'tool_id': raw.get('tool_use_id'), 'command': '', 'exit': None, 'duration_ms': None,
              'failed': False}
-    if kind == 'start':
+    if kind in CONTEXT:
         return event
     given = raw.get('tool_input')
     if raw.get('tool_name') in EDIT_TOOLS or raw.get('tool_name') in PATCH_TOOLS:
@@ -172,7 +172,7 @@ def dispatch(event, root=ROOT, budget_s=BUDGET_S, clock=time.monotonic):
             continue
         if answer.get('deny') and deny is None and event['event'] == 'pre':
             deny = str(answer['deny'])
-        if answer.get('context') and event['event'] == 'start':
+        if answer.get('context') and event['event'] in CONTEXT:
             contexts.append(str(answer['context']))
     return deny, contexts
 
@@ -183,7 +183,7 @@ def render(event, deny, contexts):
         return json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
                                                   'permissionDecisionReason': deny}})
     if contexts:
-        return json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart',
+        return json.dumps({'hookSpecificOutput': {'hookEventName': CONTEXT[event['event']],
                                                   'additionalContext': '\n\n'.join(contexts)}})
     return ''
 
@@ -197,32 +197,6 @@ def run(agent, text, root=ROOT):
     return render(event, *dispatch(event, root)) if event else ''
 
 
-def _edit_denied(path, root):
-    probe = normalize('claude', {'hook_event_name': 'PreToolUse', 'tool_name': 'Edit', 'cwd': str(root),
-                                 'tool_input': {'file_path': str(path)}})
-    return dispatch(probe, root)[0] is not None
-
-
-def canonical(root=ROOT):
-    """The agent-loop repo's hook module to hand calls to, or None to use this file's logic.
-
-    Only for exactly one copy, and only when the package hooks deny editing it, or deny editing
-    neither it nor this file."""
-    found = sorted(root.glob(CANONICAL))
-    if len(found) > 1:
-        log('canonical hook: %d copies (%s), using the built-in logic' % (len(found), ', '.join(map(str, found))))
-    if len(found) != 1 or found[0].resolve() == Path(__file__).resolve():
-        return None
-    path = found[0]
-    if not _edit_denied(path, root) and _edit_denied(Path(__file__).resolve(), root):
-        log('canonical hook %s: not guarded like .agents/hook.py, using the built-in logic' % path)
-        return None
-    spec = importlib.util.spec_from_file_location('agents_hook_canonical', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def respond(args, text, root=ROOT):
     """The hook's stdout for command-line ``args`` and stdin ``text``."""
     if args[:1] == ['--playbook']:
@@ -233,9 +207,8 @@ def respond(args, text, root=ROOT):
 
 
 def loops(root=ROOT):
-    """Agent-loop repos: ``src/<repo>`` with the canonical hook and an executable ``LOOP_START``."""
-    return sorted(path.parent.parent for path in root.glob(CANONICAL)
-                  if os.access(path.parent.parent / LOOP_START, os.X_OK))
+    """Agent-loop repos: ``src/<repo>`` with an executable ``start``."""
+    return sorted(path.parent for path in root.glob(LOOP_START) if path.is_file() and os.access(path, os.X_OK))
 
 
 def loop_entry(root=ROOT):
@@ -243,7 +216,7 @@ def loop_entry(root=ROOT):
     found = [str(repo.relative_to(root)) for repo in loops(root)]
     if not found:
         return ''
-    starts = ' or '.join('`%s/%s`' % (repo, LOOP_START) for repo in found)
+    starts = ' or '.join('`%s/start`' % repo for repo in found)
     return ('Agent loop: %s. Before orchestrating or picking up new work, run %s (it prints the role, '
             'routing, runbooks and handoff for a fresh session); repo-only edits need none of it.'
             % (', '.join(found), starts))
@@ -268,16 +241,9 @@ def with_loop_entry(args, text, out, root=ROOT):
 
 def main(argv=None, root=ROOT):
     args = sys.argv[1:] if argv is None else argv
-    out = None
     try:
         text = '' if args[:1] == ['--playbook'] else sys.stdin.read()
-        try:
-            module = canonical(root)
-            out = module.respond(args, text, root) if module else None
-        except BaseException as error:      # a broken canonical copy falls back to this file
-            log('canonical hook: %r' % (error,))
-        if out is None:
-            out = respond(args, text, root)
+        out = respond(args, text, root)
         try:
             out = with_loop_entry(args, text, out, root)
         except BaseException as error:      # the pointer never costs the hook its answer
