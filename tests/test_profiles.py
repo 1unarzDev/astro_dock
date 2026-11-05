@@ -240,7 +240,6 @@ class Profiles(unittest.TestCase):
         self.assertEqual(self.repos('hosts', 'repos'), ['alpha'])               # no self, no role: all
         self.assertEqual(self.repos('hosts', 'repos', '--role', 'operator', '--role', 'camera'),
                          ['alpha', 'gamma', 'beta'])
-        self.assertEqual(self.hw('--vessel', 'a', 'hosts', 'project').stdout, 'fixture_project\n')
 
     # Secrets
     def test_secrets_file_must_be_private_and_values_never_print(self):

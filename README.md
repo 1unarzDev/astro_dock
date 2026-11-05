@@ -277,7 +277,7 @@ For standalone deployment on a Jetson, run the same Compose service VS Code uses
 
 ```bash
 .devcontainer/prebuild.sh
-docker compose -p astro_dock_devcontainer -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml up -d --pull always dev
+docker compose -p "$(basename "$PWD")_devcontainer" -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml up -d --pull always dev
 .devcontainer/boat-validate.sh --container astro_dev   # or the ASTRO_CONTAINER of .devcontainer/.env
 docker exec -it astro_dev bash
 ```
