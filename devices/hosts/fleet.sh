@@ -147,11 +147,12 @@ registry_hosts() { python3 -I "$HW_ROOT/devices/profile.py" hosts "$ASTRO_REGIST
 
 # "name container workspace" per ssh host of the registry (the given names, else all; a name the registry
 # lacks gets "- -", which for_hosts fails). A registry that names neither gets this checkout's: its dev
-# container (ASTRO_CONTAINER, else container.name, else the Compose default astro_dev), and its path under $HOME.
+# container (container.name, else the Compose default astro_dev; never this machine's ASTRO_CONTAINER), and its
+# path under $HOME.
 fleet_hosts() {
     local own workspace=- home name ssh c w rows
     declare -A line
-    own=${ASTRO_CONTAINER:-$(cfg container.name)}
+    own=$(cfg container.name)
     own=${own:-astro_dev}
     home=$(cd -- "$HOME" 2>/dev/null && pwd -P) || home=$HOME     # HW_ROOT is physical (/home -> /var/home)
     [[ $HW_ROOT != "$home"/* ]] || workspace="~/${HW_ROOT#"$home"/}"
