@@ -29,7 +29,9 @@ its error goes to ``$XDG_STATE_HOME/astro/agents-hook.log``.
 The canonical copy lives in the team's agent-loop repo (``src/<repo>/hooks/hook.py``); when the
 workspace has exactly one, ``main`` hands the call to it (``canonical``). This file's own logic is the
 fallback: no checkout, a broken one, or one the package hooks don't guard the way they guard
-this file (delegating to an unguarded file would let an agent edit the rules away).
+this file (delegating to an unguarded file would let an agent edit the rules away). Whichever
+answers, a session start's context leads with the agent-loop line (``loop_entry``): every
+``src/<repo>`` with that hook and an executable ``start`` is named, with its ``start`` to run first.
 """
 
 import importlib.util
@@ -43,6 +45,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL = 'src/*/hooks/hook.py'      # the agent-loop repo's copy of this hook
+LOOP_START = 'start'                   # its executable entry point for a fresh session
 EVENTS = {'SessionStart': 'start', 'PreToolUse': 'pre', 'PostToolUse': 'post', 'PostToolUseFailure': 'post'}
 SHELL_TOOLS = ('Bash', 'shell', 'local_shell', 'exec_command')   # Codex reports Bash; older builds the rest
 SHELLS = ('bash', 'sh', 'zsh')
@@ -229,18 +232,56 @@ def respond(args, text, root=ROOT):
     return run(args[0] if args else '', text, root)
 
 
-def main(argv=None):
+def loops(root=ROOT):
+    """Agent-loop repos: ``src/<repo>`` with the canonical hook and an executable ``LOOP_START``."""
+    return sorted(path.parent.parent for path in root.glob(CANONICAL)
+                  if os.access(path.parent.parent / LOOP_START, os.X_OK))
+
+
+def loop_entry(root=ROOT):
+    """The session-start line naming where orchestration starts, or '' with no agent-loop repo."""
+    found = [str(repo.relative_to(root)) for repo in loops(root)]
+    if not found:
+        return ''
+    starts = ' or '.join('`%s/%s`' % (repo, LOOP_START) for repo in found)
+    return ('Agent loop: %s. Before orchestrating or picking up new work, run %s (it prints the role, '
+            'routing, runbooks and handoff for a fresh session); repo-only edits need none of it.'
+            % (', '.join(found), starts))
+
+
+def with_loop_entry(args, text, out, root=ROOT):
+    """``out`` with the agent-loop line first in a session start's context (hook JSON or --playbook)."""
+    entry = loop_entry(root)
+    if not entry:
+        return out
+    if args[:1] == ['--playbook']:
+        return '\n\n'.join(part for part in (entry, out) if part)
+    raw = json.loads(text or '{}')
+    if not isinstance(raw, dict) or raw.get('hook_event_name') != 'SessionStart':
+        return out
+    answer = json.loads(out) if out else {}
+    spec = answer.get('hookSpecificOutput') or {}
+    context = '\n\n'.join(part for part in (entry, spec.get('additionalContext')) if part)
+    return json.dumps({'hookSpecificOutput': {**spec, 'hookEventName': 'SessionStart',
+                                              'additionalContext': context}})
+
+
+def main(argv=None, root=ROOT):
     args = sys.argv[1:] if argv is None else argv
     out = None
     try:
         text = '' if args[:1] == ['--playbook'] else sys.stdin.read()
         try:
-            module = canonical()
-            out = module.respond(args, text, ROOT) if module else None
+            module = canonical(root)
+            out = module.respond(args, text, root) if module else None
         except BaseException as error:      # a broken canonical copy falls back to this file
             log('canonical hook: %r' % (error,))
         if out is None:
-            out = respond(args, text)
+            out = respond(args, text, root)
+        try:
+            out = with_loop_entry(args, text, out, root)
+        except BaseException as error:      # the pointer never costs the hook its answer
+            log('loop entry: %r' % (error,))
     except BaseException as error:
         log('dispatch: %r' % (error,))
         out = ''

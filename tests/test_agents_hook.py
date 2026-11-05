@@ -72,6 +72,39 @@ class Dispatcher(unittest.TestCase):
                                                       'additionalContext': 'playbook for claude'})
         self.assertEqual(self.events()[0]['source'], 'startup')
 
+    def add_loop(self, name, executable=True):
+        repo = self.root / 'src' / name
+        (repo / 'hooks').mkdir(parents=True)
+        (repo / 'hooks' / 'hook.py').write_text('')
+        (repo / 'start').write_text('#!/bin/sh\n')
+        (repo / 'start').chmod(0o755 if executable else 0o644)
+
+    def main_out(self, args, payload=None):
+        stdin, out = sys.stdin, None
+        sys.stdin = __import__('io').StringIO(json.dumps(payload) if payload else '')
+        try:
+            with __import__('contextlib').redirect_stdout(__import__('io').StringIO()) as buf:
+                hook.main(args, self.root)
+            out = buf.getvalue().strip()
+        finally:
+            sys.stdin = stdin
+        return out
+
+    def test_start_leads_with_the_agent_loop_entry_and_others_are_untouched(self):
+        self.assertEqual(hook.loop_entry(self.root), '')
+        self.add_loop('team_agents')
+        self.add_loop('not_a_loop', executable=False)
+        entry = hook.loop_entry(self.root)
+        self.assertIn('`src/team_agents/start`', entry)
+        self.assertNotIn('not_a_loop', entry)
+        start = {'session_id': SID, 'hook_event_name': 'SessionStart', 'source': 'startup'}
+        context = json.loads(self.main_out(['claude'], start))['hookSpecificOutput']['additionalContext']
+        self.assertTrue(context.startswith(entry))
+        self.assertIn('playbook for claude', context)
+        self.assertTrue(self.main_out(['--playbook', 'claude']).startswith(entry))
+        pre = claude('PreToolUse', tool_input={'command': 'ls'})
+        self.assertEqual(self.main_out(['claude'], pre), '')
+
     def test_allowed_commands_are_silent_and_reach_the_package_as_neutral_events(self):
         self.assertIsNone(self.run_hook('claude', claude('PreToolUse')))
         self.assertIsNone(self.run_hook('claude', claude('PostToolUse', duration_ms=2100,
