@@ -56,7 +56,7 @@ from my_robot.tasks import Task
 - Write unit tests for all new features and bug fixes.
 - Use the `pytest` framework for testing.
 - Ensure tests cover edge cases and potential failure points.
-- `tests/smoke.sh` (under a minute, nothing contacted) gates landing; the full suite runs in CI and never blocks.
+- `tests/smoke.sh` (nothing contacted) gates landing; the full suite runs in CI and never blocks.
   With the workspace agent tools it skips a tree that already passed (`tcache`), and `--impact` runs only the
   tests `timpact` selects. The root `conftest.py` opts pytest into their quarantine plugin when importable.
 
