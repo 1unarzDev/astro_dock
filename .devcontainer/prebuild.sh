@@ -8,16 +8,6 @@ if (($#)); then
     selection="$2"
 fi
 hw="$script_dir/../hw.sh"
-# The dev container's names (container, hostname alias, operator config directory): the profile's
-# (hw.sh hosts compose: hosts.yaml container:) into .env, which Compose reads for docker-compose.yml's
-# variables; without a profile, or one that names none, its generic defaults. Regenerated on each run.
-names="$("$hw" hosts compose 2>/dev/null)" || names=""
-{ echo '# Written by prebuild.sh from the profile (hw.sh hosts compose); rerun prebuild to change it.'
-  [[ -z "$names" ]] || printf '%s\n' "$names"; } > "$script_dir/.env"
-config_dir="$(sed -n 's/^ASTRO_CONFIG_DIR=//p' <<<"$names")"
-config_dir="${ASTRO_CONFIG_DIR:-${config_dir:-astro}}"   # as docker-compose.yml: the environment wins
-# Host operator config dir, bind-mounted by docker-compose.yml (Docker would create it root-owned).
-mkdir -p "${HOME}/.config/${config_dir}" "${HOME}/worktrees" "${HOME}/.cache/wt"
 os_type=linux
 
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -101,7 +91,9 @@ domain_default="ROS domain ${ASTRO_ROS_DOMAIN_ID:-0 (the ROS 2 default)}"
 domain=""
 vessel=""
 reason() { sed -e 's/\x1b\[[0-9;]*m//g' -e '$!d' "$work_file.err"; }
+profiles_error=""
 if ! profiles_root="$("$hw" whoami --root 2>"$work_file.err")"; then
+    profiles_error=1
     echo "WARNING: hw.sh cannot load the profiles ($(reason)); the dev container gets the $domain_default." >&2
 elif [[ -z "$profiles_root" ]]; then
     echo "ROS domain: generic mode (no profiles), the $domain_default"
@@ -117,6 +109,25 @@ elif ! domain="$("$hw" env ROS_DOMAIN_ID 2>"$work_file.err")"; then
         } >&2
     fi
 fi
+# The dev container's names (container, hostname alias, operator config directory): the profile's
+# (hw.sh hosts compose: hosts.yaml container:) into .env, which Compose reads for docker-compose.yml's
+# variables; without a profile, or one that names none, its generic defaults. Regenerated on each run.
+# A failing hw.sh (bad profile, no PyYAML) also leaves the generic names, which would rename this host's
+# container and config dir on the next compose up: said, with hw.sh's reason. Generic mode (no profiles) has none.
+names=""
+if [[ -n "$profiles_root" || -n "$profiles_error" ]] && ! names="$("$hw" hosts compose)"; then
+    names=""
+    echo "WARNING: hw.sh hosts compose failed (above): the dev container gets docker-compose.yml's generic names" \
+        "(container, hostname, config dir) unless ASTRO_CONTAINER, ASTRO_HOSTNAME, ASTRO_CONFIG_DIR are set. Fix it and rerun prebuild." >&2
+fi
+{ echo '# Written by prebuild.sh from the profile (hw.sh hosts compose); rerun prebuild to change it.'
+  [[ -z "$names" ]] || printf '%s\n' "$names"; } > "$script_dir/.env"
+# As docker-compose.yml resolves them: the environment, else .env (the profile), else the generic default.
+named() { local v; v="$(sed -n "s/^$1=//p" <<<"$names")"; printf '%s' "${!1:-${v:-$2}}"; }
+config_dir="$(named ASTRO_CONFIG_DIR astro)"
+container="$(named ASTRO_CONTAINER astro_dev)"
+# Host operator config dir, bind-mounted by docker-compose.yml (Docker would create it root-owned).
+mkdir -p "${HOME}/.config/${config_dir}" "${HOME}/worktrees" "${HOME}/.cache/wt"
 [[ -z "$profiles_root" ]] || vessel="$("$hw" whoami 2>/dev/null | sed -n 's/^vessel  *\([a-z0-9][a-z0-9_-]*\) (.*/\1/p')"
 # The registry host this machine is (by hostname or MAC; never a --host or generic guess) as ASTRO_HOST,
 # for what names the machine inside a container (the operator heartbeat); hw.sh there resolves the same.
@@ -185,8 +196,7 @@ echo "Selected ${os_type} adapter: $override_file"
 # Warn when the running dev container is not built on the image its tag now names (after a
 # pull). Dev Containers adds a UID layer on top, so the tag's layers must prefix the container's.
 compose=(docker compose -f "$script_dir/docker-compose.yml" -f "$script_dir/docker-compose.override.yml")
-container="$("${compose[@]}" config 2>/dev/null | sed -n 's/^    container_name: //p' | head -n1 || true)"
-running="$([[ -z "$container" ]] || docker inspect --format '{{.Image}}' "$container" 2>/dev/null || true)"
+running="$(docker inspect --format '{{.Image}}' "$container" 2>/dev/null || true)"
 if [[ -n "$running" ]]; then
     expected="$("${compose[@]}" config --images dev 2>/dev/null || true)"
     layers() { docker image inspect --format '{{json .RootFS.Layers}}' "$1" 2>/dev/null || true; }

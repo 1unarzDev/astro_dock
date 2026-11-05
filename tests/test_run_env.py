@@ -120,6 +120,11 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(config('names'), ('fixture_dev', 'fixture=127.0.1.1', USER_HOME + '/.config/fixture'))
             self.assertTrue((root / '.config/fixture').is_dir())
             self.assertEqual(config('names', ASTRO_CONTAINER='mine')[0], 'mine')
+            # A profile hw.sh rejects falls back to the generic names, and says so with hw.sh's reason.
+            domain({'ASTRO_VESSEL': 'a', 'HW_CONTAINER_NAME': 'a b'})
+            self.assertIn("container.name 'a b' is not a plain name", warnings[-1])
+            self.assertIn('WARNING: hw.sh hosts compose failed', warnings[-1])
+            self.assertEqual(config('names')[0], 'astro_dev')
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
             # The container keeps the vessel this host resolved (also off its LAN); Compose's ASTRO_VESSEL wins.
             self.assertEqual(config('ASTRO_VESSEL'), 'a')
