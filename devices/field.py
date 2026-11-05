@@ -1,15 +1,12 @@
-"""Pure logic of hw.sh hot and station take (devices/field.sh): the boat link from `ip` output, the
-boat hosts of a registry and the build plan of a hot patch. Reads, never changes anything.
+"""Pure logic of hw.sh hot and station take (devices/field.sh): the boat link from `ip` output and
+the build plan of a hot patch. Reads, never changes anything.
 
   field.py link SUBNET          BOAT_IFACE, BOAT_ADDR and UPLINK_IFACE as shell assignments
-  field.py boat-hosts REGISTRY  the ssh hosts without the operator role, one per line
-  field.py roles REGISTRY       every role the registry names (its roles: and the hosts' roles)
   field.py plan REPO            stdin: `git diff --name-status` lines; out: the packages to build (line
                                 one, may be empty), then why, one line each
   field.py packages REPO        stdin: repo-relative paths; out: NAME<TAB>DIR of the packages holding
                                 them, once each (hw.sh overlay)
 """
-import importlib.util
 import ipaddress
 import os
 from pathlib import Path
@@ -17,11 +14,6 @@ import re
 import shlex
 import subprocess
 import sys
-
-# The registry as profile.py reads it (by path: the stdlib has a `profile` module).
-_spec = importlib.util.spec_from_file_location('astro_profile', Path(__file__).with_name('profile.py'))
-profile = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(profile)
 
 # Live under colcon --symlink-install once they exist: edits need no build.
 LIVE = re.compile(r'\.(py|ya?ml)$|(^|/)launch/')
@@ -79,18 +71,6 @@ def boat_link(addr_lines, route_lines, subnet):
     return {'BOAT_IFACE': devs[0], 'BOAT_ADDR': str(found[0][1].ip), 'UPLINK_IFACE': up[0] if up else ''}
 
 
-def boat_hosts(path):
-    """The ssh hosts of a registry that are not operator stations, in registry order."""
-    return [name for name, spec in profile.hosts(path, {}).items() if spec['ssh'] and 'operator' not in spec['roles']]
-
-
-def roles(path):
-    out = [str(r) for r in profile.load(Path(path)).get('roles') or {}]
-    for spec in profile.hosts(path, {}).values():
-        out += [r for r in spec['roles'] if r not in out]
-    return out
-
-
 def package_of(repo, path):
     """The colcon package (package.xml name) holding path in repo, or None outside any package."""
     repo = Path(repo).resolve()
@@ -144,10 +124,6 @@ def main(command, *args):
         found = boat_link(ip_lines('HW_IP_ADDR', '-o', '-4', 'addr', 'show'),
                           ip_lines('HW_IP_ROUTE', '-o', '-4', 'route', 'show', 'default'), args[0])
         print('\n'.join(f'{k}={shlex.quote(v)}' for k, v in found.items()))
-    elif command == 'boat-hosts':
-        print('\n'.join(boat_hosts(args[0])))
-    elif command == 'roles':
-        print('\n'.join(roles(args[0])))
     elif command == 'plan':
         packages, reasons = plan(sys.stdin.read().splitlines(), args[0])
         print(' '.join(packages))
@@ -155,11 +131,11 @@ def main(command, *args):
     elif command == 'packages':
         print('\n'.join(packages_of(args[0], sys.stdin.read().splitlines())))
     else:
-        raise Error('usage: field.py link SUBNET | boat-hosts REGISTRY | roles REGISTRY | plan REPO | packages REPO')
+        raise Error('usage: field.py link SUBNET | plan REPO | packages REPO')
 
 
 if __name__ == '__main__':
     try:
         main(*sys.argv[1:])
-    except (Error, profile.Error, OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
+    except (Error, OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
         sys.exit(str(error))

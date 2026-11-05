@@ -142,21 +142,27 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 # name user address ssh(yes|no) container workspace via roles ('-' for none).
 registry_hosts() { python3 -I "$HW_ROOT/devices/profile.py" hosts "$ASTRO_REGISTRY" "${ASTRO_NETWORK_ENV:-}"; }
 
-# "name container workspace" per ssh host of the registry (the given names, else all; a name the registry
-# lacks gets "- -", which for_hosts fails). A registry that names neither gets this checkout's: its dev
-# container (container.name, else docker-compose.yml's default; never this machine's ASTRO_CONTAINER or .env),
-# and its path under $HOME.
-fleet_hosts() {
-    local own workspace=- home name ssh c w rows
-    declare -A line
+# "container workspace" for a host the registry gives neither: this checkout's dev container (container.name,
+# else docker-compose.yml's default; never this machine's ASTRO_CONTAINER or .env), and its path under $HOME.
+fleet_defaults() {
+    local own workspace=- home
     own=$(cfg container.name)
     own=${own:-$(hw_compose_default "$HW_ROOT" ASTRO_CONTAINER)}
     home=$(cd -- "$HOME" 2>/dev/null && pwd -P) || home=$HOME     # HW_ROOT is physical (/home -> /var/home)
     [[ $HW_ROOT != "$home"/* ]] || workspace="~/${HW_ROOT#"$home"/}"
+    printf '%s %s\n' "${own:--}" "$workspace"
+}
+
+# "name container workspace" per ssh host of the registry (the given names, else all; a name the registry
+# lacks gets "- -", which for_hosts fails), with fleet_defaults for what the registry leaves out.
+fleet_hosts() {
+    local own workspace name ssh c w rows
+    declare -A line
+    read -r own workspace < <(fleet_defaults)
     rows=$(registry_hosts) || return 1
     while IFS=$'\t' read -r name _ _ ssh c w _; do
         [[ -n $name ]] || continue
-        [[ $c != - ]] || c=${own:--}
+        [[ $c != - ]] || c=$own
         [[ $w != - ]] || w=$workspace
         line[$name]="$name $c $w"
         (($#)) || [[ $ssh == no ]] || printf '%s\n' "${line[$name]}"
@@ -322,21 +328,25 @@ driver_verify() {
     return $rc
 }
 
-# "name user@address jump|-" per ssh host the TUI reaches, never this machine (ASTRO_HOST, or its
-# hostname). Addresses as profile.py resolves them (registry_hosts).
+# "name user@address jump|- container workspace roles" per ssh host the TUI reaches, never this machine
+# (ASTRO_HOST, or its hostname). Addresses as profile.py resolves them (registry_hosts), container and
+# workspace with fleet_defaults, roles comma-separated ('-' for none).
 key_hosts() {
-    local me name user address ssh via rows
+    local me name user address ssh c w via roles rows own workspace
     declare -A target
     me=$(uname -n) rows=$(registry_hosts) || return 1
+    read -r own workspace < <(fleet_defaults)
     while IFS=$'\t' read -r name user address _; do
         [[ -n $name ]] || continue
         target[$name]=$address
         [[ $user == - ]] || target[$name]=$user@$address
     done <<<"$rows"
-    while IFS=$'\t' read -r name _ _ ssh _ _ via _; do
+    while IFS=$'\t' read -r name _ _ ssh c w via roles; do
         [[ -n $name && $ssh == yes && $name != "${ASTRO_HOST:-}" && $name != "${me%%.*}" ]] || continue
         [[ $via == - ]] || via=${target[$via]:-$via}
-        printf '%s %s %s\n' "$name" "${target[$name]}" "$via"
+        [[ $c != - ]] || c=$own
+        [[ $w != - ]] || w=$workspace
+        printf '%s %s %s %s %s %s\n' "$name" "${target[$name]}" "$via" "$c" "$w" "${roles// /,}"
     done <<<"$rows"
 }
 
@@ -353,7 +363,7 @@ driver_keys() {
     # The TUI's own options: this key, its known_hosts, no prompts.
     local tui=(-i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
                -o "UserKnownHostsFile=$dir/known_hosts")
-    while read -r name target jump; do
+    while read -r name target jump _; do
         [[ $wanted == "  " || $wanted == *" $name "* ]] || continue
         local via=() mine=()
         [[ $jump == - ]] || via=(-o "ProxyJump=$jump")

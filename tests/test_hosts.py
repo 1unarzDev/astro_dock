@@ -318,6 +318,15 @@ class Registry(unittest.TestCase):
                                   str(Path(tmp, 'network.env'))], capture_output=True, text=True)
         self.assertEqual(run.stdout.splitlines(), ['aa:01 a 10.0.1.10', 'cc c 10.0.1.12'])
 
+    def test_roles_of_a_host_or_of_the_whole_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'devices.yaml').write_text('roles: {rtk_base: {}, boat: {}}\n' + self.DEVICES.split('\n', 1)[1])
+            roles = lambda *host: subprocess.run(['python3', '-I', str(ROOT / 'devices/profile.py'), 'roles',
+                                                  str(Path(tmp, 'devices.yaml')), *host],
+                                                 capture_output=True, text=True).stdout.split()
+            self.assertEqual(roles('a'), ['boat', 'time_server'])
+            self.assertEqual(roles(), ['rtk_base', 'boat', 'time_server', 'radio', 'spare'])
+
     def test_a_role_selects_its_hosts(self):
         self.assertEqual(list(self.hosts('radio')), ['c'])
 

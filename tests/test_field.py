@@ -78,10 +78,6 @@ class Logic(unittest.TestCase):
         with self.assertRaisesRegex(field.Error, 'several interfaces are on 10.0.1.0/24 .enx9 eth1.'):
             field.boat_link(two.splitlines(), [ROUTE], '10.0.1.0/24')
 
-    def test_boat_hosts_skip_operators_and_ssh_off(self):
-        self.assertEqual(field.boat_hosts(PROFILES / 'a/devices.yaml'), ['a-pc', 'a-cam'])
-        self.assertIn('operator', field.roles(PROFILES / 'a/devices.yaml'))
-
     def test_plan_builds_only_what_symlink_install_cannot_carry(self):
         with tempfile.TemporaryDirectory() as tmp:
             pkg = Path(tmp, 'pkg_dir')
