@@ -6,7 +6,7 @@
 # gets TERM from stop-children.sh as well as the keeper's own SIGINT) must see that child finish its
 # slower cleanup before the container exits. The same keeper in a second --pid host container must NOT
 # be signalled (mount-namespace filter). An open interactive shell (TERM-ignoring, on a terminal) must not
-# hold the stop for KEEPER_WAIT.
+# hold the stop for KEEPER_WAIT, even when another listed process (a transient child) exits before the TERM.
 # Usage: stop-test.sh [image]   (needs bash and pgrep in the image; default archlinux)
 set -euo pipefail
 
@@ -38,13 +38,18 @@ trap 'kill -INT "$child"; wait "$child"; echo parent-ran > /out/parent; exit 0' 
 sleep infinity & wait
 KEEPER
 cp "$tmp/fake-keeper.sh" "$tmp/other/"
+# The stop's first PID list also names a process that already exited (a transient child gone before the TERM),
+# so kill -TERM fails on one PID; the rest of the stop, the shell's hang-up included, must still run.
+awk '/^trap stop_children/ { print "true & dead=$!; wait $dead"
+    print "eval \"listed_$(declare -f children)\""
+    print "children() { listed_children; [[ -e /tmp/listed-dead ]] || { : >/tmp/listed-dead; echo $dead; }; }" }
+    { print }' "$here/stop-children.sh" > "$tmp/stop-children.sh"
 chmod 777 "$tmp" "$tmp/other"
 
 # Same stop settings as the dev service: pid host, 30s grace, stop-children.sh as PID 1.
 docker run -d --name "$name" --pid host --stop-timeout 30 \
     -e KEEPER_WAIT=20 \
-    -v "$here/stop-children.sh:/stop-children.sh:ro" -v "$tmp:/out" \
-    "$image" bash /stop-children.sh >/dev/null
+    -v "$tmp:/out" "$image" bash /out/stop-children.sh >/dev/null
 
 # Bystander: same keeper, same uid, own container; it must survive the first stop.
 docker run -d --name "$other" --pid host \
