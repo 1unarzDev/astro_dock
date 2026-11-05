@@ -73,13 +73,12 @@ while (($#)); do
             [[ $# -gt 0 ]] || { echo "--components requires a value" >&2; exit 2; }
             COMPONENTS="$1"
             ;;
-        --vessel|--profile|--host|--role)
+        --vessel|--host|--role)
             option="$1"
             shift
             [[ $# -gt 0 ]] || { echo "$option requires a value" >&2; exit 2; }
             case "$option" in
                 --vessel) export ASTRO_VESSEL="$1" ;;
-                --profile) echo "--profile is now --vessel" >&2; export ASTRO_VESSEL="$1" ;;
                 --host) export ASTRO_HOST="$1" ;;
                 --role) ROLES+=(--role "$1") ;;
             esac
@@ -434,19 +433,15 @@ stage_clock() {
     # "lan" names the vessel's time server (the registry's time_server role, TIME_SERVER_IP) and subnet
     # (LAN_SUBNET of the profile network env); the operator role's hosts (OPERATOR_IP) have internet time.
     # Read only for the lan and operator modes: generic mode and an unmatched machine have none.
-    # "boat" is lan's old name, for one release.
-    [[ "${ASTRO_NTP_SERVER:-}" != boat ]] || { echo "ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan" >&2; ASTRO_NTP_SERVER=lan; }
-    [[ "$allow" != boat ]] || { echo "ASTRO_NTP_ALLOW=boat is now ASTRO_NTP_ALLOW=lan" >&2; allow=lan; }
     if [[ "${ASTRO_NTP_SERVER:-}" == lan || "$allow" == lan || "$allow" == operator ]]; then
         local env
         env="$(network_env)" || { echo "ASTRO_NTP_SERVER/ASTRO_NTP_ALLOW lan and operator need the vessel's network env (hw.sh env)." >&2; exit 1; }
-        # TIME_SERVER, OPERATOR_TIME_SERVERS and the BOAT_ names are the old keys, read for one release.
         # One value per line: an empty server must not shift LAN_SUBNET into its place.
         { read -r lan_server; read -r lan_subnet; read -r -a operators; } < <(. "$env"
-            role() { "$SCRIPT_DIR/hw.sh" env "$1" 2>/dev/null || printf '%s\n' "$2"; }
-            role TIME_SERVER_IP "${TIME_SERVER:-${BOAT_TIME_SERVER:-}}"
-            printf '%s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}"
-            role OPERATOR_IP "${OPERATOR_TIME_SERVERS:-${BOAT_OPERATOR_TIME_SERVERS:-}}")
+            role() { "$SCRIPT_DIR/hw.sh" env "$1" 2>/dev/null || echo; }
+            role TIME_SERVER_IP
+            printf '%s\n' "${LAN_SUBNET:-}"
+            role OPERATOR_IP)
         [[ "${ASTRO_NTP_SERVER:-}" != lan || -n "$lan_server" ]] || {
             echo "ASTRO_NTP_SERVER=lan needs a time server (a registry host with the time_server role) for $env; add the role there or name the servers in ASTRO_NTP_SERVER." >&2; exit 1; }
         [[ "$allow" != lan && "$allow" != operator || -n "$lan_subnet" ]] || {
@@ -577,7 +572,7 @@ stage_clock() {
 stage_gateway() {
     local subnet gateway_ip unit hook device
     needs_profile gateway || return 0
-    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}" "$GATEWAY_IP")
+    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "${LAN_SUBNET:-}" "$GATEWAY_IP")
     heading "Boat LAN internet gateway"
     echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
     echo "persisted as astro-gateway.service. Run it only on the device that serves as the boat gateway."
@@ -642,7 +637,7 @@ EOF
 stage_boat() {
     local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
     needs_profile boat || return 0
-    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}" "$GATEWAY_IP" "$STATIC_LEASES")
+    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "${LAN_SUBNET:-}" "$GATEWAY_IP" "$STATIC_LEASES")
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
     echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"

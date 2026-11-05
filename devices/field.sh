@@ -224,7 +224,7 @@ station_take() {
     station_kernel
     need_scope
     field_init
-    subnet=$(hw_load_env "$ASTRO_NETWORK_ENV" LAN_SUBNET BOAT_SUBNET; printf '%s' "${LAN_SUBNET:-${BOAT_SUBNET:-}}")
+    subnet=$(hw_load_env "$ASTRO_NETWORK_ENV" LAN_SUBNET; printf '%s' "${LAN_SUBNET:-}")
     [[ -n $subnet ]] || die "$ASTRO_NETWORK_ENV has no LAN_SUBNET"
     link=$(field_py link "$subnet") || exit 1
     eval "$link"
