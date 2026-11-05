@@ -68,6 +68,16 @@ class BuildTest(unittest.TestCase):
         self.assertFalse((self.ws / 'build/pkg/CMakeCache.txt').exists())
         self.assertIn('image sha256:b', (self.ws / '.astro-build').read_text())
 
+    def test_from_clean_builds_the_whole_workspace_not_the_selection(self):
+        # hot's --packages-select after colcon_defaults.yaml changed: a clean must not leave the others uninstalled
+        run_body(self.ws, self.log, ASTRO_BUILD_IMAGE='sha256:a')
+        (self.ws / 'colcon_defaults.yaml').write_text('build: {parallel-workers: 1}\n')
+        self.log.write_text('')
+        stale = run_body(self.ws, self.log, ASTRO_BUILD_IMAGE='sha256:a')
+        self.assertEqual(stale.returncode, 0, stale.stderr)
+        self.assertIn('building the whole workspace, not only: --packages-select pkg', stale.stdout)
+        self.assertEqual(self.log.read_text().strip(), 'colcon build --symlink-install')
+
     def test_no_image_never_cleans_and_unstamped_cleans_only_when_asked(self):
         (self.ws / 'build/pkg').mkdir(parents=True)
         (self.ws / 'build/pkg/keep').write_text('')
