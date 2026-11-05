@@ -5,7 +5,8 @@
 # the keeper's cleanup, not an instant SIGKILL). A keeper with a child (a bag recorder stand-in, which
 # gets TERM from stop-children.sh as well as the keeper's own SIGINT) must see that child finish its
 # slower cleanup before the container exits. The same keeper in a second --pid host container must NOT
-# be signalled (mount-namespace filter).
+# be signalled (mount-namespace filter). An open interactive shell (TERM-ignoring, on a terminal) must not
+# hold the stop for KEEPER_WAIT.
 # Usage: stop-test.sh [image]   (needs bash and pgrep in the image; default archlinux)
 set -euo pipefail
 
@@ -52,6 +53,7 @@ sleep 1
 docker exec -d "$name" bash /out/fake-keeper.sh
 docker exec -d "$name" bash /out/parent-keeper.sh
 docker exec -d "$other" bash /out/fake-keeper.sh
+docker exec -dt "$name" bash -i                   # an open interactive shell: ignores TERM, gets hung up
 sleep 1
 
 start=$SECONDS
@@ -64,5 +66,7 @@ echo "ok: docker stop reached the exec'd keeper (${elapsed}s)"
 [[ "$(cat "$tmp/parent" 2>/dev/null)" == parent-ran ]] || { echo "FAIL: the keeper with a child never finished"; exit 1; }
 ((elapsed >= 3)) || { echo "FAIL: the stop (${elapsed}s) did not outlast the child's 3s cleanup"; exit 1; }
 echo "ok: a keeper's child got TERM with its keeper and finished its cleanup before the container exited"
+((elapsed < 15)) || { echo "FAIL: the stop (${elapsed}s) waited out KEEPER_WAIT on the interactive shell"; exit 1; }
+echo "ok: an open interactive shell did not hold the stop"
 [[ ! -e "$tmp/other/marker" ]] || { echo "FAIL: keeper in another container was signalled"; exit 1; }
 echo "ok: keeper in another --pid host container was left alone"
