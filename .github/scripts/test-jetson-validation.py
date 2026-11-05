@@ -45,7 +45,7 @@ with open(os.environ['MOCK_LOG'], 'a') as stream:
 if args[:2] == ['image', 'inspect']:
     print('arm64' if 'Architecture' in args[3]
           else os.environ['MOCK_JETPACK'])
-if args[0] == 'inspect' and args[-1] == 'roboboat_dev':
+if args[0] == 'ps' and 'label=com.docker.compose.service=dev' in args:
     print('astro_dock_devcontainer')
 if args[:2] == ['volume', 'ls']:
     filters = ' '.join(args)

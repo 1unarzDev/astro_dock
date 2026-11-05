@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # The vessel's network env (its profile.yaml network_env), as hw.sh resolves it.
 network_env() { "$SCRIPT_DIR/hw.sh" env; }
+# net KEY: one value of that env or a registry role key (<ROLE>_IP), empty when it has neither. Read by
+# hw.sh env KEY, never sourced: the file is data, not shell code.
+net() { "$SCRIPT_DIR/hw.sh" env "$1" 2>/dev/null || true; }
 # The profile root (empty in generic mode: no profile set configured; ./hw.sh profile sync URL [REF]).
 PROFILE_ROOT_CHECKED=false
 PROFILE_ROOT=""
@@ -21,13 +24,8 @@ needs_profile() {
     SKIPPED+=("$1")
     return 1
 }
-# The dev container: the running `dev` service of the Compose project (hosts.yaml compose_project).
-dev_container() {
-    local project
-    project="${ASTRO_COMPOSE_PROJECT:-$("$SCRIPT_DIR/hw.sh" hosts project 2>/dev/null || true)}"
-    docker ps -q --filter "label=com.docker.compose.project=${project:-astro_dock_devcontainer}" \
-        --filter label=com.docker.compose.service=dev 2>/dev/null | head -1
-}
+# The running dev container of this checkout, by its name (devices/lib.sh hw_dev_container).
+dev_container() { ( source "$SCRIPT_DIR/devices/lib.sh" && hw_dev_container "$SCRIPT_DIR" ); }
 
 DRY_RUN=false
 ASSUME_YES=false
@@ -51,7 +49,7 @@ Usage: ./setup.linux.sh [options]
 
 Options:
   --dry-run                 Print commands without running them
-  --components LIST         clock,docker,gpu,devices,devtools,deps,compose,repos,gateway,boat,jetson,operator-key
+  --components LIST         clock,docker,gpu,devices,devtools,deps,mdns,compose,repos,gateway,boat,jetson,operator-key
   --vessel NAME             The vessel profile (default: this machine's, as ./hw.sh whoami finds it)
   --host NAME               This machine's registry host, or any other name for a generic control
                             station (default: found by hostname, MAC or boat-LAN address)
@@ -73,13 +71,12 @@ while (($#)); do
             [[ $# -gt 0 ]] || { echo "--components requires a value" >&2; exit 2; }
             COMPONENTS="$1"
             ;;
-        --vessel|--profile|--host|--role)
+        --vessel|--host|--role)
             option="$1"
             shift
             [[ $# -gt 0 ]] || { echo "$option requires a value" >&2; exit 2; }
             case "$option" in
                 --vessel) export ASTRO_VESSEL="$1" ;;
-                --profile) echo "--profile is now --vessel" >&2; export ASTRO_VESSEL="$1" ;;
                 --host) export ASTRO_HOST="$1" ;;
                 --role) ROLES+=(--role "$1") ;;
             esac
@@ -123,6 +120,20 @@ approve() {
     local answer
     read -r -p "$prompt [y/N] " answer
     [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+# pkg_mgr: this host's package manager (pacman, apt or dnf); pkg_install PKG...: install with it.
+pkg_mgr() {
+    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then echo pacman
+    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then echo apt
+    else echo dnf; fi
+}
+pkg_install() {
+    case "$(pkg_mgr)" in
+        pacman) run sudo pacman -S --needed --noconfirm "$@" ;;
+        apt) run sudo apt-get update && run sudo apt-get install -y "$@" ;;
+        dnf) run sudo dnf -y install "$@" ;;
+    esac
 }
 
 heading() {
@@ -215,7 +226,7 @@ stage_docker() {
     if docker compose version >/dev/null 2>&1; then
         echo "Docker and Compose are installed; keeping them."
     elif [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -Syu --needed --noconfirm docker docker-buildx docker-compose
+        pkg_install docker docker-buildx docker-compose
     elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
         install_docker_debian
     elif [[ "$OS_ID" == fedora ]] || [[ "$OS_LIKE" == *rhel* ]] || [[ "$OS_ID" =~ ^(rhel|rocky|almalinux)$ ]]; then
@@ -249,20 +260,16 @@ stage_gpu() {
     local before
     if command -v nvidia-ctk >/dev/null 2>&1; then
         echo "NVIDIA Container Toolkit is installed; keeping it."
-    elif [[ -e /etc/apt/sources.list.d/nvidia-l4t-apt-source.list ]]; then
-        # JetPack's own apt source carries the toolkit build matched to L4T.
-        run sudo apt-get update
-        run sudo apt-get install -y nvidia-container-toolkit
-    elif [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -Syu --needed --noconfirm nvidia-container-toolkit
-    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
-        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null"
-        run sudo apt-get update
-        run sudo apt-get install -y nvidia-container-toolkit
     else
-        run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null"
-        run sudo dnf -y install nvidia-container-toolkit
+        # JetPack's own apt source carries the toolkit build matched to L4T; Arch packages it.
+        if [[ -e /etc/apt/sources.list.d/nvidia-l4t-apt-source.list ]]; then :
+        elif [[ "$(pkg_mgr)" == apt ]]; then
+            run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
+            run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null"
+        elif [[ "$(pkg_mgr)" == dnf ]]; then
+            run_shell "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null"
+        fi
+        pkg_install nvidia-container-toolkit
     fi
     before="$(cat /etc/docker/daemon.json 2>/dev/null || true)"
     run sudo nvidia-ctk runtime configure --runtime="$RUNTIME"
@@ -311,28 +318,33 @@ stage_devices() {
 }
 
 # Avahi, so NAME.local resolves; a boat host advertises only its IPv4 boat address (the boat
-# LAN has no routable IPv6, and link-local AAAA answers hang clients), a dev host resolves.
+# LAN has no routable IPv6, and link-local AAAA answers hang clients), a dev host resolves. nsswitch's
+# hosts: line keeps its entries and gains mdns4_minimal after files once (a backup first).
 ensure_mdns() {
-    local role="$1" conf=/etc/avahi/avahi-daemon.conf
+    local role="$1" conf=/etc/avahi/avahi-daemon.conf nss=${HW_NSSWITCH:-/etc/nsswitch.conf}  # HW_NSSWITCH: tests
     if ! command -v avahi-daemon >/dev/null 2>&1 \
         || [[ -z "$(find /lib* /usr/lib* -maxdepth 2 -name libnss_mdns4_minimal.so.2 -print -quit 2>/dev/null)" ]]; then
-        if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-            run sudo pacman -S --needed --noconfirm avahi nss-mdns
-        elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-            run sudo apt-get install -y avahi-daemon libnss-mdns
-        else
-            run sudo dnf -y install avahi nss-mdns
-        fi
+        if [[ "$(pkg_mgr)" == apt ]]; then pkg_install avahi-daemon libnss-mdns; else pkg_install avahi nss-mdns; fi
     fi
     run sudo systemctl enable --now avahi-daemon
     if [[ "$role" == boat ]] && ! { grep -qx 'use-ipv6=no' "$conf" && grep -qx 'publish-aaaa-on-ipv4=no' "$conf"; }; then
         run sudo sed -i -e 's/^#\?use-ipv6=.*/use-ipv6=no/' -e 's/^#\?publish-aaaa-on-ipv4=.*/publish-aaaa-on-ipv4=no/' "$conf"
         run sudo systemctl restart avahi-daemon
     fi
-    if ! grep -Eq '^hosts:.*\bmdns' /etc/nsswitch.conf; then
-        run sudo cp -n /etc/nsswitch.conf /etc/nsswitch.conf.astro-bak
-        run sudo sed -i 's/^\(hosts:.*\bfiles\)/\1 mdns4_minimal [NOTFOUND=return]/' /etc/nsswitch.conf
+    if ! grep -Eq '^hosts:.*\bmdns' "$nss"; then
+        run sudo cp -n "$nss" "$nss.astro-bak"
+        run sudo sed -i 's/^\(hosts:.*\bfiles\)/\1 mdns4_minimal [NOTFOUND=return]/' "$nss"
     fi
+}
+
+stage_mdns() {
+    heading "mDNS (.local names)"
+    echo "This installs Avahi and nss-mdns, enables avahi-daemon and adds mdns4_minimal to nsswitch's hosts: line."
+    echo "A boat host's IPv4-only Avahi settings come from --components boat (this stage leaves them as they are)."
+    $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(mdns); return; }
+    approve "Set up mDNS name resolution?" || { SKIPPED+=(mdns); return; }
+    ensure_mdns dev
+    COMPLETED+=(mdns)
 }
 
 stage_devtools() {
@@ -341,14 +353,7 @@ stage_devtools() {
     echo "It does not install VS Code, Node, or clone repositories."
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(devtools); return; }
     approve "Install host developer tools?" || { SKIPPED+=(devtools); return; }
-    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -Syu --needed --noconfirm $("$SCRIPT_DIR/devices/deps.sh" packages pacman)
-    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-        run sudo apt-get update
-        run sudo apt-get install -y $("$SCRIPT_DIR/devices/deps.sh" packages apt)
-    else
-        run sudo dnf -y install $("$SCRIPT_DIR/devices/deps.sh" packages dnf)
-    fi
+    pkg_install $("$SCRIPT_DIR/devices/deps.sh" packages "$(pkg_mgr)")
     ensure_mdns dev
     run "$SCRIPT_DIR/devices/deps.sh" hooks
     COMPLETED+=(devtools)
@@ -360,13 +365,7 @@ stage_deps() {
     echo "This installs the host tools the repos declare in their deps.yaml (missing now: $("$SCRIPT_DIR/devices/deps.sh" missing | tr '\n' ' ')) and sets the git hooks that recommend this after a pull."
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(deps); return; }
     approve "Install the declared host tools?" || { SKIPPED+=(deps); return; }
-    if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-        run sudo pacman -S --needed --noconfirm $("$SCRIPT_DIR/devices/deps.sh" packages pacman)
-    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-        run sudo apt-get install -y $("$SCRIPT_DIR/devices/deps.sh" packages apt)
-    else
-        run sudo dnf -y install $("$SCRIPT_DIR/devices/deps.sh" packages dnf)
-    fi
+    pkg_install $("$SCRIPT_DIR/devices/deps.sh" packages "$(pkg_mgr)")
     run "$SCRIPT_DIR/devices/deps.sh" hooks
     COMPLETED+=(deps)
 }
@@ -380,10 +379,10 @@ stage_compose() {
 }
 
 # This computer's repositories (./hw.sh hosts repos: repos.all and its roles'): clone the missing ones
-# under src/, keep them out of git status, then build them here when colcon is on PATH, else in the
-# dev container. The profile set names them (hw.sh checks out a configured one on first use).
+# under src/, keep them out of git status, then build them (hw.sh build) here when colcon is on PATH, else
+# in the dev container. The profile set names them (hw.sh checks out a configured one on first use).
 stage_repos() {
-    local list name url branch exclude names=() build container
+    local list name url branch exclude names=() build container pkgs
     heading "Workspace repositories"
     needs_profile repos || return 0
     list="$("$SCRIPT_DIR/hw.sh" hosts repos "${ROLES[@]}")" || { SKIPPED+=(repos); return; }
@@ -406,16 +405,21 @@ stage_repos() {
         $DRY_RUN || echo "/src/$name/" >>"$exclude"
     done <<<"$list"
     ((${#names[@]})) || { SKIPPED+=(repos-build); return; }
-    build="colcon build --symlink-install --packages-up-to \$(colcon list --names-only --base-paths ${names[*]})"
+    # Their packages (package.xml names) and what they depend on, in the workspace's one build (hw.sh build).
+    # A directory with COLCON_IGNORE (or AMENT_/CATKIN_IGNORE) hides its tree from colcon, so from this list too.
+    pkgs=($(cd "$SCRIPT_DIR" && find "${names[@]}" -type d -exec sh -c \
+        'for i in COLCON_IGNORE AMENT_IGNORE CATKIN_IGNORE; do [ ! -e "$1/$i" ] || exit 0; done; exit 1' _ {} \; -prune \
+        -o -name package.xml -exec grep -m1 -ohP '<name>\s*\K[^<\s]+' {} + 2>/dev/null | sort -u || true))
+    build=()
     if command -v colcon >/dev/null 2>&1; then
-        (cd "$SCRIPT_DIR" && run bash -c "$build")
+        build=(--ws "$SCRIPT_DIR")
     elif container="$(dev_container)" && [[ -n "$container" ]]; then
-        # BASH_ENV gives docker exec's bash the ROS environment.
-        run docker exec "$container" bash -c "cd \"\$ROS_WS\" && $build"
+        build=(--container "$container")
     else
-        echo "Start the dev container (the Compose dev service), then build inside it: $build" >&2
+        echo "Start the dev container (the Compose dev service), then build: ./hw.sh build --container NAME -- --packages-up-to ${pkgs[*]}" >&2
         SKIPPED+=(repos-build)
     fi
+    if ((${#build[@]} && ${#pkgs[@]})); then run "$SCRIPT_DIR/hw.sh" build "${build[@]}" -- --packages-up-to "${pkgs[@]}"; fi
     COMPLETED+=(repos)
 }
 
@@ -434,19 +438,11 @@ stage_clock() {
     # "lan" names the vessel's time server (the registry's time_server role, TIME_SERVER_IP) and subnet
     # (LAN_SUBNET of the profile network env); the operator role's hosts (OPERATOR_IP) have internet time.
     # Read only for the lan and operator modes: generic mode and an unmatched machine have none.
-    # "boat" is lan's old name, for one release.
-    [[ "${ASTRO_NTP_SERVER:-}" != boat ]] || { echo "ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan" >&2; ASTRO_NTP_SERVER=lan; }
-    [[ "$allow" != boat ]] || { echo "ASTRO_NTP_ALLOW=boat is now ASTRO_NTP_ALLOW=lan" >&2; allow=lan; }
     if [[ "${ASTRO_NTP_SERVER:-}" == lan || "$allow" == lan || "$allow" == operator ]]; then
         local env
         env="$(network_env)" || { echo "ASTRO_NTP_SERVER/ASTRO_NTP_ALLOW lan and operator need the vessel's network env (hw.sh env)." >&2; exit 1; }
-        # TIME_SERVER, OPERATOR_TIME_SERVERS and the BOAT_ names are the old keys, read for one release.
-        # One value per line: an empty server must not shift LAN_SUBNET into its place.
-        { read -r lan_server; read -r lan_subnet; read -r -a operators; } < <(. "$env"
-            role() { "$SCRIPT_DIR/hw.sh" env "$1" 2>/dev/null || printf '%s\n' "$2"; }
-            role TIME_SERVER_IP "${TIME_SERVER:-${BOAT_TIME_SERVER:-}}"
-            printf '%s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}"
-            role OPERATOR_IP "${OPERATOR_TIME_SERVERS:-${BOAT_OPERATOR_TIME_SERVERS:-}}")
+        lan_server="$(net TIME_SERVER_IP)" lan_subnet="$(net LAN_SUBNET)"
+        read -r -a operators <<<"$(net OPERATOR_IP)"
         [[ "${ASTRO_NTP_SERVER:-}" != lan || -n "$lan_server" ]] || {
             echo "ASTRO_NTP_SERVER=lan needs a time server (a registry host with the time_server role) for $env; add the role there or name the servers in ASTRO_NTP_SERVER." >&2; exit 1; }
         [[ "$allow" != lan && "$allow" != operator || -n "$lan_subnet" ]] || {
@@ -496,16 +492,7 @@ stage_clock() {
     fi
     approve "Enable host time synchronization?" || { SKIPPED+=(clock); return; }
     if $switch; then
-        if ! command -v chronyd >/dev/null && [[ ! -x /usr/sbin/chronyd ]]; then
-            if [[ "$OS_ID" == arch ]] || [[ "$OS_LIKE" == *arch* ]]; then
-                run sudo pacman -S --needed --noconfirm chrony
-            elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]] || [[ "$OS_LIKE" == *debian* ]]; then
-                run sudo apt-get update
-                run sudo apt-get install -y chrony
-            else
-                run sudo dnf -y install chrony
-            fi
-        fi
+        command -v chronyd >/dev/null || [[ -x /usr/sbin/chronyd ]] || pkg_install chrony
         if systemctl is-enabled --quiet systemd-timesyncd 2>/dev/null || systemctl is-active --quiet systemd-timesyncd; then
             run sudo systemctl disable --now systemd-timesyncd
         fi
@@ -577,7 +564,8 @@ stage_clock() {
 stage_gateway() {
     local subnet gateway_ip unit hook device
     needs_profile gateway || return 0
-    read -r subnet gateway_ip < <(. "$(network_env)"; printf '%s %s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}" "$GATEWAY_IP")
+    network_env >/dev/null || exit 1
+    subnet="$(net LAN_SUBNET)" gateway_ip="$(net GATEWAY_IP)"
     heading "Boat LAN internet gateway"
     echo "Forwards and NATs $subnet through this host's normal routing (WARP when connected),"
     echo "persisted as astro-gateway.service. Run it only on the device that serves as the boat gateway."
@@ -640,9 +628,10 @@ EOF
 }
 
 stage_boat() {
-    local subnet gateway_ip leases lease candidate type device="" address uuid mac reserved="" saved session_device session_ip
+    local subnet gateway_ip env lease_mac lease_ip candidate type device="" address uuid mac reserved="" saved session_device session_ip
     needs_profile boat || return 0
-    read -r subnet gateway_ip leases < <(. "$(network_env)"; printf '%s %s %s\n' "${LAN_SUBNET:-${BOAT_SUBNET:-}}" "$GATEWAY_IP" "$STATIC_LEASES")
+    env="$(network_env)" || exit 1
+    subnet="$(net LAN_SUBNET)" gateway_ip="$(net GATEWAY_IP)"
     heading "Boat LAN computer"
     echo "Moves the wired boat link (the one addressed in $subnet) to the router's DHCP reservation"
     echo "under a 120 s auto-revert, turns Wi-Fi off once that link is up and this session is not"
@@ -672,10 +661,10 @@ stage_boat() {
         [[ "$session_device" == "$device" ]] \
             && echo "This session runs over $device; run on the console or under systemd-run/tmux so a dropped link cannot stop the setup." >&2
         uuid="$(nmcli -g GENERAL.CON-UUID device show "$device")"
-        mac="$(cat "/sys/class/net/$device/address")"
-        for lease in $leases; do
-            [[ "${lease%%=*}" == "${mac,,}" ]] && reserved="${lease##*=}"
-        done
+        mac="$(cat "${HW_SYSFS_NET:-/sys/class/net}/$device/address")"
+        while read -r lease_mac _ lease_ip; do
+            [[ "$lease_mac" == "${mac,,}" ]] && reserved="$lease_ip"
+        done < <(python3 -I "$SCRIPT_DIR/devices/profile.py" leases "$env")
         if [[ "$(nmcli -g ipv4.method,ipv4.addresses connection show uuid "$uuid" | tr '\n' ' ')" == "auto  " ]]; then
             echo "$device already takes DHCP (${address%/*})."
         else
@@ -696,7 +685,7 @@ stage_boat() {
             fi
             run sudo systemctl stop astro-boat-revert.timer
         fi
-        [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in $(network_env) for a fixed address." >&2
+        [[ -z "$reserved" ]] && echo "Add $mac to STATIC_LEASES in $env for a fixed address." >&2
     fi
     if [[ -z "$device" ]]; then
         echo "Leaving Wi-Fi on: no wired boat link."
@@ -770,6 +759,7 @@ main() {
     has_component devices && stage_devices
     has_component devtools && stage_devtools
     has_component deps && stage_deps
+    has_component mdns && stage_mdns
     has_component compose && stage_compose
     has_component repos && stage_repos
     has_component gateway && stage_gateway

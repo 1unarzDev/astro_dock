@@ -3,5 +3,3 @@ driver: jetson/l4t
 family: jetson-jp6-jazzy
 image: example/astro
 gateway: gateway                # the registry role of the ssh hop; "" = direct
-validator: .devcontainer/boat-validate.sh
-workflow: promote-jetson.yml

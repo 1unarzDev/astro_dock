@@ -1,6 +1,7 @@
 """hw.sh build (devices/build.sh) and hw.sh image (.devcontainer/dev-image.sh) with stand-ins: a colcon that
 records its arguments, a docker that answers from fixtures. Nothing is built or pulled."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -67,6 +68,16 @@ class BuildTest(unittest.TestCase):
         self.assertFalse((self.ws / 'build/pkg/CMakeCache.txt').exists())
         self.assertIn('image sha256:b', (self.ws / '.astro-build').read_text())
 
+    def test_from_clean_builds_the_whole_workspace_not_the_selection(self):
+        # hot's --packages-select after colcon_defaults.yaml changed: a clean must not leave the others uninstalled
+        run_body(self.ws, self.log, ASTRO_BUILD_IMAGE='sha256:a')
+        (self.ws / 'colcon_defaults.yaml').write_text('build: {parallel-workers: 1}\n')
+        self.log.write_text('')
+        stale = run_body(self.ws, self.log, ASTRO_BUILD_IMAGE='sha256:a')
+        self.assertEqual(stale.returncode, 0, stale.stderr)
+        self.assertIn('building the whole workspace, not only: --packages-select pkg', stale.stdout)
+        self.assertEqual(self.log.read_text().strip(), 'colcon build --symlink-install')
+
     def test_no_image_never_cleans_and_unstamped_cleans_only_when_asked(self):
         (self.ws / 'build/pkg').mkdir(parents=True)
         (self.ws / 'build/pkg/keep').write_text('')
@@ -102,6 +113,21 @@ class BuildTest(unittest.TestCase):
         done = run_body(self.ws, self.log, ASTRO_BUILD_IMAGE='sha256:a')
         self.assertNotEqual(done.returncode, 0)
         self.assertFalse((self.ws / '.astro-build').exists())
+
+    def test_the_workspace_has_one_build(self):
+        # hosts apply, hot and setup's repos stage run this body; no script runs colcon build itself
+        # (log, echo and help text naming it is fine). hw.sh overlay builds a worktree overlay, not the workspace.
+        scripts = [ROOT / 'hw.sh', ROOT / 'setup.linux.sh', *(ROOT / 'devices').rglob('*.sh')]
+        for path in scripts:
+            if path.name in ('build.sh', 'overlay.sh'):
+                continue
+            for n, line in enumerate(path.read_text().splitlines(), 1):
+                code = line.split('#', 1)[0]
+                if 'colcon build' in code and not re.search(r'\b(log|echo|die)\b|^\s*"', code):
+                    self.fail(f'{path.relative_to(ROOT)}:{n} runs colcon build outside devices/build.sh')
+        for path in ('devices/field.sh', 'devices/hosts/fleet.sh'):
+            self.assertIn('hw_build_body', (ROOT / path).read_text())
+        self.assertIn('hw.sh" build', (ROOT / 'setup.linux.sh').read_text())
 
 
 class ImageTest(unittest.TestCase):

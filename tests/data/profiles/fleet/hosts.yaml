@@ -9,7 +9,7 @@ sources:
   beta: {url: https://example.invalid/beta.git, branch: ros2}
   gamma: {url: https://example.invalid/gamma.git}
   delta: {url: https://example.invalid/delta.git}
-compose_project: fixture_project
+container: {name: fixture_dev, alias: fixture, config_dir: fixture}   # the dev container's names
 operator_heartbeat: ros2 run gamma beacon
 operator_key: fixture/ssh
-operator_registry: fixture/devices.yaml
+station_file: fixture/station.yaml

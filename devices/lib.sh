@@ -19,11 +19,29 @@ hw_load_env() {
     done <"$1"
 }
 
+# hw_compose_default ROOT VAR: the default ROOT/.devcontainer/docker-compose.yml gives ${VAR:-default}.
+hw_compose_default() { sed -n "s/.*\${$2:-\([^}]*\)}.*/\1/p" "$1/.devcontainer/docker-compose.yml" | head -n1; }
+
+# hw_dev_name ROOT [VAR]: a dev container name (VAR, default ASTRO_CONTAINER) as Compose resolves it for the
+# checkout ROOT: the environment, else ROOT/.devcontainer/.env's (prebuild.sh writes the hosts profile's names
+# there), else docker-compose.yml's default.
+hw_dev_name() {
+    local var=${2:-ASTRO_CONTAINER} name
+    name=${!var:-}
+    [[ -n $name ]] || name=$(sed -n "s/^$var=//p" "$1/.devcontainer/.env" 2>/dev/null | tail -n1)
+    printf '%s' "${name:-$(hw_compose_default "$1" "$var")}"
+}
+
+# hw_dev_container ROOT: the ID of the running dev container of the checkout ROOT (none when it is down).
+hw_dev_container() {
+    ${HW_DOCKER:-docker} ps -q --filter "name=^$(hw_dev_name "$1")\$" 2>/dev/null | head -n1
+}
+
 # hw_secrets: the secrets file (ASTRO_SECRETS, default ~/.config/astro/secrets.env), refused unless
 # private (mode 600 or 400) and outside every git work tree (a symlink is followed: one commit or
-# `git add -f` away from a remote), then a legacy astro_dock/.env (ASTRO_ENV_FILE) with a warning, for one release.
+# `git add -f` away from a remote).
 hw_secrets() {
-    local legacy=${ASTRO_ENV_FILE:-$HW_ROOT/.env} mode real
+    local mode real
     HW_SECRETS=${ASTRO_SECRETS:-${XDG_CONFIG_HOME:-$HOME/.config}/astro/secrets.env}
     if [[ -e $HW_SECRETS ]]; then
         mode=$(stat -L -c %a -- "$HW_SECRETS") || die "Cannot stat $HW_SECRETS"
@@ -33,10 +51,6 @@ hw_secrets() {
             die "$HW_SECRETS resolves to $real, inside a git work tree; move it to ~/.config/astro/secrets.env (mode 600)"
         fi
         hw_load_env "$HW_SECRETS"
-    fi
-    if [[ -f $legacy && -s $legacy ]]; then
-        warn "Reading the legacy $legacy; move its keys to $HW_SECRETS (mode 600) and remove it"
-        hw_load_env "$legacy"
     fi
 }
 
@@ -111,9 +125,9 @@ hw_profiles_root() {
 # the root loads and is checked; resolution picks this machine's host (--host/ASTRO_HOST, else hostname or
 # a permanent MAC in a registry's STATIC_LEASES) and vessel (--vessel/ASTRO_VESSEL, else the host's). A host
 # with the operator role, an unlisted --host NAME, or an unlisted machine with an address on exactly one
-# vessel's LAN_SUBNET (BOAT_SUBNET, its old name) is a control station (HW_SELF_MEMBER, the fleet's station member; HW_SELF_ROLES);
+# vessel's LAN_SUBNET is a control station (HW_SELF_MEMBER, the fleet's station member; HW_SELF_ROLES);
 # a boat computer never is.
-# ASTRO_PROFILE is the vessel's old name, for one release. ASTRO_PROFILE_DIR (a directory) is for tests.
+# ASTRO_PROFILE_DIR (a directory) is for tests.
 # Sets HW_PROFILE (the vessel's directory, else the fleet's), HW_PROFILE_CHAIN, HW_PROFILE_KINDS,
 # HW_SCOPE_ERROR (non-empty without a vessel), ASTRO_HOST, ASTRO_VESSEL, ASTRO_NETWORK_ENV and
 # ASTRO_REGISTRY (absolute, or empty). Without a profile root (generic mode) HW_PROFILES_ROOT is empty.
@@ -122,10 +136,6 @@ hw_init() {
     hw_secrets
     hw_profiles_config
     HW_PROFILES_ROOT='' HW_SCOPE_ERROR='' HW_PROFILE_KINDS='' HW_PROFILE_CHAIN=''
-    if [[ -n ${ASTRO_PROFILE:-} && -z ${ASTRO_VESSEL:-} ]]; then
-        warn "ASTRO_PROFILE/--profile is now ASTRO_VESSEL/--vessel"
-        ASTRO_VESSEL=$ASTRO_PROFILE
-    fi
     export ASTRO_HOST=${ASTRO_HOST:-} ASTRO_VESSEL=${ASTRO_VESSEL:-}
     if [[ -n ${ASTRO_PROFILE_DIR:-} ]]; then
         HW_PROFILE=$ASTRO_PROFILE_DIR HW_PROFILES_ROOT=$(dirname -- "$ASTRO_PROFILE_DIR")

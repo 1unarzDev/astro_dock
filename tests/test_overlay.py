@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null', PYTHONPATH='/base',
+ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent', PYTHONPATH='/base',
            GIT_CONFIG_GLOBAL='/dev/null', GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t',
            GIT_COMMITTER_EMAIL='t@t')
 

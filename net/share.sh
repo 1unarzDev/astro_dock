@@ -2,11 +2,11 @@
 set -euo pipefail
 
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-    echo "Usage: net/share.sh   create a Samba share, mount it via fstab and advertise it and ssh over mDNS (asks; sudo)"
+    echo "Usage: net/share.sh   create a Samba share and mount it via fstab (asks; sudo). Its HOST.local name: ./setup.linux.sh --components mdns"
     exit 0
 fi
 
-echo "=== Network Scan Folder & mDNS Setup Script ==="
+echo "=== Network Share Setup ==="
 
 # -------------------------------
 # Prompt for variables
@@ -27,46 +27,13 @@ echo "Determining Linux distro..."
 . /etc/os-release
 
 if [[ "$ID" == "arch" || "$ID_LIKE" == *"arch"* ]]; then
-    echo "[Arch-based distro] Installing required packages..."
-    sudo pacman -Syu --noconfirm samba cifs-utils avahi nss-mdns
-
-    NSS_LINE="hosts: mymachines resolve [!UNAVAIL=return] files myhostname mdns_minimal [NOTFOUND=return] dns"
+    sudo pacman -S --needed --noconfirm samba cifs-utils
 elif [[ "$ID" == "ubuntu" || "$ID" == "debian" || "$ID_LIKE" == *"debian"* ]]; then
-    echo "[Debian-based distro] Installing required packages..."
-    sudo apt update
-    sudo apt install -y samba cifs-utils avahi-daemon avahi-utils libnss-mdns
-
-    NSS_LINE="hosts: files mdns4_minimal [NOTFOUND=return] dns"
+    sudo apt-get update && sudo apt-get install -y samba cifs-utils
 else
     echo "Unsupported distro: $ID"
     exit 1
 fi
-
-# -------------------------------
-# Setup Avahi (mDNS)
-# -------------------------------
-echo "Enabling and starting Avahi daemon..."
-sudo systemctl enable --now avahi-daemon
-
-echo "Creating Avahi SSH service..."
-sudo mkdir -p /etc/avahi/services
-sudo tee /etc/avahi/services/ssh.service > /dev/null <<EOF
-<?xml version="1.0" standalone='no'?>
-<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-<service-group>
-  <name replace-wildcards="yes">%h</name>
-  <service>
-    <type>_ssh._tcp</type>
-    <port>22</port>
-  </service>
-</service-group>
-EOF
-
-sudo systemctl restart avahi-daemon
-
-echo "Configuring /etc/nsswitch.conf for mDNS..."
-sudo cp /etc/nsswitch.conf /etc/nsswitch.conf.bak
-sudo sed -i "/^hosts:/c\\$NSS_LINE" /etc/nsswitch.conf
 
 # -------------------------------
 # Create network folder and configure Samba
@@ -150,7 +117,7 @@ echo "Mount point: $MOUNT_POINT"
 echo ""
 echo "Access this folder on your local network from other devices via:"
 echo "  SMB: \\\\$IP_ADDR\\$SHARE_NAME"
-echo "  mDNS: \\\\$HOSTNAME.local\\$SHARE_NAME"
+echo "  mDNS: \\\\$HOSTNAME.local\\$SHARE_NAME (once ./setup.linux.sh --components mdns ran)"
 echo ""
 echo "You can also access it locally at $MOUNT_POINT"
 echo "======================================"

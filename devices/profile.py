@@ -29,8 +29,13 @@ env key of the same name wins.
                                   (default: the profile's own network env; else stays as written), so no
                                   secret shows
   profile.py value ENV REGISTRY KEY  one value of ENV or a role key (fails when neither has KEY)
-  profile.py roles REGISTRY HOST  the registry roles of HOST, one per line
-  profile.py hosts REGISTRY ROLE  the registry hosts with ROLE, one per line
+  profile.py leases ENV           ENV's STATIC_LEASES (see leases()): MAC HOST ADDRESS per line, MAC lower case
+  profile.py roles REGISTRY [HOST]  the registry roles of HOST, else every role it names (its roles: and
+                                  the hosts'), one per line
+  profile.py hosts REGISTRY ENV [ROLE]
+                                  the registry hosts (those with ROLE), one tab-separated line each:
+                                  name user address ssh(yes|no) container workspace via roles; '-' for
+                                  none, roles space-separated (see hosts())
 
 Kind keys join with '_' under HW_ (upper case, other characters become '_'): devices.rocket.address is
 HW_DEVICES_ROCKET_ADDRESS. Lists join with spaces; each mapping also gets HW_<PATH>__KEYS.
@@ -218,18 +223,46 @@ def network(path):
     return env
 
 
-def role_keys(registry, env):
-    """{<ROLE>_IP: its hosts' addresses} from a registry over a network env (see the module doc)."""
-    leases = {e.split('=')[1]: e.split('=')[2] for e in env.get('STATIC_LEASES', '').split() if e.count('=') == 2}
+def leases(env):
+    """STATIC_LEASES of a network env (MAC=HOST=ADDRESS words): [(mac, host, address)], MACs lower case."""
+    return [(mac.lower(), host, address) for mac, host, address in
+            (e.split('=') for e in env.get('STATIC_LEASES', '').split() if e.count('=') == 2)]
+
+
+def hosts(registry, env, local=True):
+    """The registry's hosts, defaults: under each: {name: {user, address, ssh, container, workspace, via,
+    roles}}. The address: the host's (a literal or a $KEY of env), else its STATIC_LEASES reservation,
+    else NAME.local (empty with local=False)."""
+    if not registry:
+        raise Error('No registry (ASTRO_REGISTRY)')
+    data = load(Path(registry))
+    defaults, entries = data.get('defaults') or {}, data.get('hosts') or {}
+    if not isinstance(defaults, dict) or not isinstance(entries, dict):
+        raise Error(f'{registry}: defaults and hosts must be mappings')
+    leased = {host: address for _, host, address in leases(env)}
     out = {}
-    for name, spec in (registry_hosts(registry) if registry else {}).items():
-        spec = spec or {}
+    for name, spec in entries.items():
+        if not isinstance(spec or {}, dict):
+            raise Error(f'{registry}:{getattr(entries, "lines", {}).get(name, 1)}: hosts.{name} must be a mapping')
+        spec = {**defaults, **(spec or {})}
         address = str(spec.get('address') or '')
         address = env.get(address[1:], '') if address.startswith('$') else address
-        address = address or leases.get(name, '')
+        out[name] = {'user': str(spec.get('user') or ''),
+                     'address': address or leased.get(name) or (f'{name}.local' if local else ''),
+                     'ssh': bool(spec.get('ssh', True)),
+                     'container': str(spec.get('container') or ''), 'workspace': str(spec.get('workspace') or ''),
+                     'via': str(spec.get('via') or ''), 'roles': [str(r) for r in spec.get('roles') or []]}
+    return out
+
+
+def role_keys(registry, env):
+    """{<ROLE>_IP: its hosts' addresses} from a registry over a network env (see the module doc)."""
+    out = {}
+    for spec in (hosts(registry, env, local=False) if registry else {}).values():
+        address = spec['address']
         if not address:
             continue
-        for role in spec.get('roles') or []:
+        for role in spec['roles']:
             key = re.sub(r'[^A-Z0-9]', '_', str(role).upper()) + '_IP'
             if address not in out.setdefault(key, []):
                 out[key].append(address)
@@ -284,13 +317,6 @@ def expanded(value, expand, where):
     return expand(value, where) if isinstance(value, str) else value
 
 
-def registry_hosts(path):
-    hosts = load(Path(path)).get('hosts') or {}
-    if not isinstance(hosts, dict):
-        raise Error(f'{path}: hosts must be a mapping')
-    return hosts
-
-
 class Root:
     """Every profile under a root, loaded and checked: one broken file fails every command."""
 
@@ -325,7 +351,7 @@ class Root:
             self.chains[name] = (dirs, meta)
             self.envs[name] = network(meta['network_env']) if meta['network_env'] else {}
             if data.get('registry'):                 # hosts belong to the member whose own file names the registry
-                self.hosts[name] = registry_hosts(data['registry'])
+                self.hosts[name] = hosts(data['registry'], self.envs[name], local=False)
         self.topology()
 
     def topology(self):
@@ -353,36 +379,23 @@ class Root:
 
     def leases(self, member):
         """STATIC_LEASES of a member's network env: {hostname: mac}."""
-        out = {}
-        for entry in self.envs[member].get('STATIC_LEASES', '').split():
-            mac, _, rest = entry.partition('=')
-            out[rest.partition('=')[0]] = mac.lower()
-        return out
+        return {host: mac for mac, host, _ in leases(self.envs[member])}
 
     def roles(self, host):
         """A host's registry roles, over every registry that lists it."""
         out = []
-        for hosts in self.hosts.values():
-            for role in ((hosts.get(host) or {}).get('roles') or []) if host in hosts else []:
-                out += [] if str(role) in out else [str(role)]
+        for listed in self.hosts.values():
+            for role in listed[host]['roles'] if host in listed else []:
+                out += [] if role in out else [role]
         return out
 
     def boat_addresses(self, member):
         """Addresses a boat computer holds on a member's LAN: {address: host}, from its STATIC_LEASES
         reservations and the registry addresses ($KEY or literal) of its hosts without the operator role."""
-        env, out = self.envs[member], {}
-        for entry in env.get('STATIC_LEASES', '').split():
-            parts = entry.split('=')
-            if len(parts) == 3:
-                out[parts[2]] = parts[1]
+        out = {address: host for _, host, address in leases(self.envs[member])}
         for name, spec in (self.hosts.get(member) or {}).items():
-            spec = spec or {}
-            if 'operator' in (spec.get('roles') or []) or not isinstance(spec.get('address'), str):
-                continue
-            address = spec['address']
-            address = env.get(address[1:], '') if address.startswith('$') else address
-            if address:
-                out.setdefault(address, name)
+            if 'operator' not in spec['roles'] and spec['address']:
+                out.setdefault(spec['address'], name)
         return out
 
     def station(self, vessel):
@@ -436,17 +449,12 @@ def local_addrs():
     return out
 
 
-def lan_subnet(env):
-    """A vessel network env's LAN_SUBNET, else BOAT_SUBNET (its old name, for one release)."""
-    return env.get('LAN_SUBNET') or env.get('BOAT_SUBNET', '')
-
-
 def boat_lan(root, vessels, addrs):
-    """[(vessel, address, subnet)] for each local address inside a vessel's LAN_SUBNET (lan_subnet)."""
+    """[(vessel, address, subnet)] for each local address inside a vessel's LAN_SUBNET."""
     out = []
     for vessel in vessels:
         try:
-            subnet = ipaddress.ip_network(lan_subnet(root.envs[vessel]), strict=False)
+            subnet = ipaddress.ip_network(root.envs[vessel].get('LAN_SUBNET', ''), strict=False)
         except ValueError:
             continue
         out += [(vessel, a, subnet) for a in addrs if a in subnet]
@@ -471,8 +479,8 @@ def resolve(root_path):
     addrs = local_addrs()
     vessels = [n for n, k in root.members.items() if k == 'vessel']
     owners = {}                                                  # host -> members listing it
-    for member, hosts in root.hosts.items():
-        for host in hosts:
+    for member, listed in root.hosts.items():
+        for host in listed:
             owners.setdefault(host, []).append(member)
 
     def operator(name):
@@ -596,16 +604,25 @@ def main(command, *args):
         for kind in kinds(dirs):
             shown[kind] = expanded(dict(resolve_kind(dirs, kind)), expand, kind)
         print(yaml.safe_dump(shown, sort_keys=False, default_flow_style=False, width=110).rstrip())
+    elif command == 'leases':
+        print('\n'.join(' '.join(lease) for lease in leases(network(args[0]))))
     elif command == 'roles':
-        registry, host = args
-        entry = registry_hosts(registry).get(host) or {}
-        print('\n'.join(str(r) for r in (entry.get('roles') or [])))
+        registry, *host = args
+        listed = hosts(registry, {})
+        if host:
+            print('\n'.join(listed.get(host[0], {}).get('roles', [])))
+        else:
+            out = [str(r) for r in load(Path(registry)).get('roles') or {}]
+            print('\n'.join(dict.fromkeys(out + [r for spec in listed.values() for r in spec['roles']])))
     elif command == 'hosts':
-        registry, role = args
-        print('\n'.join(name for name, spec in registry_hosts(registry).items()
-                        if role in ((spec or {}).get('roles') or [])))
+        registry, env_path, *role = args
+        for name, spec in hosts(registry, network(env_path)).items():
+            if not role or role[0] in spec['roles']:
+                fields = [name, spec['user'], spec['address'], 'yes' if spec['ssh'] else 'no', spec['container'],
+                          spec['workspace'], spec['via'], ' '.join(spec['roles'])]
+                print('\t'.join(f or '-' for f in fields))
     else:
-        raise Error('usage: profile.py resolve|meta|kind|value|show|roles|hosts ...')
+        raise Error('usage: profile.py resolve|meta|kind|value|show|leases|roles|hosts ...')
 
 
 if __name__ == '__main__':

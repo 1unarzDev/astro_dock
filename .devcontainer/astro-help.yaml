@@ -76,7 +76,7 @@ commands:
     params:
       - name: --components
         default: clock,docker,gpu,devices,devtools,compose
-        description: Comma-separated stages (also repos, gateway, boat, jetson, operator-key), e.g. clock,docker.
+        description: Comma-separated stages (also deps, mdns, repos, gateway, boat, jetson, operator-key), e.g. clock,docker.
       - name: --dry-run
         type: bool
         description: Print the commands without running them.
@@ -96,6 +96,7 @@ commands:
     examples:
       - ./setup.linux.sh --components clock --dry-run
       - ./setup.linux.sh --components repos --role operator
+      - ./setup.linux.sh --components mdns
 
   - name: hw.sh
     run: $ROS_WS/hw.sh
@@ -113,7 +114,7 @@ commands:
         required: false
         description: This machine's registry host.
       - name: command
-        description: whoami [--root|--registry], env [KEY], profile show [NAME], profile sync [URL [REF]], secrets check, or KIND VERB (each with --help).
+        description: whoami [--root|--registry], env [KEY], profile show [NAME], profile sync [URL [REF]], secrets check, hot REPO, station take|release, overlay PATH, pyenv PATH, build, image, or KIND VERB (each with --help).
     examples:
       - $ROS_WS/hw.sh whoami
       - $ROS_WS/hw.sh env ROUTER_IP
@@ -121,13 +122,9 @@ commands:
       - $ROS_WS/hw.sh --vessel VESSEL radio status
       - $ROS_WS/hw.sh hosts repos
 
-  - name: net/mdns.sh
-    run: $ROS_WS/net/mdns.sh
-    summary: Install and enable Avahi so NAME.local resolves on this host (run on the host, not in the container).
-
   - name: net/share.sh
     run: $ROS_WS/net/share.sh
-    summary: Create a Samba network folder advertised over mDNS (interactive; run on the host).
+    summary: Create a Samba network folder (interactive; run on the host). Its HOST.local name comes from setup.linux.sh --components mdns.
     notes: Asks for the share name, user and password; mounts it at /mnt/NAME and keeps the login in ~/.smbcredentials.
 
   - name: net/mesh.sh

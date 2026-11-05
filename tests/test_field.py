@@ -34,7 +34,7 @@ exec bash -c "$*"
 '''
 FAKE_DOCKER = '''#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_SSH_LOG"
-case $1 in ps) echo c0ffee ;; exec) cat >/dev/null ;; esac
+case $1 in ps) [[ $* != *"name=^$ASTRO_CONTAINER\$"* ]] || echo c0ffee ;; exec) cat >/dev/null ;; esac
 '''
 FAKE_SYSTEMCTL = '''#!/usr/bin/env bash
 echo "systemctl $*" >> "$FAKE_SSH_LOG"
@@ -78,10 +78,6 @@ class Logic(unittest.TestCase):
         with self.assertRaisesRegex(field.Error, 'several interfaces are on 10.0.1.0/24 .enx9 eth1.'):
             field.boat_link(two.splitlines(), [ROUTE], '10.0.1.0/24')
 
-    def test_boat_hosts_skip_operators_and_ssh_off(self):
-        self.assertEqual(field.boat_hosts(PROFILES / 'a/devices.yaml'), ['a-pc', 'a-cam'])
-        self.assertIn('operator', field.roles(PROFILES / 'a/devices.yaml'))
-
     def test_plan_builds_only_what_symlink_install_cannot_carry(self):
         with tempfile.TemporaryDirectory() as tmp:
             pkg = Path(tmp, 'pkg_dir')
@@ -106,7 +102,7 @@ class Station(unittest.TestCase):
             log.touch()
             Path(tmp, 'modules', 'k1').mkdir(parents=True)
             env = {**os.environ, 'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES),
-                   'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', 'HW_KERNEL_RELEASE': 'k1',
+                   'ASTRO_SECRETS': '/nonexistent', 'HW_KERNEL_RELEASE': 'k1', 'ASTRO_CONTAINER': 'fixture_dev',
                    'HW_MODULES_ROOT': str(Path(tmp, 'modules')), 'FAKE_SSH_LOG': str(log),
                    'HW_SSH': executable(Path(tmp, 'ssh'), '#!/usr/bin/env bash\n{ echo "== $*"; cat; } >> "$FAKE_SSH_LOG"\n'),
                    'HW_SSH_COPY_ID': 'true', 'HW_DOCKER': executable(Path(tmp, 'docker'), FAKE_DOCKER),
@@ -145,11 +141,11 @@ class Station(unittest.TestCase):
         run, calls, _ = self.take(ASTRO_VESSEL='a', HW_IP_ADDR=ADDR, HW_IP_ROUTE=ROUTE, after=(
             ['sh', '-c', f'cat "$XDG_CONFIG_HOME/systemd/user/{unit}"'], [hw, 'whoami'],
             [hw, 'station', 'release'],
-            ['env', 'ASTRO_HOST=st1', 'ROS_DOMAIN_ID=7', 'ASTRO_COMPOSE_PROJECT=p', 'ASTRO_HEARTBEAT=ros2 run gamma beacon',
+            ['env', 'ASTRO_HOST=st1', 'ROS_DOMAIN_ID=7', 'ASTRO_HEARTBEAT=ros2 run gamma beacon',
              str(ROOT / 'devices/heartbeat.sh'), 'run']))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('Environment="ASTRO_HEARTBEAT=ros2 run gamma beacon"\n', run.stdout)   # hosts.yaml's
-        self.assertRegex(run.stdout, r'Environment=ASTRO_HOST=\S+ ASTRO_COMPOSE_PROJECT=fixture_project ROS_DOMAIN_ID=7\n')
+        self.assertRegex(run.stdout, r'Environment=ASTRO_HOST=\S+ ROS_DOMAIN_ID=7\n')
         self.assertIn(f'ExecStart={ROOT}/devices/heartbeat.sh run\nExecStop={ROOT}/devices/heartbeat.sh stop', run.stdout)
         self.assertIn(f'systemctl --user enable {unit}\nsystemctl --user restart {unit}', calls)
         self.assertIn(f'heartbeat active ({unit}', run.stdout)                       # whoami
@@ -163,6 +159,17 @@ class Station(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn('dry run: nothing changed', run.stdout)
         self.assertEqual((calls, station), ('', ''))
+
+    def test_network_env_is_read_as_profile_py_reads_it(self):
+        """A trailing comment is no part of LAN_SUBNET (hw.sh env's reader, not a shell or quote strip)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp, 'network.env')
+            env.write_text((PROFILES / 'a/network.env').read_text().replace(
+                'LAN_SUBNET=10.0.1.0/24', 'LAN_SUBNET=10.0.1.0/24   # boat LAN'))
+            run, _, _ = self.take('--dry-run', ASTRO_VESSEL='a', ASTRO_NETWORK_ENV=str(env),
+                                  HW_IP_ADDR=ADDR, HW_IP_ROUTE=ROUTE)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('boat link enx9 (10.0.1.104 in 10.0.1.0/24)', run.stdout)
 
     @unittest.skipUnless(namespaces_work(), 'no unprivileged user/network namespaces')
     def test_dummy_station_in_namespaces(self):
@@ -207,7 +214,7 @@ class Hot(unittest.TestCase):
             [str(ROOT / 'hw.sh'), 'hot', 'alpha', *args], capture_output=True, text=True,
             env={**os.environ, **GIT_ENV, 'XDG_STATE_HOME': str(self.tmp), 'XDG_CONFIG_HOME': str(self.tmp),
                  'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent',
-                 'ASTRO_ENV_FILE': '/dev/null', 'HW_SRC': str(self.src), 'FAKE_SSH_LOG': str(log),
+                 'HW_SRC': str(self.src), 'FAKE_SSH_LOG': str(log),
                  'FAKE_ROOT': str(self.hosts), 'HW_SSH': executable(self.tmp / 'ssh', EXEC_SSH)})
         return run, log.read_text()
 
@@ -223,8 +230,10 @@ class Hot(unittest.TestCase):
         self.assertIn('OK a-pc: no build', run.stdout)
         cam = self.hosts / 'crew@10.0.1.11/astro_dock/src/alpha'          # not there before: created
         self.assertEqual((cam / 'pkg_dir/pkg_a/node.py').read_text(), 'SPEED = 2\n')
-        self.assertIn('colcon build --symlink-install --packages-select pkg_a', calls)
-        self.assertEqual(calls.count('-- docker exec -i dev bash -s'), 1)   # a-cam only
+        # a-cam only, through hosts apply's one build body (devices/build.sh), image stamp included
+        self.assertEqual(calls.count("-- docker exec -i -e ASTRO_BUILD_IMAGE=$(docker inspect --format '{{.Image}}' dev)"
+                                     " dev bash -s -- --packages-select pkg_a"), 1)
+        self.assertIn('pruned $(find build install -xtype l', calls)
         # The station's checkout is as it was: same HEAD, the edit still uncommitted, no hot ref left.
         self.assertEqual(git(self.repo, 'rev-parse', 'HEAD'), head)
         self.assertEqual(git(self.repo, 'diff', '--name-only'), 'pkg_dir/pkg_a/node.py')

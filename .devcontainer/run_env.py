@@ -9,12 +9,13 @@ from pathlib import Path, PurePosixPath
 import sys
 import yaml
 
-WS = '/home/roboboat/roboboat_ws'
+# The container's workspace, as docker-compose.yml mounts it (its ROS_WS); a relative data.root lies under it.
+WS = yaml.safe_load((Path(__file__).with_name('docker-compose.yml')).read_text())['services']['dev']['environment']['ROS_WS']
 KEYS = {'ros.domain_id': int, 'ros.discovery_range': str, 'data.root': str, 'transport.mode': str}
 # The domain is the vessel's (its profile; prebuild layers it in): without one, ROS 2's own default.
 DEFAULTS = {'ros.domain_id': 0}
 ENV = {'ASTRO_ROS_DOMAIN_ID': 'ros.domain_id', 'ROS_DOMAIN_ID': 'ros.domain_id',
-       'ROS_AUTOMATIC_DISCOVERY_RANGE': 'ros.discovery_range', 'MHSEALS_DATA': 'data.root'}
+       'ROS_AUTOMATIC_DISCOVERY_RANGE': 'ros.discovery_range', 'ASTRO_DATA': 'data.root'}
 # Transport controls a shell overlay could otherwise keep alongside the managed profile.
 FORBIDDEN = ('RMW_IMPLEMENTATION', 'FASTDDS_DEFAULT_PROFILES_FILE', 'FASTRTPS_DEFAULT_PROFILES_FILE',
              'FASTDDS_BUILTIN_TRANSPORTS', 'CYCLONEDDS_URI', 'ROS_LOCALHOST_ONLY',
@@ -63,6 +64,11 @@ def flatten(data, path, prefix=''):
             yield name, value
 
 
+def under_ws(root):
+    """A relative data root (run.yaml's) lies under the workspace; an absolute one stays as written."""
+    return root if root.startswith('/') else WS + '/' + root
+
+
 def validate(values):
     if not 0 <= values['ros.domain_id'] <= 232:
         raise ValueError('domain must be 0..232')
@@ -70,7 +76,7 @@ def validate(values):
         raise ValueError('unsupported discovery range')
     if values['transport.mode'] != 'static-fastdds':
         raise ValueError('unsupported transport mode')
-    root = values['data.root']
+    root = values['data.root'] = under_ws(values['data.root'])
     path = PurePosixPath(root)
     if '$' in root:
         raise ValueError('dollar-containing data paths are not supported')
@@ -111,7 +117,7 @@ def resolve(files, env):
 def project(values):
     return {'ROS_DOMAIN_ID': str(values['ros.domain_id']),
             'ROS_AUTOMATIC_DISCOVERY_RANGE': values['ros.discovery_range'],
-            'MHSEALS_DATA': values['data.root'], 'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp',
+            'ASTRO_DATA': values['data.root'], 'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp',
             'FASTDDS_DEFAULT_PROFILES_FILE': WS + '/config/fastdds.xml',
             'FASTRTPS_DEFAULT_PROFILES_FILE': WS + '/config/fastdds.xml',
             'ASTRO_RUN_MANAGED': '1'}

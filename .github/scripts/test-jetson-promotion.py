@@ -24,7 +24,7 @@ class JetsonPromotionTest(unittest.TestCase):
         # The fixture fleet's vessel a: image example/astro, through op (role gateway).
         self.env = dict(os.environ, GH_REPO='example/astro',
                         ASTRO_PROFILES=str(ROOT / 'tests/data/profiles'), ASTRO_VESSEL='a',
-                        ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null',
+                        ASTRO_SECRETS='/nonexistent',
                         MOCK_LOG=str(self.log), MOCK_DIGEST=DIGEST)
         self.env['PATH'] = str(root) + os.pathsep + self.env['PATH']
         self.executable(root / 'gh', '''#!/usr/bin/env python3

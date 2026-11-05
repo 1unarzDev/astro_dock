@@ -3,7 +3,7 @@ repos.ROLE of its roles, from sources) on the fixture fleet tests/data/profiles.
 
 Runs the real setup.linux.sh, hw.sh and devices/ copied into a scratch workspace; git clone (but hw.sh's
 clone of a configured profile source, the fixture fleet as a git repository), colcon and docker are
-stand-ins that log, so nothing is fetched or built.
+stand-ins that log, so nothing is fetched or built. The build is hw.sh build's (devices/build.sh), the one build.
 """
 import os
 from pathlib import Path
@@ -14,25 +14,26 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'tests/data/profiles'
-# clone: log, and create the target (a clone into profiles/ is real); the rest is real git.
+# clone: log, and create the target with one package NAME_pkg (a clone into profiles/ is real); the rest is real git.
 GIT = '''#!/usr/bin/env bash
 if [ "$1" = clone ]; then
     echo "git $*" >> "$LOG"
     case "$*" in *unpublished*) exit 128 ;; esac
-    case "${@: -1}" in */profiles) ;; *) mkdir -p "${@: -1}"; exit 0 ;; esac
+    case "${@: -1}" in */profiles) ;; *) d=${@: -1}; mkdir -p "$d/pkg"
+        echo "<package><name>${d##*/}_pkg</name></package>" > "$d/pkg/package.xml"; exit 0 ;; esac
 fi
 exec %s "$@"
 '''
-# list prints one package per base path; build logs its directory and arguments.
+# build logs its directory and arguments.
 COLCON = '''#!/usr/bin/env bash
-if [ "$1" = list ]; then shift 3; for p in "$@"; do echo "${p##*/}_pkg"; done; exit 0; fi
 echo "colcon $PWD $*" >> "$LOG"
 '''
-# ps prints the container id when the filters name the Compose project's dev service.
+# ps prints the container id when the filter names the dev container (FAKE_NAME).
 DOCKER = '''#!/usr/bin/env bash
 echo "docker $*" >> "$LOG"
+[ "$1" != exec ] || cat > /dev/null
 if [ "$1" = ps ]; then
-    case "$*" in *"label=com.docker.compose.project=$PROJECT "*"label=com.docker.compose.service=dev"*) echo "$RUNNING" ;; esac
+    case "$*" in *"name=^$FAKE_NAME\$"*) echo "$RUNNING" ;; esac
 fi
 exit 0
 '''
@@ -48,7 +49,15 @@ class SetupRepos(unittest.TestCase):
         for name in ('setup.linux.sh', 'hw.sh'):
             shutil.copy2(ROOT / name, self.ws / name)
         shutil.copytree(ROOT / 'devices', self.ws / 'devices')
-        (self.ws / 'src/beta').mkdir(parents=True)           # already checked out: kept
+        shutil.copy2(ROOT / 'colcon_defaults.yaml', self.ws)
+        (self.ws / '.devcontainer').mkdir()
+        (self.ws / '.devcontainer/dev.bashrc').write_text('')
+        (self.ws / '.devcontainer/.env').write_text('ASTRO_CONTAINER=fixture_dev\n')   # prebuild.sh's
+        (self.ws / 'src/beta/pkg').mkdir(parents=True)       # already checked out: kept
+        (self.ws / 'src/beta/pkg/package.xml').write_text('<package>\n  <name>beta_pkg</name>\n</package>\n')
+        (self.ws / 'src/beta/off/pkg').mkdir(parents=True)   # under COLCON_IGNORE: colcon never sees it
+        (self.ws / 'src/beta/off/COLCON_IGNORE').write_text('')
+        (self.ws / 'src/beta/off/pkg/package.xml').write_text('<package><name>off_pkg</name></package>\n')
         subprocess.run(['git', 'init', '-q', str(self.ws)], check=True)
         self.log = self.tmp / 'log'
         self.bin = self.tmp / 'bin'
@@ -68,7 +77,7 @@ class SetupRepos(unittest.TestCase):
             path.append(str(self.tmp / 'colcon'))
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         env.update(PATH=':'.join(path + [os.environ['PATH']]), LOG=str(self.log), RUNNING=running,
-                   PROJECT='fixture_project', XDG_CONFIG_HOME=str(self.tmp / 'config'), ASTRO_ENV_FILE='/dev/null',
+                   FAKE_NAME='fixture_dev', XDG_CONFIG_HOME=str(self.tmp / 'config'),
                    ASTRO_SECRETS=str(self.tmp / 'none'), HW_HOSTNAME='innovation',
                    HW_SYSFS_NET=str(self.tmp / 'nosys'), HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
                    **extra)
@@ -111,17 +120,19 @@ class SetupRepos(unittest.TestCase):
         self.assertNotIn('/src/later/', self.excluded())
         self.assertIn('repos:later', run.stdout)
 
-    def test_without_colcon_it_builds_in_the_compose_projects_dev_container(self):
+    def test_without_colcon_it_builds_in_the_dev_container_by_its_name(self):
         run, calls = self.setup('--host', 'a-pc', colcon=False, running='c0ffee')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertIn('docker ps -q --filter label=com.docker.compose.project=fixture_project '
-                      '--filter label=com.docker.compose.service=dev', calls)
-        self.assertIn('docker exec c0ffee bash -c cd "$ROS_WS" && colcon build --symlink-install '
-                      '--packages-up-to $(colcon list --names-only --base-paths src/alpha)', calls)
+        self.assertIn('docker ps -q --filter name=^fixture_dev$', calls)     # .devcontainer/.env's name
+        log = '\n'.join(calls)       # hw.sh build in the container: its ROS_WS, its image stamp
+        self.assertIn('docker inspect --format {{.Image}} c0ffee', calls)
+        self.assertIn('-e ASTRO_BUILD_IMAGE= c0ffee bash -s -- --packages-up-to alpha_pkg', log)
+        self.assertNotIn('ASTRO_BUILD_WS', log)
         run, calls = self.setup('--host', 'a-pc', colcon=False, running='')
-        self.assertIn('Start the dev container (the Compose dev service), then build inside it', run.stderr)
+        self.assertIn('Start the dev container (the Compose dev service), then build: '
+                      './hw.sh build --container NAME -- --packages-up-to alpha_pkg', run.stderr)
         self.assertFalse([c for c in calls if c.startswith('docker exec')])
-        run, calls = self.setup('--host', 'a-pc', colcon=False, running='c0ffee', ASTRO_COMPOSE_PROJECT='other')
+        run, calls = self.setup('--host', 'a-pc', colcon=False, running='c0ffee', ASTRO_CONTAINER='other')
         self.assertFalse([c for c in calls if c.startswith('docker exec')])
 
     def test_dry_run_changes_nothing(self):
@@ -144,8 +155,7 @@ class SetupRepos(unittest.TestCase):
         self.assertEqual(listed(run), ['alpha', 'gamma'])
         run, _ = self.setup('--dry-run', '--host', 'somelaptop')            # a generic control station
         self.assertEqual(listed(run), ['alpha', 'gamma'])
-        run, _ = self.setup('--dry-run', '--profile', 'a', '--role', 'camera')   # the old flag, one release
-        self.assertIn('--profile is now --vessel', run.stderr)
+        run, _ = self.setup('--dry-run', '--vessel', 'a', '--role', 'camera')
         self.assertEqual(listed(run), ['alpha', 'beta', 'delta'])
 
     def test_a_repo_without_a_source_is_refused_before_any_clone(self):

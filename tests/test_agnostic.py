@@ -26,11 +26,7 @@ IMAGE = ('image user and workspace roboboat (/home/roboboat/roboboat_ws)',
          r'/home/roboboat(?:/roboboat_ws)?|roboboat_ws|USERNAME\W+roboboat|(?:containerUser|remoteUser|user)\W+roboboat'
          r'|username="\$\{1:-roboboat\}"|id -[ug]n\)" = roboboat|runs as `roboboat`')
 CONTAINER = ('container roboboat_dev', r'roboboat_dev')
-HOSTNAME = ('hostname roboboat', r'hostname: roboboat|- roboboat:127\.0\.1\.1|roboboat:roboboat=127\.0\.1\.1'
-                                 r'|base roboboat alias')
 DATA = ('MHSEALS_DATA', r'MHSEALS_DATA')
-CONFIG = ('~/.config/mhseals', r'\.config/mhseals')
-KEEPER = ('the mhseals keeper pattern', r'mhseals_testing harness|mhseals\.\*harness')
 GITMODULES = ('.gitmodules URLs', r'github\.com/MHSeals/[\w.-]+')
 HOOK_TABLE = ('mhseals_testing agent-hook regression table', r'ssh blastoise\b|mhseals_testing')
 AGENT_TOOLS = ('the workspace agent tools (quarantine plugin, tcache, timpact)', r'(?i:mhseals_agents)')
@@ -38,26 +34,19 @@ AGENT_TOOLS = ('the workspace agent tools (quarantine plugin, tcache, timpact)',
 PENDING = {
     '.devcontainer/Dockerfile.dev': (IMAGE,),
     '.devcontainer/Dockerfile.jetson': (IMAGE,),
-    '.devcontainer/boat-validate.sh': (IMAGE, CONTAINER),
+    '.devcontainer/boat-validate.sh': (IMAGE,),
     '.devcontainer/devcontainer.json': (IMAGE,),
     '.devcontainer/docker-compose.build.yml': (IMAGE,),
     '.devcontainer/docker-compose.override.immutable.yml': (IMAGE,),
-    '.devcontainer/docker-compose.yml': (IMAGE, CONTAINER, HOSTNAME, DATA, CONFIG),
+    '.devcontainer/docker-compose.yml': (IMAGE,),
     '.devcontainer/image-smoke.sh': (IMAGE,),
     '.devcontainer/image-user.sh': (IMAGE,),
-    '.devcontainer/prebuild.sh': (CONFIG, CONTAINER, HOSTNAME),
-    '.devcontainer/run_env.py': (IMAGE, DATA),
-    '.devcontainer/stop-children.sh': (KEEPER,),
-    '.github/scripts/check-containers.py': (HOSTNAME,),
-    '.github/scripts/test-jetson-validation.py': (CONTAINER,),
     '.github/workflows/images.yml': (IMAGE,),
     '.gitmodules': (GITMODULES,),
-    'README.md': (IMAGE, CONTAINER, DATA, CONFIG, GITMODULES),
-    'config/run.yaml': (IMAGE,),
+    'README.md': (IMAGE, GITMODULES),
     'conftest.py': (AGENT_TOOLS,),
     'tests/test_agents_hook.py': (HOOK_TABLE, DATA, CONTAINER),
     'tests/smoke.sh': (AGENT_TOOLS,),
-    'tests/test_run_env.py': (DATA,),
 }
 
 

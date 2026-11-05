@@ -12,7 +12,7 @@ spec = importlib.util.spec_from_file_location('astro_help', ROOT / '.devcontaine
 astro_help = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(astro_help)
 
-HW_ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent', ASTRO_ENV_FILE='/dev/null',
+HW_ENV = dict(os.environ, ASTRO_SECRETS='/nonexistent',
               ASTRO_PROFILES=str(ROOT / 'tests/data/profiles'), ASTRO_VESSEL='a')   # the fixture fleet
 LAUNCH = {'name': 'robot.launch', 'run': 'ros2 launch pkg robot.launch.py',
           'params': [{'name': 'sim', 'type': 'bool', 'default': True}]}
@@ -126,9 +126,10 @@ def run(*args, **env):
 
 
 def dispatched():
-    """The commands hw.sh's top-level case handles, besides its own help."""
-    body = re.search(r'^case \$\{1:-\} in\n(.*?)^esac', (ROOT / 'hw.sh').read_text(), re.M | re.S).group(1)
-    arms = re.findall(r'^    ([^\s()]+)\)', body, re.M)
+    """The commands hw.sh's top-level case handles, besides its own help, and those it runs before it (no profiles)."""
+    text = (ROOT / 'hw.sh').read_text()
+    body = re.search(r'^case \$\{1:-\} in\n(.*?)^esac', text, re.M | re.S).group(1)
+    arms = re.findall(r'^    ([^\s()]+)\)', body, re.M) + re.findall(r'^if \[\[ \$\{1:-\} =~ \^\(([\w|]+)\)\$', text, re.M)
     return {name for arm in arms for name in arm.split('|')} - {"''", '-h', '--help', 'help'}
 
 

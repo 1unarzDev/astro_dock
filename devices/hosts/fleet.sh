@@ -11,7 +11,7 @@ Usage: $HW_PROGRAM $HW_KIND status|verify [HOST...]
        $HW_PROGRAM $HW_KIND rollback IMAGE [HOST...]
        $HW_PROGRAM $HW_KIND keys [HOST...]
        $HW_PROGRAM $HW_KIND repos [--role ROLE...]
-       $HW_PROGRAM $HW_KIND project
+       $HW_PROGRAM $HW_KIND compose
 
 status    Read-only: each repository's branch, head and dirty state, and the container's image.
 plan      Read-only: what apply would do (heads against origin/main via ls-remote; no fetch).
@@ -28,7 +28,9 @@ repos     Read-only, local: "NAME URL BRANCH" per repository of this computer (f
           and those of its roles (--role ROLE, else this host's registry roles, operator for a
           generic control station, else none);
           ./setup.linux.sh --components repos clones and builds them on this computer.
-project   The Compose project of the dev container (compose_project).
+compose   The dev container's names as Compose variables (ASTRO_CONTAINER, ASTRO_ALIAS, ASTRO_CONFIG_DIR)
+          from container: (name, alias, config_dir), one KEY=VALUE line each it sets; prebuild.sh
+          writes them to .devcontainer/.env. Unset ones keep docker-compose.yml's generic defaults.
 Without HOST: every ssh host of ${ASTRO_REGISTRY:-the vessel registry}.
 EOF
 }
@@ -49,7 +51,15 @@ role_repos() {
     done
 }
 
-driver_project() { printf '%s\n' "$(cfg compose_project)"; }
+driver_compose() {
+    local pair value
+    for pair in ASTRO_CONTAINER=name ASTRO_ALIAS=alias ASTRO_CONFIG_DIR=config_dir; do
+        value=$(cfg "container.${pair#*=}")
+        [[ -n $value ]] || continue
+        [[ $value =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "$HW_KIND.yaml: container.${pair#*=} '$value' is not a plain name"
+        printf '%s=%s\n' "${pair%%=*}" "$value"
+    done
+}
 
 driver_repos() {
     local name url branch roles=()
@@ -128,23 +138,36 @@ EOF
 }
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
-# "name container workspace" per ssh host of the registry (the given names, else all). A registry that
-# names neither gets this checkout's: its dev container, and its path under $HOME (~/astro_dock here).
-fleet_hosts() {
-    local container workspace=- home
-    container=$(sed -n 's/^    container_name: //p' "$HW_ROOT/.devcontainer/docker-compose.yml" | head -n1)
+# The registry's hosts as profile.py resolves them, one tab-separated line each:
+# name user address ssh(yes|no) container workspace via roles ('-' for none).
+registry_hosts() { python3 -I "$HW_ROOT/devices/profile.py" hosts "$ASTRO_REGISTRY" "${ASTRO_NETWORK_ENV:-}"; }
+
+# "container workspace" for a host the registry gives neither: this checkout's dev container (container.name,
+# else docker-compose.yml's default; never this machine's ASTRO_CONTAINER or .env), and its path under $HOME.
+fleet_defaults() {
+    local own workspace=- home
+    own=$(cfg container.name)
+    own=${own:-$(hw_compose_default "$HW_ROOT" ASTRO_CONTAINER)}
     home=$(cd -- "$HOME" 2>/dev/null && pwd -P) || home=$HOME     # HW_ROOT is physical (/home -> /var/home)
     [[ $HW_ROOT != "$home"/* ]] || workspace="~/${HW_ROOT#"$home"/}"
-    python3 -I - "$ASTRO_REGISTRY" "${container:--}" "$workspace" "$@" <<'PY'
-import sys, yaml
-data = yaml.safe_load(open(sys.argv[1])) or {}
-own = {'container': sys.argv[2], 'workspace': sys.argv[3]}
-defaults, hosts, wanted = {**own, **(data.get('defaults') or {})}, data.get('hosts') or {}, sys.argv[4:]
-for name in wanted or hosts:
-    spec = {**defaults, **(hosts.get(name) or {})}
-    if wanted or spec.get('ssh', True):
-        print(name, spec.get('container') or '-', spec.get('workspace') or '-')
-PY
+    printf '%s %s\n' "${own:--}" "$workspace"
+}
+
+# "name container workspace" per ssh host of the registry (the given names, else all; a name the registry
+# lacks gets "- -", which for_hosts fails), with fleet_defaults for what the registry leaves out.
+fleet_hosts() {
+    local own workspace name ssh c w rows
+    declare -A line
+    read -r own workspace < <(fleet_defaults)
+    rows=$(registry_hosts) || return 1
+    while IFS=$'\t' read -r name _ _ ssh c w _; do
+        [[ -n $name ]] || continue
+        [[ $c != - ]] || c=$own
+        [[ $w != - ]] || w=$workspace
+        line[$name]="$name $c $w"
+        (($#)) || [[ $ssh == no ]] || printf '%s\n' "${line[$name]}"
+    done <<<"$rows"
+    for name; do printf '%s\n' "${line[$name]:-$name - -}"; done
 }
 
 # on_hosts FUNCTION ARGS -- HOST...: run each host's generated script, logging; rc 1 if any failed.
@@ -152,7 +175,7 @@ for_hosts() {
     local fn=$1 rc=0 name container workspace
     shift
     while read -r name container workspace; do
-        [[ $container != - && $workspace != - ]] || { log "FAIL $name: registry gives no container/workspace"; rc=1; continue; }
+        [[ $container != - && $workspace != - ]] || { log "FAIL $name: not a registry host, or the registry gives no container/workspace"; rc=1; continue; }
         HW_HOST=$name "$fn" "$name" "$container" "${workspace/#\~/\$HOME}" || rc=1
     done < <(fleet_hosts "$@")
     return $rc
@@ -219,7 +242,9 @@ if docker inspect $2 >/dev/null 2>&1; then
 fi
 case $1 in */*) docker pull -q $1 ;; esac  # registry references refresh; local rollback images do not
 .devcontainer/prebuild.sh
-ASTRO_IMAGE=$1 docker compose -p $(cfg compose_project) -f .devcontainer/docker-compose.yml \
+# The existing container's own Compose project, so up replaces it and keeps its volumes; else VS Code's.
+project=\$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' $2 2>/dev/null) || project=
+ASTRO_IMAGE=$1 docker compose -p "\${project:-\$(basename "\$PWD")_devcontainer}" -f .devcontainer/docker-compose.yml \
     -f .devcontainer/docker-compose.override.yml up -d dev
 docker inspect $2 --format '{{.Config.Image}} volumes: {{range .Mounts}}{{.Name}} {{end}}'
 EOF
@@ -303,38 +328,26 @@ driver_verify() {
     return $rc
 }
 
-# "name user@address jump|-" per ssh host the TUI reaches, never this machine (its name, or the
-# operator file's self:). Addresses as the registry readers find them: a literal, a $KEY of the
-# network env, the host's STATIC_LEASES reservation, else name.local.
+# "name user@address jump|- container workspace roles" per ssh host the TUI reaches, never this machine
+# (ASTRO_HOST, or its hostname). Addresses as profile.py resolves them (registry_hosts), container and
+# workspace with fleet_defaults, roles comma-separated ('-' for none).
 key_hosts() {
-    python3 -I - "$ASTRO_REGISTRY" "$ASTRO_NETWORK_ENV" "$1" "$(uname -n)" <<'PY'
-import os, shlex, sys, yaml
-devices, env_file, operator, me = sys.argv[1:]
-env = {}
-if os.path.exists(env_file):
-    for line in open(env_file):
-        key, sep, value = line.strip().partition('=')
-        if sep and not key.startswith('#'):
-            env[key] = ' '.join(shlex.split(value))
-leases = dict(entry.split('=')[1:] for entry in env.get('STATIC_LEASES', '').split() if entry.count('=') == 2)
-data = yaml.safe_load(open(devices)) or {}
-mine = {me.split('.')[0]}
-if os.path.exists(operator):
-    mine.add((yaml.safe_load(open(operator)) or {}).get('self'))
-defaults, hosts = data.get('defaults') or {}, data.get('hosts') or {}
-
-def target(name):
-    spec = {**defaults, **(hosts.get(name) or {})}
-    address = spec.get('address') or ''
-    address = env.get(address[1:], '') if address.startswith('$') else address
-    address = address or leases.get(name) or f'{name}.local'
-    return f"{spec['user']}@{address}" if spec.get('user') else address
-
-for name, spec in hosts.items():
-    spec = spec or {}
-    if spec.get('ssh', defaults.get('ssh', True)) and name not in mine:
-        print(name, target(name), target(spec['via']) if spec.get('via') else '-')
-PY
+    local me name user address ssh c w via roles rows own workspace
+    declare -A target
+    me=$(uname -n) rows=$(registry_hosts) || return 1
+    read -r own workspace < <(fleet_defaults)
+    while IFS=$'\t' read -r name user address _; do
+        [[ -n $name ]] || continue
+        target[$name]=$address
+        [[ $user == - ]] || target[$name]=$user@$address
+    done <<<"$rows"
+    while IFS=$'\t' read -r name _ _ ssh c w via roles; do
+        [[ -n $name && $ssh == yes && $name != "${ASTRO_HOST:-}" && $name != "${me%%.*}" ]] || continue
+        [[ $via == - ]] || via=${target[$via]:-$via}
+        [[ $c != - ]] || c=$own
+        [[ $w != - ]] || w=$workspace
+        printf '%s %s %s %s %s %s\n' "$name" "${target[$name]}" "$via" "$c" "$w" "${roles// /,}"
+    done <<<"$rows"
 }
 
 driver_keys() {
@@ -350,7 +363,7 @@ driver_keys() {
     # The TUI's own options: this key, its known_hosts, no prompts.
     local tui=(-i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
                -o "UserKnownHostsFile=$dir/known_hosts")
-    while read -r name target jump; do
+    while read -r name target jump _; do
         [[ $wanted == "  " || $wanted == *" $name "* ]] || continue
         local via=() mine=()
         [[ $jump == - ]] || via=(-o "ProxyJump=$jump")
@@ -366,6 +379,6 @@ driver_keys() {
             log "FAIL $name: the TUI cannot reach $target with $key"; rc=1; continue
         fi
         log "OK $name: key installed, host key in $dir/known_hosts"
-    done < <(key_hosts "$config/$(cfg operator_registry)")
+    done < <(key_hosts)
     log "keys rc=$rc log=$LOG"; return $rc
 }

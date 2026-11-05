@@ -11,13 +11,20 @@ sys.path.insert(0, str(ROOT / '.devcontainer'))
 import run_env  # noqa: E402
 
 WS = run_env.WS
+USER_HOME = str(Path(WS).parent)               # the container user's home
+
+
+def names(dev):
+    """(container name, the base hostname alias, the operator config mount target) of a rendered dev service."""
+    config = [v['target'] for v in dev['volumes'] if v['target'].startswith(USER_HOME + '/.config/')]
+    return dev['container_name'], dev['extra_hosts'][0], config[0]
 
 
 class RunEnvTest(unittest.TestCase):
     def test_prebuild_projects_env_into_compose(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for name in ('.devcontainer', 'config'):
+            for name in ('.devcontainer', 'config', 'devices'):
                 shutil.copytree(ROOT / name, root / name, symlinks=True, ignore=shutil.ignore_patterns('__pycache__'))
             stubs = root / 'stubs'
             stubs.mkdir()
@@ -25,7 +32,8 @@ class RunEnvTest(unittest.TestCase):
             (stubs / 'uname').chmod(0o755)
             (stubs / 'getent').write_text('#!/bin/sh\nexit 0\n')
             (stubs / 'getent').chmod(0o755)
-            for name in ('bash', 'dirname', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3', 'docker', 'mkdir'):
+            for name in ('bash', 'dirname', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'python3', 'docker', 'mkdir',
+                         'head', 'tail'):
                 (stubs / name).symlink_to('/usr/bin/' + name)
             selection = root / 'run.yaml'
             selection.write_text('ros: {domain_id: 73, discovery_range: LOCALHOST}\n'
@@ -38,10 +46,14 @@ class RunEnvTest(unittest.TestCase):
                        '-f', str(root / '.devcontainer/docker-compose.override.yml'), 'config', '--format', 'json']
             result = subprocess.run(compose, env={**env, 'ASTRO_ROS_DOMAIN_ID': '99'}, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            values = json.loads(result.stdout)['services']['dev']['environment']
+            dev = json.loads(result.stdout)['services']['dev']
+            values = dev['environment']
+            # No profile: docker-compose.yml's generic names (prebuild names the hostname after the device).
+            self.assertEqual(names(dev), ('astro_dev', 'astro=127.0.1.1', USER_HOME + '/.config/astro'))
+            self.assertTrue((root / '.config/astro').is_dir())
             self.assertEqual(values['ROS_DOMAIN_ID'], '73')
             self.assertEqual(values['ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
-            self.assertEqual(values['MHSEALS_DATA'], WS + '/bags/experiment')
+            self.assertEqual(values['ASTRO_DATA'], WS + '/bags/experiment')
             self.assertEqual(values['RMW_IMPLEMENTATION'], 'rmw_fastrtps_cpp')
             override = root / '.devcontainer/docker-compose.override.yml'
             previous = override.read_bytes()
@@ -49,6 +61,26 @@ class RunEnvTest(unittest.TestCase):
             bad = subprocess.run(['bash', prebuild], env=env, capture_output=True)
             self.assertNotEqual(bad.returncode, 0)
             self.assertEqual(override.read_bytes(), previous)
+
+    def test_dev_names_follow_compose(self):
+        """lib.sh hw_dev_name resolves as Compose does: the environment, else .env, else docker-compose.yml's default."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / '.devcontainer').mkdir()
+            compose = (ROOT / '.devcontainer/docker-compose.yml').read_text()
+            (root / '.devcontainer/docker-compose.yml').write_text(
+                compose.replace('${ASTRO_CONTAINER:-', '${ASTRO_CONTAINER:-other_'))
+
+            def name(*var, **env):
+                run = subprocess.run(['bash', '-c', 'source "$1"; hw_dev_name "$2" "${@:3}"', '_',
+                                      str(ROOT / 'devices/lib.sh'), str(root), *var],
+                                     env={'PATH': '/usr/bin:/bin', **env}, capture_output=True, text=True)
+                return run.stdout
+            self.assertTrue(name().startswith('other_'))
+            self.assertEqual(name('ASTRO_CONFIG_DIR'), 'astro')
+            (root / '.devcontainer/.env').write_text('# comment\nASTRO_CONTAINER=from_env\n')
+            self.assertEqual(name(), 'from_env')
+            self.assertEqual(name(ASTRO_CONTAINER='mine'), 'mine')
 
     def test_prebuild_takes_the_vessel_domain(self):
         """The vessel's network env names the domain (fixture a: 7), injected without PyYAML with the
@@ -70,7 +102,7 @@ class RunEnvTest(unittest.TestCase):
                 for stub in ('uname', 'getent', 'python3'):
                     (path / stub).chmod(0o755)
                 for tool in ('bash', 'dirname', 'basename', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'docker',
-                             'mkdir', 'grep', 'tr', 'awk'):
+                             'mkdir', 'grep', 'tr', 'awk', 'head', 'tail'):
                     (path / tool).symlink_to('/usr/bin/' + tool)
                 return str(path)
             # macOS: no PyYAML (an import of yaml fails).
@@ -80,7 +112,7 @@ class RunEnvTest(unittest.TestCase):
                               'runpy.run_path(sys.argv[0], run_name="__main__")\' "$@"\n')
             noyaml.chmod(0o755)
             linux, mac = stubs('linux', 'Linux'), stubs('mac', 'Darwin', python=str(noyaml))
-            env = {'PATH': linux, 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+            env = {'PATH': linux, 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent',
                    'ASTRO_PROFILES': str(ROOT / 'tests/data/profiles'), 'HW_HOSTNAME': 'x', 'HW_SYSFS_NET': '/nonexistent'}
             prebuild = str(root / '.devcontainer/prebuild.sh')
             override = root / '.devcontainer/docker-compose.override.yml'
@@ -92,7 +124,8 @@ class RunEnvTest(unittest.TestCase):
             def config(key='ROS_DOMAIN_ID', **extra):
                 result = subprocess.run(compose, env={**env, **extra}, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                return json.loads(result.stdout)['services']['dev']['environment'].get(key)
+                dev = json.loads(result.stdout)['services']['dev']
+                return names(dev) if key == 'names' else dev['environment'].get(key)
 
             def domain(vessel, **extra):
                 run = subprocess.run(['bash', prebuild], env={**env, **vessel}, capture_output=True, text=True)
@@ -104,6 +137,18 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(config(), '0')
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}), '7')
             self.assertNotIn('WARNING', warnings[-1])
+            # The profile's container names (hosts.yaml container:) through .devcontainer/.env; the environment wins.
+            self.assertEqual(config('names'), ('fixture_dev', 'fixture=127.0.1.1', USER_HOME + '/.config/fixture'))
+            self.assertTrue((root / '.config/fixture').is_dir())
+            self.assertEqual(config('names', ASTRO_CONTAINER='mine')[0], 'mine')
+            # ASTRO_ALIAS names the alias; ASTRO_HOSTNAME (this machine's name) leaves it alone.
+            self.assertEqual(config('names', ASTRO_ALIAS='team')[1], 'team=127.0.1.1')
+            self.assertEqual(config('names', ASTRO_HOSTNAME='laptop')[1], 'fixture=127.0.1.1')
+            # A profile hw.sh rejects falls back to the generic names, and says so with hw.sh's reason.
+            domain({'ASTRO_VESSEL': 'a', 'HW_CONTAINER_NAME': 'a b'})
+            self.assertIn("container.name 'a b' is not a plain name", warnings[-1])
+            self.assertIn('WARNING: hw.sh hosts compose failed', warnings[-1])
+            self.assertEqual(config('names')[0], 'astro_dev')
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}, ASTRO_ROS_DOMAIN_ID='99'), '99')
             # The container keeps the vessel this host resolved (also off its LAN); Compose's ASTRO_VESSEL wins.
             self.assertEqual(config('ASTRO_VESSEL'), 'a')
@@ -133,6 +178,7 @@ class RunEnvTest(unittest.TestCase):
             # No profiles at all (a generic checkout): astro_dock's default, said once, no warning.
             self.assertEqual(domain({'ASTRO_PROFILES': '', 'ASTRO_PROFILES_CONFIG': '/nonexistent'}), '0')
             self.assertNotIn('WARNING', warnings[-1])
+            self.assertEqual(config('names')[0], 'astro_dev')     # and the generic names again
 
     def test_every_process_gets_the_vessel_registry(self):
         """The vessel's registry and network env reach a run.yaml-managed shell (whose ros_net returns early)
@@ -151,9 +197,9 @@ class RunEnvTest(unittest.TestCase):
             for stub in ('uname', 'getent'):
                 (stubs / stub).chmod(0o755)
             for tool in ('bash', 'dirname', 'basename', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'docker', 'mkdir',
-                         'grep', 'tr', 'awk', 'python3', 'git'):
+                         'grep', 'tr', 'awk', 'python3', 'git', 'head', 'tail'):
                 (stubs / tool).symlink_to('/usr/bin/' + tool)
-            env = {'PATH': str(stubs), 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+            env = {'PATH': str(stubs), 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent',
                    'ASTRO_PROFILES_CONFIG': '/nonexistent', 'HW_HOSTNAME': 'x', 'HW_SYSFS_NET': '/nonexistent',
                    'ASTRO_VESSEL': 'a'}
             override = root / '.devcontainer/docker-compose.override.yml'
@@ -193,7 +239,7 @@ class RunEnvTest(unittest.TestCase):
             # A managed shell (ASTRO_RUN_MANAGED: ros_net returns at once) exports them too.
             shell = subprocess.run(
                 ['env', '-i', 'PATH=/usr/bin:/bin', f'HOME={root}', f'ROS_WS={root}', 'ASTRO_RUN_MANAGED=1',
-                 'ASTRO_BANNER=0', *(f'{k}={env[k]}' for k in ('ASTRO_SECRETS', 'ASTRO_ENV_FILE', 'ASTRO_PROFILES_CONFIG',
+                 'ASTRO_BANNER=0', *(f'{k}={env[k]}' for k in ('ASTRO_SECRETS', 'ASTRO_PROFILES_CONFIG',
                                                               'HW_HOSTNAME', 'HW_SYSFS_NET', 'ASTRO_VESSEL')),
                  'bash', '-c', '. "$ROS_WS/.devcontainer/dev.bashrc"; env | grep "^ASTRO_\\(REGISTRY\\|NETWORK_ENV\\)=" | sort'],
                 capture_output=True, text=True)
@@ -214,8 +260,13 @@ class RunEnvTest(unittest.TestCase):
                 self.resolve(text)
 
     def test_overrides_and_baseline(self):
+        self.assertEqual(self.resolve('{}')['data.root'], WS + '/bags')          # relative: under ROS_WS
+        self.assertEqual(self.resolve('data: {root: runs/x}')['data.root'], WS + '/runs/x')
+        self.assertEqual(self.resolve('{}', {'ASTRO_DATA': WS + '/y'})['data.root'], WS + '/y')
+        with self.assertRaises(ValueError):
+            self.resolve('data: {root: ../x}')
         self.assertEqual(self.resolve('{}', {'ROS_DOMAIN_ID': '81'})['ros.domain_id'], 81)
-        for env in ({'ROS_DOMAIN_ID': '1', 'ASTRO_ROS_DOMAIN_ID': '2'}, {'MHSEALS_DATA': ''},
+        for env in ({'ROS_DOMAIN_ID': '1', 'ASTRO_ROS_DOMAIN_ID': '2'}, {'ASTRO_DATA': ''},
                     {'RMW_IMPLEMENTATION': 'x'}, {'ROS_DOMAIN_ID': '999'}):
             with self.subTest(env), self.assertRaises(ValueError):
                 self.resolve('{}', env)

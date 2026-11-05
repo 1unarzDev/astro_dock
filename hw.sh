@@ -41,7 +41,7 @@ HW_COMMANDS=(
     "station release|stop this computer's operator heartbeat service"
     "overlay PATH [--base REF] [--all] [--dry-run]|colcon-build a worktree's packages touched against REF (origin/main) as an overlay on the workspace install, in the dev container; prints the source line"
     "pyenv PATH|the PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon"
-    "build --ws DIR [--container NAME] [-- ARGS]|the workspace's colcon build of DIR (in NAME), from clean when its image or colcon defaults changed"
+    "build [--ws DIR] [--container NAME] [-- ARGS]|the workspace's colcon build of DIR (in NAME, default its ROS_WS), from clean when its image or colcon defaults changed"
     "image [--pull] [--local]|the dev image the Compose config names (--pull: when the registry has a newer one; --local: the local image built on it)"
 )
 
@@ -127,12 +127,10 @@ secrets_check() {
 
 need_scope() { [[ -z $HW_SCOPE_ERROR ]] || die "$HW_SCOPE_ERROR"; }
 
-# Global flags: --vessel V, --host H (--profile V is --vessel's old name, for one release).
+# Global flags: --vessel V, --host H.
 while (($#)); do
     case $1 in
-        --vessel|--profile) [[ -n ${2:-} ]] || die "$1 requires a name"
-            [[ $1 == --vessel ]] || warn "--profile is now --vessel"
-            ASTRO_VESSEL=$2; unset ASTRO_PROFILE ASTRO_PROFILE_DIR; shift 2 ;;
+        --vessel) [[ -n ${2:-} ]] || die "--vessel requires a name"; ASTRO_VESSEL=$2; unset ASTRO_PROFILE_DIR; shift 2 ;;
         --host) [[ -n ${2:-} ]] || die "--host requires a name"; ASTRO_HOST=$2; shift 2 ;;
         *) break ;;
     esac
@@ -150,14 +148,13 @@ if [[ "${1:-} ${2:-}" == "station take" ]]; then
     source "$HW_ROOT/devices/field.sh"
     station_kernel
 fi
-# overlay and pyenv work on a worktree and need no profiles.
-if [[ ${1:-} == overlay || ${1:-} == pyenv ]]; then
+# overlay and pyenv work on a worktree, build and image are the workspace's build and its dev image: no profiles.
+if [[ ${1:-} =~ ^(overlay|pyenv|build|image)$ ]]; then
     if [[ " ${*:2:2} " =~ \ (-h|--help)\  ]]; then command_usage "$1" | sed '1s/^      /Usage:/'; exit 0; fi
+    [[ $1 != build ]] || exec bash "$HW_ROOT/devices/build.sh" "${@:2}"
+    [[ $1 != image ]] || exec bash "$HW_ROOT/.devcontainer/dev-image.sh" "${@:2}"
     exec bash "$HW_ROOT/devices/overlay.sh" "$@"
 fi
-# build and image need no profiles either: the workspace's build entry point and its dev image.
-if [[ ${1:-} == build ]]; then exec bash "$HW_ROOT/devices/build.sh" "${@:2}"; fi
-if [[ ${1:-} == image ]]; then exec bash "$HW_ROOT/.devcontainer/dev-image.sh" "${@:2}"; fi
 hw_init
 if [[ " ${*:2:2} " =~ \ (-h|--help)\  && -n $(command_usage "${1:-}") ]]; then
     command_usage "$1" | sed '1s/^      /Usage:/'
@@ -210,8 +207,8 @@ case ${1:-} in
 esac
 [[ $1 =~ ^[a-z0-9_]+$ ]] || die "Not a device kind: $1"
 HW_KIND=$1
-# Without a vessel only the fleet-wide `hosts repos` (the repositories per role) runs.
-[[ "$HW_KIND ${2:-}" == "hosts repos" ]] || need_scope
+# Without a vessel only the fleet-wide `hosts repos` (the repositories per role) and `hosts compose` run.
+[[ "$HW_KIND ${2:-}" =~ ^hosts\ (repos|compose)$ ]] || need_scope
 hw_load_kind "$HW_KIND"
 hw_driver "$(cfg driver)"
 verb=${2:-}

@@ -26,7 +26,7 @@ printf '#!/bin/sh\n:\n' >"$tmp/bin/setuserpasswd"
 chmod +x "$tmp/bin"/*
 
 # The router driver with the fixture vessel a's values; sourcing it runs nothing.
-HW_ROOT=$root ASTRO_ENV_FILE=/dev/null ASTRO_SECRETS=/nonexistent
+HW_ROOT=$root ASTRO_SECRETS=/nonexistent
 export ASTRO_PROFILES="$root/tests/data/profiles" ASTRO_VESSEL=a
 source "$root/devices/lib.sh"
 hw_init
@@ -133,10 +133,38 @@ esac
 EOF
 printf '#!/bin/sh\n[ "$1 $2 $3" = "-4 -o addr" ] && printf "%%s\\n" "$ADDRS" | tr ";" "\\n"\nexit 0\n' >"$tmp/host/ip"
 chmod +x "$tmp/host"/*
-boat() { ADDRS="$1" PATH="$tmp/host:$PATH" "$root/setup.linux.sh" --dry-run --non-interactive --components boat 2>&1; }
+boat() { ADDRS="$1" PATH="$tmp/host:$PATH" "$root/setup.linux.sh" --dry-run --non-interactive --components "${2:-boat}" 2>&1; }
 line() { echo "2: eth0    inet $1/${subnet#*/} scope global eth0"; }
 out=$(boat "$(line "$other");$(line "$gw")")
 grep -q "holds the gateway address" <<<"$out" || fail "gateway second address not detected"
 out=$(boat "$(line "$other")")
 ! grep -q "holds the gateway address" <<<"$out" || fail "non-gateway host treated as gateway"
 echo "stage_boat gateway ok"
+
+# stage_boat finds the link's reservation through profile.py leases, whatever case the lease writes the MAC in.
+mkdir -p "$tmp/sys/eth0" "$tmp/upper"
+cp -r "$ASTRO_PROFILES"/. "$tmp/upper"
+sed -i 's/02:aa:00:00:00:01=/02:AA:00:00:00:01=/' "$tmp/upper/a/network.env"
+for mac in 02:aa:00:00:00:01 02:aa:00:00:00:99; do
+    echo "$mac" >"$tmp/sys/eth0/address"
+    out=$(ASTRO_PROFILES="$tmp/upper" HW_SYSFS_NET="$tmp/sys" boat "$(line "$other")")
+    if [[ $mac == *01 ]]; then ! grep -q "Add $mac to STATIC_LEASES" <<<"$out" || fail "upper-case lease not found: $out"
+    else grep -q "Add $mac to STATIC_LEASES" <<<"$out" || fail "unleased MAC not reported: $out"; fi
+done
+echo "stage_boat lease ok"
+
+# network.env is data: setup reads it through hw.sh env, so shell code in it never runs.
+cp -r "$ASTRO_PROFILES" "$tmp/profiles"
+printf 'EVIL=$(touch %s/ran)\nTOO=`touch %s/ran`\n' "$tmp" "$tmp" >>"$tmp/profiles/a/network.env"
+for stage in boat gateway; do
+    out=$(ASTRO_PROFILES="$tmp/profiles" boat "$(line "$other")" "$stage")
+    [[ ! -e $tmp/ran ]] || fail "$stage ran shell code from network.env"
+    grep -q "$subnet" <<<"$out" || fail "$stage did not read LAN_SUBNET: $out"
+done
+# The dev shell's ros_net (dev.bashrc is BASH_ENV, so every container shell runs it) reads it the same way.
+sed -n -e '/^__astro_network_env() {/,/^}/p' -e '/^ros_net() {/,/^}/p' "$root/.devcontainer/dev.bashrc" >"$tmp/ros_net.sh"
+peers=$(env -i PATH="$PATH" HOME="$tmp" XDG_RUNTIME_DIR="$tmp" ROS_WS="$root" ASTRO_DDS_ADDRESS=10.0.1.10 \
+    ASTRO_NETWORK_ENV="$tmp/profiles/a/network.env" bash -c 'ros2() { :; }; . "$1"; ros_net; echo "${ROS_STATIC_PEERS-}"' _ "$tmp/ros_net.sh")
+[[ ! -e $tmp/ran ]] || fail "ros_net ran shell code from network.env"
+[[ $peers == "$gw;10.0.1.11" ]] || fail "ros_net did not read the gateway and leases: '$peers'"
+echo "network.env not sourced ok"

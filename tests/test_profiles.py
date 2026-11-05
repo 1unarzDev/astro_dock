@@ -6,7 +6,6 @@ repository in a temp dir. Nothing is contacted.
 """
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import tempfile
@@ -40,7 +39,7 @@ class Profiles(unittest.TestCase):
     def hw(self, *args, hostname='innovation', hw_root=ROOT, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         env.update(ASTRO_PROFILES=str(self.root), ASTRO_SECRETS=str(self.tmp / 'no-secrets'),
-                   ASTRO_ENV_FILE='/dev/null', HW_HOSTNAME=hostname, HW_SYSFS_NET=str(self.sys),
+                   HW_HOSTNAME=hostname, HW_SYSFS_NET=str(self.sys),
                    HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
                    HW_DRIVERS=str(self.tmp / 'drivers'), XDG_STATE_HOME=str(self.tmp / 'state'),
                    XDG_CONFIG_HOME=str(self.tmp / 'config'))
@@ -87,16 +86,11 @@ class Profiles(unittest.TestCase):
         self.assertTrue(me['host'].startswith('none (no match'))
         self.assertTrue(me['vessel'].startswith('none'))
 
-    def test_an_unlisted_laptop_gets_the_vessel_domain_by_lan_subnet_or_its_old_name(self):
-        """LAN_SUBNET attaches the laptop; a network env that still says BOAT_SUBNET does too, for one release."""
-        for key in ('LAN_SUBNET', 'BOAT_SUBNET'):
-            with self.subTest(key=key):
-                env = self.root / 'a/network.env'
-                env.write_text(re.sub(r'^(LAN|BOAT)_SUBNET=', key + '=', env.read_text(), flags=re.M))
-                me = self.whoami(HW_ADDRS='10.0.1.57/24')
-                self.assertEqual((me['station'], me['vessel']), ('s', 'a (boat LAN 10.0.1.57 in 10.0.1.0/24)'))
-                run = self.hw('env', 'ROS_DOMAIN_ID', HW_ADDRS='10.0.1.57/24')
-                self.assertEqual((run.returncode, run.stdout.strip()), (0, '7'), run.stderr)
+    def test_an_unlisted_laptop_gets_the_vessel_domain_by_lan_subnet(self):
+        me = self.whoami(HW_ADDRS='10.0.1.57/24')
+        self.assertEqual((me['station'], me['vessel']), ('s', 'a (boat LAN 10.0.1.57 in 10.0.1.0/24)'))
+        run = self.hw('env', 'ROS_DOMAIN_ID', HW_ADDRS='10.0.1.57/24')
+        self.assertEqual((run.returncode, run.stdout.strip()), (0, '7'), run.stderr)
 
     def test_a_boat_computer_is_never_a_station(self):
         for extra, why in (({'HW_ADDRS': '10.0.1.10/24'}, 'address 10.0.1.10 belongs to a-pc'),     # a reservation
@@ -153,9 +147,6 @@ class Profiles(unittest.TestCase):
         self.assertTrue(self.whoami(ASTRO_HOST='b-pc')['vessel'].startswith('b '))
         self.assertTrue(self.whoami('--vessel', 'b', hostname='op')['vessel'].startswith('b (--vessel'))
         self.assertTrue(self.whoami(ASTRO_VESSEL='b')['vessel'].startswith('b '))
-        run = self.hw('--profile', 'b', 'whoami')                   # the old name, one release
-        self.assertIn('--profile is now --vessel', run.stderr)
-        self.assertIn('vessel    b ', run.stdout)
         for args, error in ((('--vessel', 's'), 'not a vessel'), (('--vessel', 'fleet'), 'not a vessel')):
             run = self.hw(*args, 'whoami')
             self.assertNotEqual(run.returncode, 0)
@@ -249,7 +240,6 @@ class Profiles(unittest.TestCase):
         self.assertEqual(self.repos('hosts', 'repos'), ['alpha'])               # no self, no role: all
         self.assertEqual(self.repos('hosts', 'repos', '--role', 'operator', '--role', 'camera'),
                          ['alpha', 'gamma', 'beta'])
-        self.assertEqual(self.hw('--vessel', 'a', 'hosts', 'project').stdout, 'fixture_project\n')
 
     # Secrets
     def test_secrets_file_must_be_private_and_values_never_print(self):
@@ -290,13 +280,6 @@ class Profiles(unittest.TestCase):
             self.assertNotEqual(run.returncode, 0)
             self.assertIn('inside a git work tree; move it to ~/.config/astro/secrets.env', run.stderr)
 
-    def test_a_legacy_dotenv_is_read_with_a_warning(self):
-        legacy = self.tmp / 'legacy.env'
-        legacy.write_text('THING_PASSWORD=x\n')
-        run = self.hw('secrets', 'check', ASTRO_ENV_FILE=str(legacy))
-        self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn('Reading the legacy %s' % legacy, run.stderr)
-
     # Generic mode: no profiles
     def checkout(self):
         """A workspace with astro_dock's tools and no profiles/, as a fresh clone has it."""
@@ -327,7 +310,7 @@ class Profiles(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         run = subprocess.run(['bash', str(ws / 'setup.linux.sh'), '--components', 'repos,gateway,boat,jetson',
                               '--dry-run', '--non-interactive'], capture_output=True, text=True, timeout=60,
-                             env={**env, 'ASTRO_SECRETS': str(self.tmp / 'none'), 'ASTRO_ENV_FILE': '/dev/null',
+                             env={**env, 'ASTRO_SECRETS': str(self.tmp / 'none'),
                                   'XDG_CONFIG_HOME': str(self.tmp / 'config')})
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(run.stdout.count('Generic mode (no profiles: ./hw.sh profile sync URL [REF], or ASTRO_PROFILES=DIR)'), 1)

@@ -16,6 +16,9 @@
 # Boat hosts: the registry's ssh hosts without the operator role. They are reached as the TUI reaches
 # them (key_hosts: LAN address, operator key) once the key exists, else by registry name.
 
+# shellcheck source=devices/build.sh
+source "$HW_ROOT/devices/build.sh"     # hw_build_body: the workspace's one build, as hosts apply runs it
+
 field_init() {
     set +e
     SSH=${HW_SSH:-ssh} DOCKER=${HW_DOCKER:-docker} SYSTEMCTL=${HW_SYSTEMCTL:-systemctl}
@@ -28,18 +31,16 @@ field_init() {
 }
 
 field_py() { python3 -I "$HW_ROOT/devices/field.py" "$@"; }
+# net_value KEY: one value of the vessel's network env as profile.py reads it (`hw.sh env KEY`), else empty.
+net_value() { python3 -I "$HW_ROOT/devices/profile.py" value "$ASTRO_NETWORK_ENV" "${ASTRO_REGISTRY:-}" "$1" 2>/dev/null; }
 
-# "name container workspace target jump" per boat host (the given names, else all).
+# "name container workspace target jump roles" per boat host: key_hosts' hosts without the operator role.
 field_hosts() {
-    local name container workspace target jump
-    declare -A to via
-    while read -r name target jump; do to[$name]=$target via[$name]=$jump; done \
-        < <(key_hosts "${XDG_CONFIG_HOME:-$HOME/.config}/$(cfg operator_registry)")
-    local boat=" $(field_py boat-hosts "$ASTRO_REGISTRY" | tr '\n' ' ') "
-    while read -r name container workspace; do
-        [[ $boat == *" $name "* && $name != "$ME" && $name != "${ASTRO_HOST:-}" ]] || continue
-        printf '%s %s %s %s %s\n' "$name" "$container" "${workspace/#\~/\$HOME}" "${to[$name]:-$name}" "${via[$name]:--}"
-    done < <(fleet_hosts "$@")
+    local name target jump container workspace roles
+    while read -r name target jump container workspace roles; do
+        [[ ,$roles, != *,operator,* ]] || continue
+        printf '%s %s %s %s %s %s\n' "$name" "$container" "${workspace/#\~/\$HOME}" "$target" "$jump" "$roles"
+    done < <(key_hosts)
 }
 
 # field_ssh TARGET JUMP COMMAND...: as the TUI does (operator key, its known_hosts, no prompts) once the
@@ -63,7 +64,8 @@ hot_snapshot() {
     local dir=$1 index tree head name email
     head=$(git -C "$dir" rev-parse -q --verify 'HEAD^{commit}') || die "$dir has no commit"
     index=$(mktemp) || exit 1
-    cp -- "$(git -C "$dir" rev-parse --path-format=absolute --git-path index)" "$index" 2>/dev/null
+    # -p: the index keeps its mtime, so git still re-reads a file edited in the tick of its last stat (racy git)
+    cp -p -- "$(git -C "$dir" rev-parse --path-format=absolute --git-path index)" "$index" 2>/dev/null
     tree=$(GIT_INDEX_FILE=$index git -C "$dir" add -A && GIT_INDEX_FILE=$index git -C "$dir" write-tree)
     rm -f -- "$index"
     [[ -n $tree ]] || die "Cannot snapshot $dir"
@@ -134,9 +136,10 @@ hot_one() {
     pkgs=$(head -1 <<<"$reasons") reasons=$(tail -n +2 <<<"$reasons")
     if [[ -z $pkgs ]]; then log "OK $name: no build (only .py/.yaml/launch edits, live under symlink-install)"; return 0; fi
     sed "s/^/$name: builds for /" <<<"$reasons" | tee -a "$LOG"
-    log "== $name: colcon build --packages-select $pkgs"
-    printf 'source "$ROS_WS/.devcontainer/dev.bashrc" >/dev/null 2>&1\nset -o pipefail; cd "$ROS_WS"\ncolcon build --symlink-install --packages-select %s 2>&1 | tail -20\n' "$pkgs" \
-        | field_ssh "$target" "$jump" docker exec -i "$container" bash -s 2>&1 | tee -a "$LOG"
+    log "== $name: colcon build --symlink-install --packages-select $pkgs"
+    # shellcheck disable=SC2086  # pkgs: one package per word
+    hw_build_body | field_ssh "$target" "$jump" docker exec -i -e "ASTRO_BUILD_IMAGE=\$(docker inspect --format '{{.Image}}' $container)" \
+        "$container" bash -s -- --packages-select $pkgs 2>&1 | tee -a "$LOG"
     if [[ ${PIPESTATUS[1]} == 0 ]]; then log "OK $name build $pkgs"; else log "FAIL $name build $pkgs"; return 1; fi
 }
 
@@ -145,7 +148,7 @@ hot_one() {
 hot_dry() {
     local base files plan name container workspace target jump
     base=$(git -C "$HOT_DIR" rev-parse -q --verify 'refs/remotes/origin/main^{commit}' || git -C "$HOT_DIR" rev-parse HEAD)
-    while read -r name container workspace target jump; do
+    while read -r name container workspace target jump _; do
         [[ $jump == - ]] && jump='' || jump=" via $jump"
         log "dry run: $name ($target$jump) container $container workspace $workspace"
     done <<<"$1"
@@ -163,7 +166,7 @@ hot_dry() {
 }
 
 hot_main() {
-    local only=() rc=0 hosts name repos dry=false
+    local only=() rc=0 boat hosts name rest roles repos dry=false
     [[ -n ${1:-} && $1 != -* ]] || hot_usage 2
     HOT_REPO=$1
     shift
@@ -182,16 +185,19 @@ hot_main() {
     field_init
     HOT_BRANCH=field/$(date +%Y%m%d) HOT_SHA=$(hot_snapshot "$HOT_DIR") || exit 1
     HOT_REF=refs/hot/$STAMP HOT_ORIGIN=$(git -C "$HOT_DIR" remote get-url origin 2>/dev/null)
-    hosts=$(field_hosts "${only[@]}")
-    if ((${#only[@]} == 0)); then           # the boat hosts whose roles' repos include it
-        hosts=$(while read -r name rest; do
-            [[ -n $name ]] || continue
-            repos=" $(role_repos $(host_roles "$name") | tr '\n' ' ') "
-            [[ $HOT_REPO == astro_dock || $repos == *" $HOT_REPO "* ]] && printf '%s %s\n' "$name" "$rest"
-        done <<<"$hosts")
-    fi
+    boat=$(field_hosts)
+    hosts=$(while read -r name rest; do     # the given hosts, else those whose roles' repos include it
+        [[ -n $name ]] || continue
+        if ((${#only[@]})); then [[ " ${only[*]} " == *" $name "* ]] || continue
+        else
+            roles=${rest##* } roles=${roles#-}
+            repos=" $(role_repos ${roles//,/ } | tr '\n' ' ') "
+            [[ $HOT_REPO == astro_dock || $repos == *" $HOT_REPO "* ]] || continue
+        fi
+        printf '%s %s\n' "$name" "$rest"
+    done <<<"$boat")
     if [[ -z $hosts ]]; then
-        die "No boat host runs $HOT_REPO${only[*]:+ among ${only[*]}} (boat hosts: $(field_py boat-hosts "$ASTRO_REGISTRY" | tr '\n' ' '))"
+        die "No boat host runs $HOT_REPO${only[*]:+ among ${only[*]}} (boat hosts: $(cut -d' ' -f1 <<<"$boat" | tr '\n' ' '))"
     fi
     log "hot $HOT_REPO ${HOT_SHA:0:7} ($(git -C "$HOT_DIR" status --porcelain | wc -l) local changes on $(git -C "$HOT_DIR" rev-parse --abbrev-ref HEAD)) -> $(cut -d' ' -f1 <<<"$hosts" | tr '\n' ' ')"
     if $dry; then hot_dry "$hosts"; return; fi
@@ -210,26 +216,19 @@ station_kernel() {
     die "Reboot needed: the running kernel $release has no modules in $root (installed: $(ls -- "$root" 2>/dev/null | tr '\n' ' ')); networking roles fail until this computer reboots"
 }
 
-# The station file, under XDG_CONFIG_HOME on each host: the hosts profile's station_file, else
-# station.yaml beside its operator_registry.
-station_file() {
-    local file
-    file=$(cfg station_file)
-    printf '%s\n' "${file:-$(dirname -- "$(cfg operator_registry)")/station.yaml}"
-}
-
 station_take() {
     local dry=false subnet='' link file roles=(operator gateway) boat rc=0 name container workspace target jump body heartbeat
     case ${1:-} in --dry-run) dry=true ;; '') ;; *) die "Usage: $HW_PROGRAM station take [--dry-run]" ;; esac
     station_kernel
     need_scope
     field_init
-    subnet=$(hw_load_env "$ASTRO_NETWORK_ENV" LAN_SUBNET BOAT_SUBNET; printf '%s' "${LAN_SUBNET:-${BOAT_SUBNET:-}}")
+    subnet=$(net_value LAN_SUBNET)
     [[ -n $subnet ]] || die "$ASTRO_NETWORK_ENV has no LAN_SUBNET"
     link=$(field_py link "$subnet") || exit 1
     eval "$link"
-    field_py roles "$ASTRO_REGISTRY" | grep -qx rtk_base && roles+=(rtk_base)
-    file=$(station_file)
+    python3 -I "$HW_ROOT/devices/profile.py" roles "$ASTRO_REGISTRY" | grep -qx rtk_base && roles+=(rtk_base)
+    file=$(cfg station_file)          # under XDG_CONFIG_HOME on each host
+    [[ -n $file ]] || die "The hosts profile names no station_file (a path under ~/.config)"
     boat=$(field_hosts)
     body=$(printf '# hw.sh station take: this vessel'"'"'s operator station.\noperator: %s\nsince: %s\nroles: [%s]\n' \
         "$ME" "$(date -Iseconds)" "$(IFS=,; echo "${roles[*]}" | sed 's/,/, /g')")
@@ -255,7 +254,7 @@ station_take() {
     fi
     station_container_key || rc=1
     station_write_local "$file" "$body" || rc=1
-    while read -r name container workspace target jump; do
+    while read -r name container workspace target jump _; do
         [[ -n $name ]] || continue
         if field_ssh "$target" "$jump" "d=\${XDG_CONFIG_HOME:-\$HOME/.config}/$(dirname -- "$file") && mkdir -p \"\$d\" && cat > \"\$d/.station.tmp\" && mv \"\$d/.station.tmp\" \"\$d/$(basename -- "$file")\"" \
             <<<"$body" 2>>"$LOG"; then log "OK $name: station file"
@@ -275,8 +274,7 @@ station_write_local() {
 # The dev container of this computer gets the operator key unless it already sees it (a mount).
 station_container_key() {
     local c dir f
-    c=$($DOCKER ps -q --filter "label=com.docker.compose.project=$(cfg compose_project)" \
-        --filter label=com.docker.compose.service=dev 2>/dev/null | head -1)
+    c=$(hw_dev_container "$HW_ROOT")
     [[ -n $c ]] || { log "WARN no dev container running: rerun station take once it is up for its key"; return 0; }
     dir="\${XDG_CONFIG_HOME:-\$HOME/.config}/$(cfg operator_key)"
     if [[ $($DOCKER exec "$c" sh -c "cat \"$dir/id_ed25519.pub\"" 2>/dev/null) == "$(cat -- "$KEY.pub" 2>/dev/null)" ]]; then
@@ -297,11 +295,10 @@ heartbeat_unit() {
     local domain command
     command=$(cfg operator_heartbeat)
     [[ -n $command ]] || return 0
-    domain=$(unset ROS_DOMAIN_ID; hw_load_env "$ASTRO_NETWORK_ENV" ROS_DOMAIN_ID; printf '%s' "${ROS_DOMAIN_ID:-}")
+    domain=$(net_value ROS_DOMAIN_ID)
     printf '[Unit]\nDescription=Operator heartbeat of %s for %s (hw.sh station take)\n\n' "${ASTRO_HOST:-$ME}" "$ASTRO_VESSEL"
     printf '[Service]\nEnvironment="ASTRO_HEARTBEAT=%s"\n' "$command"
-    printf 'Environment=ASTRO_HOST=%s ASTRO_COMPOSE_PROJECT=%s%s\n' \
-        "${ASTRO_HOST:-$ME}" "$(cfg compose_project)" "${domain:+ ROS_DOMAIN_ID=$domain}"
+    printf 'Environment=ASTRO_HOST=%s%s\n' "${ASTRO_HOST:-$ME}" "${domain:+ ROS_DOMAIN_ID=$domain}"
     printf 'ExecStart=%s run\nExecStop=%s stop\nRestart=always\nRestartSec=3\n\n' \
         "$HW_ROOT/devices/heartbeat.sh" "$HW_ROOT/devices/heartbeat.sh"
     printf '[Install]\nWantedBy=default.target\n'

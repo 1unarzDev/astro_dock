@@ -69,7 +69,7 @@ with tempfile.NamedTemporaryFile("w", suffix=".yml") as overlay:
 dev = config["services"]["dev"]
 require(dev.get("pull_policy", "missing") != "always",
         "compose: local UID images would be pulled from a registry")
-require(f"{dev.get('hostname')}:{(dev.get('extra_hosts') or [''])[0]}" == "roboboat:roboboat=127.0.1.1",
+require(dev.get("hostname") and (dev.get("extra_hosts") or [""])[0] == f"{dev['hostname']}=127.0.1.1",
         "compose: service hostname is not resolvable")
 environment = dev.get("environment", {})
 require(environment.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "SUBNET"
