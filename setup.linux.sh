@@ -345,6 +345,7 @@ ensure_mdns() {
 stage_mdns() {
     heading "mDNS (.local names)"
     echo "This installs Avahi and nss-mdns, enables avahi-daemon and adds mdns4_minimal to nsswitch's hosts: line."
+    echo "A boat host's IPv4-only Avahi settings come from --components boat (this stage leaves them as they are)."
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(mdns); return; }
     approve "Set up mDNS name resolution?" || { SKIPPED+=(mdns); return; }
     ensure_mdns dev
