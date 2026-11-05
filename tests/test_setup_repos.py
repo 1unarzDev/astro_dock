@@ -54,6 +54,9 @@ class SetupRepos(unittest.TestCase):
         (self.ws / '.devcontainer/dev.bashrc').write_text('')
         (self.ws / 'src/beta/pkg').mkdir(parents=True)       # already checked out: kept
         (self.ws / 'src/beta/pkg/package.xml').write_text('<package>\n  <name>beta_pkg</name>\n</package>\n')
+        (self.ws / 'src/beta/off/pkg').mkdir(parents=True)   # under COLCON_IGNORE: colcon never sees it
+        (self.ws / 'src/beta/off/COLCON_IGNORE').write_text('')
+        (self.ws / 'src/beta/off/pkg/package.xml').write_text('<package><name>off_pkg</name></package>\n')
         subprocess.run(['git', 'init', '-q', str(self.ws)], check=True)
         self.log = self.tmp / 'log'
         self.bin = self.tmp / 'bin'
