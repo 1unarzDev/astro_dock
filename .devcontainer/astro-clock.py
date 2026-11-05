@@ -45,8 +45,7 @@ def lan_hosts(path=None):
         key, sep, value = line.partition('=')
         if sep and not line.lstrip().startswith('#'):
             values[key.strip()] = ' '.join(shlex.split(value, comments=True))
-    # The registry's time_server role; TIME_SERVER and BOAT_TIME_SERVER are the old keys, for one release.
-    server = values.get('TIME_SERVER') or values.get('BOAT_TIME_SERVER') or role_address('TIME_SERVER_IP')
+    server = role_address('TIME_SERVER_IP')   # the registry's time_server role
     hosts = [('time server', address) for address in server.split()]
     for lease in values.get('STATIC_LEASES', '').split():
         _, name, address = lease.split('=')

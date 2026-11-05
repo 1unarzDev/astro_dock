@@ -4,7 +4,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 # The shipped vessel (the fixture fleet), named, so the runner's hostname does not matter.
-export ASTRO_PROFILES="$root/tests/data/profiles" ASTRO_VESSEL=a ASTRO_SECRETS=/nonexistent ASTRO_ENV_FILE=/dev/null
+export ASTRO_PROFILES="$root/tests/data/profiles" ASTRO_VESSEL=a ASTRO_SECRETS=/nonexistent
 network_env="$("$root/hw.sh" env)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -72,24 +72,11 @@ grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sour
 grep -Fxq 'pool time.cloudflare.com iburst' "$sources/boat.sources" || fail "public fallback missing"
 grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "client does not answer the subnet"
 ! grep -q 'local stratum' "$sources/astro.conf" || fail "client serves at local stratum"
-# "boat" is lan's old name for one release: same result, one notice.
-out="$(ASTRO_NTP_SERVER=boat clock 2>&1)"
-grep -q 'ASTRO_NTP_SERVER=boat is now ASTRO_NTP_SERVER=lan' <<<"$out" || fail "boat alias notice missing"
-grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "boat alias did not follow the LAN server"
-
-# The old keys (BOAT_ names, TIME_SERVER and OPERATOR_TIME_SERVERS instead of roles) are read for one
-# release; lan refuses a vessel without a time server.
-old="$tmp/old-profiles"
+# lan refuses a vessel without a time server (no registry host with the time_server role).
+old="$tmp/no-time-server"
 cp -r "$root/tests/data/profiles" "$old"
-sed -i 's/^LAN_SUBNET=/BOAT_SUBNET=/' "$old/a/network.env"
-printf 'BOAT_TIME_SERVER=%s\nBOAT_OPERATOR_TIME_SERVERS="%s"\n' "$server" "${operators[0]}" >> "$old/a/network.env"
-sed -i 's/, time_server\]/]/; s/\[operator, gateway\]/[gateway]/' "$old/a/devices.yaml"
-grep -q '^BOAT_SUBNET=' "$old/a/network.env" && ! grep -q 'time_server\|operator' "$old/a/devices.yaml" || fail "old-name fixture"
-out="$(ASTRO_PROFILES="$old" ASTRO_NTP_SERVER=lan ASTRO_NTP_ALLOW=lan clock)"
-grep -Fxq "server $server iburst prefer minpoll 2 maxpoll 4" "$sources/boat.sources" || fail "BOAT_TIME_SERVER not read"
-grep -Fxq "server ${operators[0]} iburst" "$sources/boat.sources" || fail "BOAT_OPERATOR_TIME_SERVERS not read"
-grep -Fxq "allow $subnet" "$sources/astro.conf" || fail "BOAT_SUBNET not read"
-sed -i '/^BOAT_TIME_SERVER=/d' "$old/a/network.env"
+sed -i 's/, time_server\]/]/' "$old/a/devices.yaml"
+! grep -q 'time_server' "$old/a/devices.yaml" || fail "no-time-server fixture"
 if out="$(ASTRO_PROFILES="$old" ASTRO_NTP_SERVER=lan clock)"; then fail "lan accepted a vessel without a time server"; fi
 grep -q 'ASTRO_NTP_SERVER=lan needs a time server' <<<"$out" || fail "no time server message: $out"
 
@@ -212,15 +199,12 @@ for mode in unmatched generic; do
 done
 
 python3 "$root/.devcontainer/astro-clock.py" --help >/dev/null
-printf 'BOAT_TIME_SERVER=10.0.1.10\nSTATIC_LEASES="02:aa:00:00:00:01=a-pc=10.0.1.10"\n' > "$tmp/old-names.env"
-python3 - "$root" "$tmp/old-names.env" <<'EOF'
+python3 - "$root" <<'EOF'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location('clock', sys.argv[1] + '/.devcontainer/astro-clock.py')
 clock = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(clock)
 hosts = clock.lan_hosts()
 assert hosts[0][0] == 'time server' and len(hosts) >= 2, hosts
-hosts = clock.lan_hosts(sys.argv[2])                    # BOAT_TIME_SERVER: the old name, for one release
-assert hosts == [('time server', '10.0.1.10'), ('a-pc', '10.0.1.10')], hosts
 EOF
 echo "clock stage ok"

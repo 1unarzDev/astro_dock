@@ -80,7 +80,7 @@ class RunEnvTest(unittest.TestCase):
                               'runpy.run_path(sys.argv[0], run_name="__main__")\' "$@"\n')
             noyaml.chmod(0o755)
             linux, mac = stubs('linux', 'Linux'), stubs('mac', 'Darwin', python=str(noyaml))
-            env = {'PATH': linux, 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+            env = {'PATH': linux, 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent',
                    'ASTRO_PROFILES': str(ROOT / 'tests/data/profiles'), 'HW_HOSTNAME': 'x', 'HW_SYSFS_NET': '/nonexistent'}
             prebuild = str(root / '.devcontainer/prebuild.sh')
             override = root / '.devcontainer/docker-compose.override.yml'
@@ -153,7 +153,7 @@ class RunEnvTest(unittest.TestCase):
             for tool in ('bash', 'dirname', 'basename', 'mktemp', 'cp', 'sed', 'cut', 'rm', 'mv', 'docker', 'mkdir',
                          'grep', 'tr', 'awk', 'python3', 'git'):
                 (stubs / tool).symlink_to('/usr/bin/' + tool)
-            env = {'PATH': str(stubs), 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+            env = {'PATH': str(stubs), 'HOME': str(root), 'ASTRO_SECRETS': '/nonexistent',
                    'ASTRO_PROFILES_CONFIG': '/nonexistent', 'HW_HOSTNAME': 'x', 'HW_SYSFS_NET': '/nonexistent',
                    'ASTRO_VESSEL': 'a'}
             override = root / '.devcontainer/docker-compose.override.yml'
@@ -193,7 +193,7 @@ class RunEnvTest(unittest.TestCase):
             # A managed shell (ASTRO_RUN_MANAGED: ros_net returns at once) exports them too.
             shell = subprocess.run(
                 ['env', '-i', 'PATH=/usr/bin:/bin', f'HOME={root}', f'ROS_WS={root}', 'ASTRO_RUN_MANAGED=1',
-                 'ASTRO_BANNER=0', *(f'{k}={env[k]}' for k in ('ASTRO_SECRETS', 'ASTRO_ENV_FILE', 'ASTRO_PROFILES_CONFIG',
+                 'ASTRO_BANNER=0', *(f'{k}={env[k]}' for k in ('ASTRO_SECRETS', 'ASTRO_PROFILES_CONFIG',
                                                               'HW_HOSTNAME', 'HW_SYSFS_NET', 'ASTRO_VESSEL')),
                  'bash', '-c', '. "$ROS_WS/.devcontainer/dev.bashrc"; env | grep "^ASTRO_\\(REGISTRY\\|NETWORK_ENV\\)=" | sort'],
                 capture_output=True, text=True)

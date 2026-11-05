@@ -53,7 +53,7 @@ class Hosts(unittest.TestCase):
             result = subprocess.run(
                 [str(ROOT / script), *command], capture_output=True, text=True,
                 env={**os.environ, 'HW_SSH': str(Path(tmp, 'ssh')), 'FAKE_SSH_LOG': str(log),
-                     'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', **env})
+                     'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', **env})
             return result, log.read_text()
 
     def test_deploy_fast_forwards_configured_repos_and_builds(self):
@@ -227,7 +227,7 @@ class Hosts(unittest.TestCase):
             Path(tmp, 'xdg/fixture/devices.yaml').write_text('self: s\n')
             log = Path(tmp, 'ssh.log')
             env = {**os.environ, 'HW_SSH': str(Path(tmp, 'ssh')), 'FAKE_SSH_LOG': str(log),
-                   'HW_SSH_COPY_ID': str(Path(tmp, 'copy')), 'XDG_STATE_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null',
+                   'HW_SSH_COPY_ID': str(Path(tmp, 'copy')), 'XDG_STATE_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent',
                    'XDG_CONFIG_HOME': str(Path(tmp, 'xdg')), 'ASTRO_REGISTRY': str(devices),
                    'ASTRO_NETWORK_ENV': str(Path(tmp, 'network.env'))}
             run = lambda: subprocess.run([str(ROOT / 'hw.sh'), 'hosts', 'keys'], capture_output=True,

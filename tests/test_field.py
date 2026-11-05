@@ -106,7 +106,7 @@ class Station(unittest.TestCase):
             log.touch()
             Path(tmp, 'modules', 'k1').mkdir(parents=True)
             env = {**os.environ, 'XDG_STATE_HOME': tmp, 'XDG_CONFIG_HOME': tmp, 'ASTRO_PROFILES': str(PROFILES),
-                   'ASTRO_SECRETS': '/nonexistent', 'ASTRO_ENV_FILE': '/dev/null', 'HW_KERNEL_RELEASE': 'k1',
+                   'ASTRO_SECRETS': '/nonexistent', 'HW_KERNEL_RELEASE': 'k1',
                    'HW_MODULES_ROOT': str(Path(tmp, 'modules')), 'FAKE_SSH_LOG': str(log),
                    'HW_SSH': executable(Path(tmp, 'ssh'), '#!/usr/bin/env bash\n{ echo "== $*"; cat; } >> "$FAKE_SSH_LOG"\n'),
                    'HW_SSH_COPY_ID': 'true', 'HW_DOCKER': executable(Path(tmp, 'docker'), FAKE_DOCKER),
@@ -207,7 +207,7 @@ class Hot(unittest.TestCase):
             [str(ROOT / 'hw.sh'), 'hot', 'alpha', *args], capture_output=True, text=True,
             env={**os.environ, **GIT_ENV, 'XDG_STATE_HOME': str(self.tmp), 'XDG_CONFIG_HOME': str(self.tmp),
                  'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent',
-                 'ASTRO_ENV_FILE': '/dev/null', 'HW_SRC': str(self.src), 'FAKE_SSH_LOG': str(log),
+                 'HW_SRC': str(self.src), 'FAKE_SSH_LOG': str(log),
                  'FAKE_ROOT': str(self.hosts), 'HW_SSH': executable(self.tmp / 'ssh', EXEC_SSH)})
         return run, log.read_text()
 

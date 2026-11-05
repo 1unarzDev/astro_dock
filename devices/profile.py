@@ -436,17 +436,12 @@ def local_addrs():
     return out
 
 
-def lan_subnet(env):
-    """A vessel network env's LAN_SUBNET, else BOAT_SUBNET (its old name, for one release)."""
-    return env.get('LAN_SUBNET') or env.get('BOAT_SUBNET', '')
-
-
 def boat_lan(root, vessels, addrs):
-    """[(vessel, address, subnet)] for each local address inside a vessel's LAN_SUBNET (lan_subnet)."""
+    """[(vessel, address, subnet)] for each local address inside a vessel's LAN_SUBNET."""
     out = []
     for vessel in vessels:
         try:
-            subnet = ipaddress.ip_network(lan_subnet(root.envs[vessel]), strict=False)
+            subnet = ipaddress.ip_network(root.envs[vessel].get('LAN_SUBNET', ''), strict=False)
         except ValueError:
             continue
         out += [(vessel, a, subnet) for a in addrs if a in subnet]

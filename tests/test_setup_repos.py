@@ -68,7 +68,7 @@ class SetupRepos(unittest.TestCase):
             path.append(str(self.tmp / 'colcon'))
         env = {k: v for k, v in os.environ.items() if not k.startswith(('ASTRO_', 'HW_'))}
         env.update(PATH=':'.join(path + [os.environ['PATH']]), LOG=str(self.log), RUNNING=running,
-                   PROJECT='fixture_project', XDG_CONFIG_HOME=str(self.tmp / 'config'), ASTRO_ENV_FILE='/dev/null',
+                   PROJECT='fixture_project', XDG_CONFIG_HOME=str(self.tmp / 'config'),
                    ASTRO_SECRETS=str(self.tmp / 'none'), HW_HOSTNAME='innovation',
                    HW_SYSFS_NET=str(self.tmp / 'nosys'), HW_ADDRS='', HW_DT_MODEL=str(self.tmp / 'no-model'),
                    **extra)
@@ -144,8 +144,7 @@ class SetupRepos(unittest.TestCase):
         self.assertEqual(listed(run), ['alpha', 'gamma'])
         run, _ = self.setup('--dry-run', '--host', 'somelaptop')            # a generic control station
         self.assertEqual(listed(run), ['alpha', 'gamma'])
-        run, _ = self.setup('--dry-run', '--profile', 'a', '--role', 'camera')   # the old flag, one release
-        self.assertIn('--profile is now --vessel', run.stderr)
+        run, _ = self.setup('--dry-run', '--vessel', 'a', '--role', 'camera')
         self.assertEqual(listed(run), ['alpha', 'beta', 'delta'])
 
     def test_a_repo_without_a_source_is_refused_before_any_clone(self):
