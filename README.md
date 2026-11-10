@@ -71,7 +71,7 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 ```
 
-On native Windows, the setup script generates the Windows adapter; install the CLI with the same `npm` command and run the `devcontainer` commands from that checkout. VS Code's **Reopen in Container** uses the same configuration after the adapter is generated.
+On native Windows, `setup.windows.bat` installs Node.js LTS and the Dev Container CLI, repairs WSL 2, turns on Docker Desktop's host networking and generates the Windows adapter (`setup.windows.bat /y` runs it unattended, as the research cluster's join does); run the `devcontainer` commands from that checkout. VS Code's **Reopen in Container** uses the same configuration after the adapter is generated.
 
 ### Usage
 

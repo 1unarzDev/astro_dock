@@ -1,6 +1,10 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: setup.windows.bat [/y]   /y: non-interactive (provisioning): no GitHub login, no git identity prompts, no pause
+set "ASTRO_YES="
+if /I "%~1"=="/y" set "ASTRO_YES=1"
+
 :: TODO: Need to add automatic VSCode configuration for no port forwarding to allow SITL to work
 
 :: Elevating script to admin
@@ -20,9 +24,22 @@ IF %ERRORLEVEL% NEQ 0 (
     echo Chocolatey is already installed.
 )
 
-echo Installing VSCode, Git, VCXSRV, and Docker if missing...
-choco install -y vcxsrv docker-desktop git vscode jq gh --ignore-missing
+:: Docker Desktop installed outside Chocolatey (its own installer, as the research cluster's join does) is kept:
+:: choco would install a second copy over it
+set "ASTRO_PKGS=vcxsrv git vscode jq gh nodejs-lts"
+if not exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" set "ASTRO_PKGS=%ASTRO_PKGS% docker-desktop"
+echo Installing %ASTRO_PKGS% if missing...
+choco install -y %ASTRO_PKGS% --ignore-missing
 CALL refresh_env.bat
+
+:: WSL 2 is Docker Desktop's backend. A damaged WSL install (Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG) stops at a
+:: "press any key to repair" prompt and hangs Docker; updating reinstalls the current package.
+echo Updating WSL...
+wsl --update --web-download
+wsl --set-default-version 2 >nul 2>&1
+
+:: The Dev Container CLI (devcontainer up/exec, as in the README)
+where devcontainer >nul 2>&1 || call npm install --global @devcontainers/cli
 
 echo Installing VSCode extensions...
 
@@ -47,8 +64,12 @@ w32tm /resync
 echo Checking GitHub authentication...
 gh auth status >nul 2>&1
 if %errorlevel% neq 0 (
-    echo You are not logged in to GitHub. Starting login...
-    gh auth login
+    if defined ASTRO_YES (
+        echo Not logged in to GitHub; run "gh auth login" later to push.
+    ) else (
+        echo You are not logged in to GitHub. Starting login...
+        gh auth login
+    )
 ) else (
     echo GitHub CLI already authenticated.
 )
@@ -60,25 +81,32 @@ for /f "delims=" %%A in ('git config --global user.email 2^>nul') do set GIT_USE
 echo Checking GitHub authentication...
 gh auth status >nul 2>&1
 if %errorlevel% neq 0 (
-    echo You are not logged in to GitHub. Starting login...
-    gh auth login
+    if defined ASTRO_YES (
+        echo Not logged in to GitHub; run "gh auth login" later to push.
+    ) else (
+        echo You are not logged in to GitHub. Starting login...
+        gh auth login
+    )
 ) else (
     echo GitHub CLI already authenticated.
 )
 
-if not defined GIT_USER_NAME (
+if not defined GIT_USER_NAME if not defined ASTRO_YES (
     set /p GIT_USER_NAME=Enter your Git username: 
     git config --global user.name "%GIT_USER_NAME%"
 ) else (
     echo Git user.name already set to "%GIT_USER_NAME%"
 )
 
-if not defined GIT_USER_EMAIL (
+if not defined GIT_USER_EMAIL if not defined ASTRO_YES (
     set /p GIT_USER_EMAIL=Enter your Git email: 
     git config --global user.email "%GIT_USER_EMAIL%"
 ) else (
     echo Git user.email already set to "%GIT_USER_EMAIL%"
 )
+
+:: Operator config, bind-mounted into the container (the Windows adapter mounts %USERPROFILE%/.config/mhseals)
+if not exist "%USERPROFILE%/.config/mhseals" mkdir "%USERPROFILE%/.config/mhseals"
 
 :: Copy docker-compose.override.windows.yml to docker-compose.override.yml
 IF EXIST ".\.devcontainer\docker-compose.override.windows.yml" (
@@ -98,6 +126,11 @@ if exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" (
 
 if defined DOCKER_EXE (
     echo Docker Desktop found at: "%DOCKER_EXE%"
+
+    :: network_mode: host must reach the Windows host's ports (crane_sim's ROS TCP endpoint on 10000): Docker
+    :: Desktop's host networking (4.34+), off by default.
+    powershell -NoProfile -ExecutionPolicy Bypass -File ".devcontainer\windows-docker-settings.ps1"
+    net localgroup docker-users "%COMPUTERNAME%\%USERNAME%" /add >nul 2>&1
 
     :: Add Docker Desktop to startup (auto-launch on login)
     echo Adding Docker Desktop to startup...
@@ -129,5 +162,5 @@ if not defined DOCKER_EXE (
 echo.
 echo Installation complete!
 echo You may need to restart your computer.
-pause
+if not defined ASTRO_YES pause
 exit /b
