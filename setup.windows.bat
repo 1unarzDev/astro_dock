@@ -127,8 +127,8 @@ if exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" (
 if defined DOCKER_EXE (
     echo Docker Desktop found at: "%DOCKER_EXE%"
 
-    :: network_mode: host must reach the Windows host's ports (crane_sim's ROS TCP endpoint on 10000): Docker
-    :: Desktop's host networking (4.34+), off by default.
+    rem network_mode host must reach the Windows host's ports, crane_sim's ROS TCP endpoint on 10000: Docker Desktop 4.34+ host networking, off by default.
+    rem Inside a parenthesised block cmd runs the line after a :: comment as a command, so comments here are rem lines without parentheses.
     powershell -NoProfile -ExecutionPolicy Bypass -File ".devcontainer\windows-docker-settings.ps1"
     net localgroup docker-users "%COMPUTERNAME%\%USERNAME%" /add >nul 2>&1
 
@@ -149,7 +149,7 @@ if defined DOCKER_EXE (
             echo Docker is running!
             goto :after_docker_check
         )
-        timeout /t 2 >nul
+        ping -n 3 127.0.0.1 >nul
     )
     echo Warning: Docker did not start within 60 seconds.
 )
