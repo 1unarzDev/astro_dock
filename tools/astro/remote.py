@@ -110,29 +110,54 @@ def in_container():
     return Path('/.dockerenv').exists() or bool(os.environ.get('ROS_DISTRO'))
 
 
+def local_words(vessel, container, cmd, tty):
+    """(argv, env) running `bash -c cmd` (no cmd: a shell) with the vessel's environment on this machine:
+    in CONTAINER, else this checkout's dev container, else right here when already in a container."""
+    if not container and in_container():
+        args = ['bash', '-c', cmd] if cmd else ['bash', '-i']
+        return args, dict(os.environ, **local_env(vessel, True))
+    if not container:
+        container = config.dev_container()
+        if not container:
+            raise config.Error('no running dev container for this checkout (start it, or name one with '
+                               f'container: on the {vessel.name} registry host)')
+    words = ['docker', 'exec', '-it' if tty else '-i']
+    if log.posix_tz():
+        words += ['-e', f'TZ={log.posix_tz()}']      # one clock: the container keeps the host's
+    for key, value in local_env(vessel, False).items():
+        words += ['-e', f'{key}={value}']
+    return words + [container, 'bash'] + (['-c', cmd] if cmd else []), None
+
+
+def place(vessel, host):
+    """(name, spec) of HOST in the vessel's registry: a host name, else the one host with that role."""
+    hosts = vessel.hosts()
+    if host in hosts:
+        return host, hosts[host]
+    found = [h for h, spec in hosts.items() if host in spec['roles']]
+    if len(found) != 1:
+        raise config.Error(f'{host!r} is {"several hosts" if found else "no host or role"} of {vessel.name} '
+                           f'({", ".join(found or hosts) or "no registry"})')
+    return found[0], hosts[found[0]]
+
+
+def words(vessel, host, spec, cmd, tty=False):
+    """(argv, env) running `bash -c cmd` in HOST's dev container: ssh + docker exec, or here (ssh: false)."""
+    if spec['ssh']:
+        return ssh_command(vessel, host, spec, [cmd] if cmd else [], tty), None
+    return local_words(vessel, spec['container'], cmd, tty)
+
+
 def on(name, cmd):
     tty = _tty()
     root = config.profiles_root()
     if name in _members(root) and name in local_vessels():
         vessel = config.Vessel(name)
-        hosts = vessel.hosts()
-        container = next((s['container'] for s in hosts.values() if s['container']), '')
-        if not container and in_container():
-            env = dict(os.environ, **local_env(vessel, True))
-            args = ['bash', '-c', ' '.join(cmd)] if cmd else ['bash', '-i']
-            os.execvpe('bash', args, env)
-        if not container:
-            container = config.dev_container()
-            if not container:
-                raise config.Error('no running dev container for this checkout (start it, or name one with '
-                                   f'container: on the {name} registry host)')
-        words = ['docker', 'exec', '-it' if tty else '-i']
-        if log.posix_tz():
-            words += ['-e', f'TZ={log.posix_tz()}']      # one clock: the container keeps the host's
-        for key, value in local_env(vessel, False).items():
-            words += ['-e', f'{key}={value}']
-        words += [container, 'bash'] + (['-c', ' '.join(cmd)] if cmd else [])
-        return subprocess.call(words)
+        container = next((s['container'] for s in vessel.hosts().values() if s['container']), '')
+        argv, env = local_words(vessel, container, ' '.join(cmd), tty)
+        if env is not None:
+            os.execvpe(argv[0], argv, env)
+        return subprocess.call(argv)
     vessel, host, spec = find_host(name)
     return subprocess.call(ssh_command(vessel, host, spec, cmd, tty))
 
