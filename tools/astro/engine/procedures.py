@@ -34,6 +34,7 @@ class Spec:
         self.tests = data.get('tests') or {}
         self.groups = data.get('groups') or {}
         self.defaults_path = data.get('defaults')
+        self.lane = data.get('lane') or {}        # {state, field, want, cause, fix}: who drives during a hold
         self.nodes = list(data.get('nodes') or [])          # the nodes astro status names
         self.gates = list(data.get('gates') or ([data['gate']] if data.get('gate') else []))
         self._find = find
@@ -141,6 +142,8 @@ def run(ctx, name, space='large', amp=None):
                             f'{gate.get("clear", "clear it")}, then run again')
             if not seen:
                 ctx.out(f'  warning: no state on {gate["state"]} (is the stack up?)')
+        if spec.lane.get('state') and hasattr(runner, 'watch'):
+            runner.watch(spec.lane)
         procedure = {'still': still, 'couple': couple, 'speed': speed, 'steps': steps}[kind]
         outcome = procedure(ctx, runner, test, state, defaults, room, amplitude)
     except KeyboardInterrupt:
@@ -194,6 +197,7 @@ def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s, main=None):
     t_on, _ = runner.hold(command, settle_s)
     m0, t_cut = runner.hold(command, measure_s)
     record(ctx, main, command, t_on, t_cut, runner.window(t_on, t_cut))
+    check_lane(ctx, runner, m0, t_cut)
     return runner.window(b0, b1), runner.window(m0, t_cut), runner.window(b0, t_cut), t_on, t_cut
 
 
@@ -210,6 +214,34 @@ def coasted(rows):
         return True
     return all(abs(sum(r[k] for r in last) / len(last) - sum(r[k] for r in first) / len(first)) < COAST_TOLERANCE
                for k in (1, 2, 3))
+
+
+LANE_MAX_OFF_S = 0.5
+
+
+def off_lane(log, t0, t1, want):
+    """Seconds of [t0, t1] the lane log ((t, value, cause), in time order) shows a value other than
+    ``want``, and the last such (value, cause). Before the first message the value is unknown (not counted)."""
+    off, last, bad = 0.0, None, None
+    for i, (t, value, cause) in enumerate(log):
+        end = log[i + 1][0] if i + 1 < len(log) else t1
+        low, high = max(t, t0), min(end, t1)
+        if high > low and value != want:
+            off += high - low
+            bad = (value, cause)
+        last = t
+    return off, bad
+
+
+def check_lane(ctx, runner, t0, t1):
+    lane = ctx.spec.lane
+    log = getattr(runner, 'lane_log', None)
+    if not lane.get('state') or log is None:
+        return
+    off, bad = off_lane(log, t0, t1, lane.get('want', 'auto'))
+    if off > LANE_MAX_OFF_S:
+        raise Abort(f'{lane["state"]} input is {bad[0]} ({bad[1]}) for {off:.1f} s of the measure window, '
+                    f'not {lane.get("want", "auto")}: {lane.get("fix", "give the lane back")}')
 
 
 HOLD_HZ = 30.0       # result samples are decimated to about this rate
@@ -381,6 +413,7 @@ def steps(ctx, runner, test, state, defaults, room, amplitude):
         t_on, t_off = runner.hold(command, step_s)
         runner.hold(neutral(n), coast_s)
         record(ctx, (axis, sign, target_v), command, t_on, t_off, runner.window(t_on, t_off))
+        check_lane(ctx, runner, t_on, t_off)
         samples = [(r[0], r[1 + j]) for r in runner.window(t_on, t_off)]
         m = fit.step_metrics(samples, sign * target_v, t_on, t_off)
         name = f'{axis}{"+" if sign > 0 else "-"}'

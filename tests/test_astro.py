@@ -262,6 +262,30 @@ class Results(unittest.TestCase):
         self.assertAlmostEqual(len(hold['samples']['t']) / (hold['end'] - hold['settle']), 30, delta=6)
 
 
+class Lane(unittest.TestCase):
+    def test_a_hold_taken_by_another_input_aborts(self):
+        from astro.engine import procedures
+        log = [(0.0, 'idle', 'idle'), (1.0, 'auto', ''), (5.0, 'rc', 'switch MANUAL'), (5.3, 'auto', '')]
+        off, bad = procedures.off_lane(log, 2.0, 8.0, 'auto')
+        self.assertAlmostEqual(off, 0.3)
+        off, bad = procedures.off_lane(log[:3], 2.0, 8.0, 'auto')
+        self.assertAlmostEqual(off, 3.0)
+        self.assertEqual(bad, ('rc', 'switch MANUAL'))
+
+        class Taken(FakeRunner):
+            def hold(self, command, seconds):
+                out = super().hold(command, seconds)
+                if any(command):
+                    self.lane_log.append((self.t - seconds, 'rc', 'switch MANUAL'))
+                return out
+        runner = Taken()
+        runner.lane_log = []
+        ctx = type('C', (), {'spec': type('S', (), {'lane': {'state': '/m', 'want': 'auto', 'fix': 'GUIDED'}})()})()
+        runner.hold([0.3, 0, 0], 2)
+        with self.assertRaisesRegex(procedures.Abort, 'input is rc .switch MANUAL.*GUIDED'):
+            procedures.check_lane(ctx, runner, 0.0, 2.0)
+
+
 class Verbs(unittest.TestCase):
     def test_help_on_a_dispatched_command_never_runs_it(self):
         import contextlib, io

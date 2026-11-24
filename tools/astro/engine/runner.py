@@ -83,6 +83,24 @@ class Runner:
         finally:
             self.node.destroy_subscription(sub)
 
+    def watch(self, lane):
+        """Record the arbiter's latched JSON state during the run (lane: {state, field, cause}):
+        self.lane_log gets (t, field value, cause value) on each message."""
+        import json
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+        from std_msgs.msg import String
+        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.lane_log = []
+
+        def state(msg):
+            try:
+                data = json.loads(msg.data)
+            except ValueError:
+                return
+            if isinstance(data, dict):
+                self.lane_log.append((self.now(), data.get(lane.get('field', 'input')), data.get(lane.get('cause', 'cause'))))
+        self.node.create_subscription(String, lane['state'], state, qos)
+
     def wait_ready(self, timeout=10.0):
         """Until the clock runs and odometry arrives; False after ``timeout`` wall seconds."""
         end = time.monotonic() + timeout
