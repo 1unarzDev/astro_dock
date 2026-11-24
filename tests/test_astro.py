@@ -451,7 +451,7 @@ class Stacks(unittest.TestCase):
         host, spec = remote.place(vessel, 'computer')                   # by role
         script = stacks.start_script('drive', 'ros2 launch p d.launch.py', stacks.data_expr({}))
         argv, env = remote.words(vessel, host, spec, script)
-        self.assertEqual((host, env, argv[:2]), ('boat-computer', None, ['ssh', 'u@10.0.0.5']))
+        self.assertEqual((host, env, argv[:4]), ('boat-computer', None, ['ssh', '-o', 'ConnectTimeout=8', 'u@10.0.0.5']))
         inner = shlex.split(argv[-1].split('docker exec -i ', 1)[1])
         self.assertEqual(inner[-4:-1], ['${c:-dev}', 'bash', '-c'])            # the whole script is one bash -c word
         self.assertIn('tmux -L astro new-session -d -s "$n"', inner[-1])  # never the default tmux server

@@ -113,7 +113,7 @@ class Argv(unittest.TestCase):
         host, argv, env = remote.home_words(FakeVessel(), 'computer', ['mark', 'wind', "it's up"], False)
         self.assertEqual(host, 'boat-main')
         self.assertIsNone(env)
-        self.assertEqual(argv[:2], ['ssh', 'crew@10.0.0.2'])
+        self.assertEqual(argv[:4], ['ssh', '-o', 'ConnectTimeout=8', 'crew@10.0.0.2'])
         self.assertNotIn('-t', argv)
         inner = shlex.split(argv[-1])
         self.assertEqual(inner[:3], ['docker', 'exec', '-i'])

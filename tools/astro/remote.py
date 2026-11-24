@@ -71,7 +71,7 @@ def ssh_command(vessel, host, spec, cmd, tty):
     if not spec['address']:
         raise config.Error(f'{host} has no address in {vessel.registry}')
     target = f'{spec["user"]}@{spec["address"]}' if spec['user'] else spec['address']
-    words = ['ssh']
+    words = ['ssh', '-o', 'ConnectTimeout=8']   # an unreachable host fails in seconds, never hangs
     key_dir = vessel.hosts_kind.get('operator_key')
     if key_dir:
         base = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / str(key_dir)
