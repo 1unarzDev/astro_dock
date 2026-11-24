@@ -27,8 +27,13 @@ def rates(topics, timeout, window, pid=0):
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = rclpy.create_node('astro_probe')
     counts = dict.fromkeys(topics, 0)
-    # Best effort and volatile match every publisher (reliable or not, latched or not).
-    qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.VOLATILE)
+    # Volatile matches every publisher; reliable when every publisher is (a large message such as a costmap
+    # arrives in fragments that best effort drops), else best effort, which matches any.
+    def qos_for(topic):
+        infos = node.get_publishers_info_by_topic(topic)
+        reliable = bool(infos) and all(i.qos_profile.reliability == ReliabilityPolicy.RELIABLE for i in infos)
+        return QoSProfile(depth=10, durability=DurabilityPolicy.VOLATILE, reliability=ReliabilityPolicy.RELIABLE
+                          if reliable else ReliabilityPolicy.BEST_EFFORT)
     subscribed, begin, dead = set(), time.monotonic(), False
 
     def spin_until(done, limit):
@@ -38,7 +43,7 @@ def rates(topics, timeout, window, pid=0):
                 if topic in types and topic not in subscribed:
                     subscribed.add(topic)
                     node.create_subscription(get_message(types[topic][0]), topic,
-                                             lambda _, t=topic: counts.__setitem__(t, counts[t] + 1), qos)
+                                             lambda _, t=topic: counts.__setitem__(t, counts[t] + 1), qos_for(topic))
             rclpy.spin_once(node, timeout_sec=0.1)
     try:
         def ready():
