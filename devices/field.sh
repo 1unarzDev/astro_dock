@@ -117,7 +117,7 @@ hot_heads() {
     shift
     for repo; do
         # shellcheck disable=SC2016  # expanded on the host
-        printf 'd=%s; if h=$(git -C "$d" rev-parse -q --verify HEAD 2>/dev/null); then s=clean; [ -z "$(git -C "$d" status --porcelain 2>/dev/null)" ] || s=dirty; echo "%s $h $s"; else echo "%s missing"; fi\n' \
+        printf 'd=%s; if h=$(git -C "$d" rev-parse -q --verify HEAD 2>/dev/null); then s=clean; [ -z "$(git -C "$d" status --porcelain --untracked-files=no 2>/dev/null)" ] || s=dirty; echo "%s $h $s"; else echo "%s missing"; fi\n' \
             "$(hot_remote "$repo" "$ws")" "$repo" "$repo"
     done
 }
