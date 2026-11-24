@@ -65,7 +65,10 @@ def start(vessel, words):
     if process.poll() is not None:
         raise config.Error(f'ros2 bag record exited: see {bags / (name + ".log")}')
     pid_file(root).write_text(f'{process.pid} {out}')
-    log.write(root, 'rec', f'start bags/{name} ({preset})', vessel.astro.get('events'))
+    # The name was fixed before the recorder started (-o), so the line names the bag; it waits until the
+    # recorder has subscribed, so the line is in the bag too.
+    log.write(root, 'rec', f'start {out.relative_to(log.day_dir(root))} ({preset})', vessel.astro.get('events'),
+              wait=True)
     return 0
 
 

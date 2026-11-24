@@ -49,7 +49,7 @@ class Runner:
         self.pub.publish(msg)
 
     def gate_state(self, gate, timeout=3.0):
-        """The arbiter's latched JSON state (gate: {state, held}): (seen, the held value or None)."""
+        """A latched JSON state (gate: {state, held, cause}; dotted paths): (seen, the cause or held value, or None)."""
         import json
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
         from std_msgs.msg import String
@@ -68,7 +68,17 @@ class Runner:
                 self.rclpy.spin_once(self.node, timeout_sec=0.05)
             if not isinstance(seen.get('state'), dict):
                 return False, None
-            return True, seen['state'].get(gate.get('held', 'hold'))
+            state = seen['state']
+
+            def get(path):
+                node = state
+                for part in str(path).split('.'):
+                    node = node.get(part) if isinstance(node, dict) else None
+                return node
+            held = get(gate.get('held', 'hold'))
+            if held and gate.get('cause'):
+                held = get(gate['cause']) or held
+            return True, held
         finally:
             self.node.destroy_subscription(sub)
 

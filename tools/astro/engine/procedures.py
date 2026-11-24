@@ -20,9 +20,9 @@ class Abort(Exception):
 
 class Spec:
     """A tests file: topics, axes, spaces, tests, groups, and optionally `defaults:` (a file whose keys
-    stand in for keys the state file does not set), `rotational:` (the rotational axis) and `gate:` (an
-    arbiter whose latched JSON state may hold the command lane: {state, held, clear}; a test refuses to
-    start while its `held` field is set and says how to clear it)."""
+    stand in for keys the state file does not set), `rotational:` (the rotational axis) and `gates:` (latched
+    JSON states that may stop the boat: [{state, held, cause, clear}], dotted paths; a test refuses to start
+    while a `held` field is set, naming its cause and how to clear it)."""
 
     def __init__(self, path, find=None):
         self.path = path
@@ -34,7 +34,7 @@ class Spec:
         self.tests = data.get('tests') or {}
         self.groups = data.get('groups') or {}
         self.defaults_path = data.get('defaults')
-        self.gate = data.get('gate') or {}
+        self.gates = list(data.get('gates') or ([data['gate']] if data.get('gate') else []))
         self._find = find
         for name, test in self.tests.items():
             if test.get('type') not in TYPES:
@@ -133,12 +133,11 @@ def run(ctx, name, space='large', amp=None):
         batt = f' batt={runner.battery:.1f}V' if runner.battery else ''
         amp_text = f' space={space} amp={amplitude:g}' if room else ''
         ctx.log('test', f'start {name} {amp_text} state={base["state"]}{batt}')
-        gate = spec.gate
-        if gate.get('state'):
+        for gate in spec.gates:
             seen, held = runner.gate_state(gate)
             if held:
-                raise Abort(f'{gate["state"]} holds the lane ({fmt(held)}); {gate.get("clear", "clear the hold")}, '
-                            'then run again')
+                raise Abort(f'{gate.get("name", gate["state"])}: {fmt(held)} ({gate["state"]}); '
+                            f'{gate.get("clear", "clear it")}, then run again')
             if not seen:
                 ctx.out(f'  warning: no state on {gate["state"]} (is the stack up?)')
         procedure = {'still': still, 'couple': couple, 'speed': speed, 'steps': steps}[kind]
