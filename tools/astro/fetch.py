@@ -280,6 +280,8 @@ def copy(vessel, found, items, dest_name, me, say=print):
         start = {'host': item['host'], 'spec': specs.get(item['host']), 'root': found[item['host']]['root']}
         say(f'[{i}/{len(todo)}] {item["host"]}:{item["id"]}  {size_text(item["size"])}  -> {dest_name}')
         sys.stdout.flush()
+        if end['spec'] is None:                     # a remote end makes its own (--rsync-path, mkdir -p)
+            Path(end['root'], item['rel']).parent.mkdir(parents=True, exist_ok=True)
         try:
             code = subprocess.call(copy_argv(vessel, start, end, item['rel'], tty))
         except KeyboardInterrupt:

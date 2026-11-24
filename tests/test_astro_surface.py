@@ -277,6 +277,22 @@ class RecFetch(unittest.TestCase):
         with self.assertRaisesRegex(config.Error, 'both this machine'):
             fetch.copy_argv(Vessel(), here, here, rel)
 
+    def test_a_copy_here_makes_the_parent_and_logs_one_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bag_tree(tmp)
+            src = self.found(tmp)
+            here = fetch.parse('here', bagscan.lines(tmp + '/dest'))
+            lake = next(b for b in src['bags'] if b['label'] == 'lake')
+            vessel = type('V', (Vessel,), {'data_root': lambda self: Path(tmp, 'dest')})()
+            with mock.patch.object(fetch.subprocess, 'call', return_value=0) as call, \
+                    mock.patch.object(config, 'have_ros', return_value=False), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(fetch.copy(vessel, {'boat-main': src, 'here': here}, [lake], 'here', ''), 0)
+            self.assertTrue(Path(tmp, 'dest', '2026-11-24', 'bags').is_dir())
+            self.assertIn('fetch 1 bag', Path(tmp, 'dest', fetch.datetime.date.today().isoformat(), 'log.txt').read_text())
+        self.assertEqual(call.call_args[0][0][-1], f'{tmp}/dest/2026-11-24/bags/101500-lake/')
+        self.assertIn('[1/1] boat-main:2026-11-24/101500-lake', out.getvalue())
+
     def test_search_runs_bagscan_in_the_hosts_own_shell(self):
         argv = fetch.scan_argv(Vessel(), 'boat-main', HOSTS['boat-main'])
         self.assertEqual(argv[argv.index('crew@10.0.0.2') - 1], 'BatchMode=yes')
