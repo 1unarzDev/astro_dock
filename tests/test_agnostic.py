@@ -29,7 +29,6 @@ CONTAINER = ('container roboboat_dev', r'roboboat_dev')
 DATA = ('MHSEALS_DATA', r'MHSEALS_DATA')
 GITMODULES = ('.gitmodules URLs', r'github\.com/MHSeals/[\w.-]+')
 HOOK_TABLE = ('mhseals_testing agent-hook regression table', r'ssh blastoise\b|mhseals_testing')
-AGENT_TOOLS = ('the workspace agent tools (quarantine plugin, tcache, timpact)', r'(?i:mhseals_agents)')
 
 PENDING = {
     '.devcontainer/Dockerfile.dev': (IMAGE,),
@@ -46,7 +45,6 @@ PENDING = {
     '.gitmodules': (GITMODULES,),
     'README.md': (IMAGE, GITMODULES),
     'tests/test_agents_hook.py': (HOOK_TABLE, DATA, CONTAINER),
-    'tests/smoke.sh': (AGENT_TOOLS,),
 }
 
 
