@@ -14,7 +14,8 @@ astro rec stop && astro down       # close the bag, stop the stacks
 ```
 
 `astro help` browses every command (astro's and each package's), `astro help --list` prints them all, and
-`astro VERB --help` explains one, with the plain ROS 2 command it runs.
+`astro VERB --help` explains one, with the plain ROS 2 command it runs. `astro docs` prints where everything
+lives: the field repo, today's log and bags, and every repo's docs with their GitHub links.
 
 ## Setup
 
@@ -167,6 +168,14 @@ Images come from [`lunarzdev/astro`](https://hub.docker.com/r/lunarzdev/astro), 
 container, and [`packages.txt`](.devcontainer/packages.txt) or
 [`requirements.txt`](.devcontainer/requirements.txt) keeps it. `config/run.yaml` sets the ROS domain,
 discovery range, data root and DDS transport. `./setup.linux.sh --components clock` sets up chrony.
+
+A host without the Dev Container CLI (a Jetson, for example) starts the container directly:
+
+```bash
+.devcontainer/prebuild.sh
+docker compose -p "$(basename "$PWD")_devcontainer" -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.override.yml up -d --pull always dev
+```
 
 | Path | Holds |
 | --- | --- |
