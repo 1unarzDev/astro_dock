@@ -138,7 +138,8 @@ class Contract(unittest.TestCase):
             shown = yaml.safe_load(show.stdout)
             if not shown['network_env']:
                 continue                                # a parent or a stub: its kinds need a vessel's addresses
-            for kind in set(shown) - {'profile', 'network_env', 'registry'}:
+            # a kind is a section naming a driver; others (hull, thrusters) are vessel data the packages read
+            for kind in [k for k, v in shown.items() if isinstance(v, dict) and 'driver' in v]:
                 with self.subTest(profile=profile.name, kind=kind):
                     run = subprocess.run(['bash', str(ROOT / 'hw.sh'), '--vessel', profile.name, kind, '--help'],
                                          capture_output=True, text=True, env=env)
