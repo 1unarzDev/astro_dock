@@ -45,7 +45,6 @@ PENDING = {
     '.github/workflows/images.yml': (IMAGE,),
     '.gitmodules': (GITMODULES,),
     'README.md': (IMAGE, GITMODULES),
-    'conftest.py': (AGENT_TOOLS,),
     'tests/test_agents_hook.py': (HOOK_TABLE, DATA, CONTAINER),
     'tests/smoke.sh': (AGENT_TOOLS,),
 }
