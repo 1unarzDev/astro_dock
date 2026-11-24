@@ -156,9 +156,9 @@ commands:
   - name: sim
     run: astro sim
     summary: Start, stop or check the simulated world of the sim vessel profile (its astro.sim backend).
-    notes: The backend runs as `CMD up|down|status|check [args]` with the sim profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat.
+    notes: The backend runs as `CMD VERB [args]` with the sim profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat. Every backend has up, down, status and check; others (e.g. restart nav) pass through.
     params:
-      - {name: verb, choices: [up, down, status, check], description: "What to do (check: the backend's readiness check)."}
+      - {name: verb, description: "up, down, status, check (readiness), or a backend verb such as restart nav."}
       - {name: args, type: list, required: false, description: 'Passed to the backend untouched (e.g. --window, --headless).'}
     examples:
       - astro sim up

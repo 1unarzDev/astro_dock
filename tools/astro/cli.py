@@ -391,7 +391,7 @@ def parser():
     sub.add_parser('undo', add_help=False)
     sub.add_parser('bundle', add_help=False).add_argument('--bags', action='store_true')
     sim = sub.add_parser('sim', add_help=False)
-    sim.add_argument('action', choices=('up', 'down', 'status', 'check'))
+    sim.add_argument('action')   # passed to the backend (up, down, status, check, restart …)
     sim.add_argument('args', nargs=argparse.REMAINDER)
     c = sub.add_parser('check', add_help=False)
     c.add_argument('name')
