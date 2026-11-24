@@ -209,7 +209,7 @@ def cmd_apply(s, args):
             ['not live: no ROS here; applies at the next launch'] if live else []):
         print('  ' + line)
     if result.get('restart'):
-        print(f'  restart {result["restart"]} to use this')
+        print(f'  to use this, restart: {result["restart"]}')
     print(f'next: {results.next_step(s.rows())}')
     return 0
 
