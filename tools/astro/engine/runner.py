@@ -21,7 +21,9 @@ class Runner:
         rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
         self.node = rclpy.create_node('astro_test', parameter_overrides=[
             Parameter('use_sim_time', Parameter.Type.BOOL, bool(sim_time))])
-        self.pub = self.node.create_publisher(Twist, command_topic, 10)
+        # no command topic: passive (`watch`), nothing is ever published
+        self.pub = self.node.create_publisher(Twist, command_topic, 10) if command_topic else None
+        self.efforts = []                 # (t, x, y, wz) of the listened command (listen)
         self.rows = []                    # (t, vx, vy, wz, yaw, x, y, header stamp)
         self.battery = None
         self.node.create_subscription(Odometry, odom_topic, self._odom, 20)
@@ -46,6 +48,8 @@ class Runner:
         self.battery = msg.voltage
 
     def _send(self, command):
+        if self.pub is None:
+            return
         msg = self.Twist()
         msg.linear.x, msg.linear.y, msg.angular.z = (float(v) for v in command)
         self.pub.publish(msg)
@@ -102,6 +106,12 @@ class Runner:
                 self.lane_log.append((self.now(), data.get(lane.get('field', 'input')), data.get(lane.get('cause', 'cause'))))
         self.node.create_subscription(String, lane['state'], state, qos)
 
+    def listen(self, topic):
+        """Record a Twist command someone else sends (the mux output): self.efforts gets (t, x, y, wz)."""
+        def effort(msg):
+            self.efforts.append((self.now(), msg.linear.x, msg.linear.y, msg.angular.z))
+        self.node.create_subscription(self.Twist, topic, effort, 20)
+
     def set_params(self, node, values, timeout=3.0):
         """Set {name: list of floats} on ``node`` in one SetParameters request; raises when refused."""
         from rcl_interfaces.srv import SetParameters
@@ -135,8 +145,8 @@ class Runner:
         return False
 
     def hold(self, command, seconds):
-        """Publish ``command`` for ``seconds`` of node time; returns (t0, t1)."""
-        self.command = list(command)
+        """Publish ``command`` for ``seconds`` of node time (passive: just listen); returns (t0, t1)."""
+        self.command = list(command) if command is not None else [0.0, 0.0, 0.0]
         t0 = self.now()
         next_send, period = t0, 1.0 / RATE_HZ
         while True:

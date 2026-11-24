@@ -1,4 +1,4 @@
-"""The test types a tests file composes: still, couple, speed, steps, nav2. Each runs alone, writes one result
+"""The test types a tests file composes: still, couple, speed, steps, nav2, watch (passive: someone drives). Each runs alone, writes one result
 file (its changes, the upstream keys it ran on, a one-line summary), logs `test start/done/abort` and prints
 its layer, old -> new and the exact `astro apply` command. Nothing here names a robot: topics, axes, keys,
 spaces and parameters all come from the tests file."""
@@ -10,9 +10,9 @@ import yaml
 from . import apply as applying
 from . import log, results     # fit (numpy) is imported by the test types that run
 
-TYPES = ('still', 'couple', 'speed', 'steps', 'nav2')
+TYPES = ('still', 'couple', 'speed', 'steps', 'nav2', 'watch')
 DEFAULT_LAYER = {'still': 'conditions', 'couple': 'decoupling', 'speed': 'speed curve',
-                 'steps': 'velocity loop', 'nav2': 'nav2 limits'}
+                 'steps': 'velocity loop', 'nav2': 'nav2 limits', 'watch': 'speed curve (driven)'}
 
 
 class Abort(Exception):
@@ -126,10 +126,17 @@ def run(ctx, name, space='large', amp=None):
         outcome = nav2(ctx, test, state, defaults)
         return finish(ctx, name, test, base, outcome, state, defaults)
     topics = spec.topics
-    command_topic = topics.get('velocity' if kind == 'steps' else 'effort')
-    if not command_topic or not topics.get('odom'):
-        raise Abort(f'{spec.path}: topics needs {"velocity" if kind == "steps" else "effort"} and odom')
+    if kind == 'watch':                    # passive: listens to the applied command, publishes nothing
+        command_topic, listen = None, topics.get('applied')
+        if not listen or not topics.get('odom'):
+            raise Abort(f'{spec.path}: topics needs applied and odom')
+    else:
+        command_topic = topics.get('velocity' if kind == 'steps' else 'effort')
+        if not command_topic or not topics.get('odom'):
+            raise Abort(f'{spec.path}: topics needs {"velocity" if kind == "steps" else "effort"} and odom')
     runner = ctx.make_runner(command_topic, topics['odom'], topics.get('battery'), ctx.sim_time)
+    if kind == 'watch':
+        runner.listen(listen)
     try:
         if not runner.wait_ready():
             raise Abort(f'no odometry on {topics["odom"]} (or no /clock with sim time)')
@@ -145,7 +152,7 @@ def run(ctx, name, space='large', amp=None):
                 ctx.out(f'  warning: no state on {gate["state"]} (is the stack up?)')
         if spec.lane.get('state') and hasattr(runner, 'watch'):
             runner.watch(spec.lane)
-        procedure = {'still': still, 'couple': couple, 'speed': speed, 'steps': steps}[kind]
+        procedure = {'still': still, 'couple': couple, 'speed': speed, 'steps': steps, 'watch': watch}[kind]
         outcome = procedure(ctx, runner, test, state, defaults, room, amplitude)
     except KeyboardInterrupt:
         runner.close()
@@ -476,15 +483,7 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
             raise Abort(f'{name}: no level moved the boat forward along the axis ({points[sign]})')
         curves[name] = curve
     rise = round(statistics.median(rises), 3) if rises else None
-    # the highest measured level's speed, never the curve extrapolated to full effort (kept as `extrapolated`)
-    velocity = round(min(c['max_speed'] for c in curves.values()), 4)
-    extrapolated = round(min(fit.speed_at(c['d1'], c['d2'], 1.0) for c in curves.values()), 4)
-    changes = [dict(key=f'{prefix}.speed_curves.{name}', value=dict(d1=round(c['d1'], 5), d2=round(c['d2'], 5)))
-               for name, c in curves.items()]
-    changes.append(dict(key=f'{prefix}.motion_limits.velocity.{axis}', value=velocity))
-    if rise:
-        changes.append(dict(key=f'{prefix}.t95.{axis}', value=rise))
-        changes.append(dict(key=f'{prefix}.motion_limits.acceleration.{axis}', value=round(velocity * 3 / rise, 4)))
+    changes, velocity, extrapolated = curve_changes(prefix, axis, curves, rise)
     if target.get('version') is not None:
         changes.append(dict(key=f'{prefix}.version', value=target['version']))
     for name, c in curves.items():
@@ -496,6 +495,21 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
                 measured=dict(points={k: [list(p) for p in v] for k, v in
                                       (('+', points[1]), ('-', points[-1]))}, t95=rises,
                               extrapolated_velocity=extrapolated, dropped=unclean))
+
+
+def curve_changes(prefix, axis, curves, rise):
+    """The speed-curve changes of one axis: its signed curves, velocity limit (the highest measured level's
+    speed, never the curve extrapolated to full effort), t95 and acceleration; (changes, velocity, extrapolated)."""
+    from . import fit
+    velocity = round(min(c['max_speed'] for c in curves.values()), 4)
+    extrapolated = round(min(fit.speed_at(c['d1'], c['d2'], 1.0) for c in curves.values()), 4)
+    changes = [dict(key=f'{prefix}.speed_curves.{name}', value=dict(d1=round(c['d1'], 5), d2=round(c['d2'], 5)))
+               for name, c in curves.items()]
+    changes.append(dict(key=f'{prefix}.motion_limits.velocity.{axis}', value=velocity))
+    if rise:
+        changes.append(dict(key=f'{prefix}.t95.{axis}', value=rise))
+        changes.append(dict(key=f'{prefix}.motion_limits.acceleration.{axis}', value=round(velocity * 3 / rise, 4)))
+    return changes, velocity, extrapolated
 
 
 def monotone(points):
@@ -569,3 +583,302 @@ def nav2(ctx, test, state, defaults):
     summary = f'velocity={fmt(limits["velocity"])} acceleration={fmt(limits["acceleration"])}'
     return dict(summary=summary, changes=[dict(key=target.get('key'), value=limits)],
                 measured=dict(why=why), live=list(target.get('live') or []))
+
+
+# ---- watch: someone else drives (RC, keyboard), the test only listens ----------------------------------------
+
+WATCH = {'levels': 3, 'level_gap': 0.08, 'min_effort': 0.08, 'steady_tol': 0.04, 'cross_max': 0.3,
+         'baseline_s': 1.0, 'settle_s': 2.5, 'measure_s': 1.5, 'drift_s': 10.0, 'max_s': 900.0}
+EFFORT_GAP_S = 0.5        # a pause this long in the applied command ends a run
+NEUTRAL_E = 0.02          # every effort under this is neutral
+STATUS_S = 2.0
+
+
+def watch_options(test):
+    return {k: float(test.get(k, v)) for k, v in WATCH.items()}
+
+
+def runs(efforts, o):
+    """Runs of the applied command (t, e0, e1, e2), in time order: (kind, j, sign, level, t0, t1, mean efforts),
+    kind 'neutral' or 'hold'. A hold is one axis at |e| >= min_effort with the others at most cross_max of it,
+    its effort within steady_tol of the run's mean; anything else (mixed, ramping) ends the run."""
+    out, current = [], None
+
+    def label(e):
+        mags = [abs(v) for v in e]
+        if max(mags) < NEUTRAL_E:
+            return ('neutral', None, 0)
+        j = mags.index(max(mags))
+        if mags[j] < o['min_effort'] or any(m > o['cross_max'] * mags[j] for k, m in enumerate(mags) if k != j):
+            return None
+        return ('hold', j, 1 if e[j] > 0 else -1)
+
+    def close(run):
+        if run and run['t1'] > run['t0']:
+            mean = [s / run['n'] for s in run['sum']]
+            level = abs(mean[run['j']]) if run['j'] is not None else 0.0
+            out.append((run['kind'], run['j'], run['sign'], round(level, 3), run['t0'], run['t1'], mean))
+
+    for t, *e in efforts:
+        key = label(e)
+        if current is not None:
+            same = key is not None and key == current['key'] and t - current['t1'] <= EFFORT_GAP_S
+            if same and key[0] == 'hold':
+                mean = current['sum'][key[1]] / current['n']
+                same = abs(e[key[1]] - mean) <= o['steady_tol']
+            if same:
+                current['t1'] = t
+                current['n'] += 1
+                current['sum'] = [a + b for a, b in zip(current['sum'], e)]
+                continue
+            close(current)
+            current = None
+        if key is not None:
+            current = dict(key=key, kind=key[0], j=key[1], sign=key[2], t0=t, t1=t, n=1, sum=list(e))
+    return out, current
+
+
+def clusters(levels, gap):
+    """Greedy groups of sorted levels, each spanning less than ``gap``."""
+    groups = []
+    for level in sorted(levels):
+        if groups and level - groups[-1][0] < gap:
+            groups[-1].append(level)
+        else:
+            groups.append([level])
+    return groups
+
+
+class Coverage:
+    """What the driving has covered so far: holds per axis and sign, onsets from rest, calm neutral time."""
+
+    def __init__(self, axes, o):
+        self.axes, self.o = axes, o
+        self.holds = []           # dicts: j, sign, level, t0, t1, baseline (b0, b1) or None
+        self.neutral_s = 0.0
+        self.calm = []            # (t0, t1) neutral windows the boat had stopped coasting in
+        self.seen = set()
+
+    def add(self, run, previous, window):
+        kind, j, sign, level, t0, t1, mean = run
+        if (t0, kind) in self.seen:
+            return None
+        if kind == 'neutral':
+            if t1 - t0 >= self.o['baseline_s']:
+                b0 = t1 - self.o['baseline_s']
+                if coasted(window(b0, t1)):
+                    self.seen.add((t0, kind))
+                    self.calm.append((max(t0, t1 - 4 * self.o['baseline_s']), t1))
+                    self.neutral_s += t1 - t0
+            return None
+        if t1 - t0 < self.o['settle_s'] + self.o['measure_s']:
+            return None
+        self.seen.add((t0, kind))
+        baseline = None
+        if previous and previous[0] == 'neutral' and t0 - previous[5] <= EFFORT_GAP_S and \
+                previous[5] - previous[4] >= self.o['baseline_s']:
+            b1 = previous[5]
+            b0 = b1 - self.o['baseline_s']
+            if coasted(window(b0, b1)):
+                baseline = (b0, b1)
+        hold = dict(j=j, sign=sign, level=level, t0=t0, t1=t1, baseline=baseline, efforts=mean)
+        self.holds.append(hold)
+        return hold
+
+    def pair(self, j, sign):
+        groups = clusters([h['level'] for h in self.holds if h['j'] == j and h['sign'] == sign], self.o['level_gap'])
+        return min(len(groups), int(self.o['levels']))
+
+    def onset(self, j):
+        return any(h['baseline'] for h in self.holds if h['j'] == j)
+
+    def fraction(self):
+        need = int(self.o['levels'])
+        got = sum(self.pair(j, s) for j in range(len(self.axes)) for s in (1, -1))
+        got += sum(self.onset(j) for j in range(len(self.axes)))
+        got += min(1.0, self.neutral_s / self.o['drift_s']) if self.o['drift_s'] > 0 else 1.0
+        return got / (2 * need * len(self.axes) + len(self.axes) + 1)
+
+    def missing(self):
+        need, out = int(self.o['levels']), []
+        for j, axis in enumerate(self.axes):
+            for sign in (1, -1):
+                have = self.pair(j, sign)
+                if have < need:
+                    levels = sorted(h['level'] for h in self.holds if h['j'] == j and h['sign'] == sign)
+                    hint = f' (have e={",".join(f"{v:g}" for v in levels)}; differ by {self.o["level_gap"]:g})' \
+                        if levels else ''
+                    out.append(f'{axis}{"+" if sign > 0 else "-"} {need - have} more level(s){hint}')
+            if not self.onset(j):
+                out.append(f'{axis} one hold started from rest ({self.o["baseline_s"]:g} s still first)')
+        if self.neutral_s < self.o['drift_s']:
+            out.append(f'{self.o["drift_s"] - self.neutral_s:.0f} s more sitting still')
+        return out
+
+    def line(self, current, now):
+        width = 20
+        f = self.fraction()
+        bar = '#' * int(round(f * width)) + '-' * (width - int(round(f * width)))
+        need = int(self.o['levels'])
+        parts = [f'{a}{"+" if s > 0 else "-"} {self.pair(j, s)}/{need}' for j, a in enumerate(self.axes)
+                 for s in (1, -1)]
+        parts.append(f'still {min(self.neutral_s, self.o["drift_s"]):.0f}/{self.o["drift_s"]:.0f}s')
+        text = f'[{bar}] {100 * f:3.0f}%  ' + '  '.join(parts)
+        if current and current['kind'] == 'hold':
+            held = now - current['t0']
+            total = self.o['settle_s'] + self.o['measure_s']
+            text += (f'  | holding {self.axes[current["j"]]}{"+" if current["sign"] > 0 else "-"} '
+                     f'e={abs(current["sum"][current["j"]] / current["n"]):.2f} {min(held, total):.1f}/{total:g}s')
+        return text
+
+
+def _status(ctx, text):
+    import sys
+    if ctx.out is print and sys.stdout.isatty():
+        sys.stdout.write('\r\033[K' + text)
+        sys.stdout.flush()
+        return True
+    return False
+
+
+def _clear(ctx):
+    import sys
+    if ctx.out is print and sys.stdout.isatty():
+        sys.stdout.write('\r\033[K')
+
+
+def lane_at(runner, t):
+    log = getattr(runner, 'lane_log', None) or []
+    value = None
+    for when, input_, _ in log:
+        if when > t:
+            break
+        value = input_
+    return value
+
+
+def watch(ctx, runner, test, state, defaults, room, amplitude):
+    """Passive: someone drives (RC, keyboard) while this listens to the applied command and odometry; steady
+    single-axis holds count toward `levels` distinct efforts per axis and sign, one start from rest per axis
+    (t95) and `drift_s` of sitting still (drift). Ends when all are covered, after `max_s`, or at Ctrl-C
+    (which fits what there is). Writes the speed-curve keys of each axis with enough holds."""
+    o = watch_options(test)
+    axes, target = ctx.spec.axes, test.get('apply') or {}
+    cover = Coverage(axes, o)
+    start = runner.now()
+    tty = _status(ctx, 'listening: drive (RC or keyboard); Ctrl-C to stop and fit what is there')
+    if not tty:
+        ctx.out('listening: drive (RC or keyboard); Ctrl-C to stop and fit what is there')
+    last_status, ended = start, 'complete'
+    try:
+        while True:
+            runner.hold(None, 0.5)
+            now = runner.now()
+            done, current = runs(runner.efforts, o)
+            previous = None
+            for run in done:
+                hold = cover.add(run, previous, runner.window)
+                previous = run
+                if hold:
+                    ctx.progress = f'{100 * cover.fraction():.0f}%'
+                    _clear(ctx)
+                    hold['lane'] = lane_at(runner, hold['t0'])
+                    m0 = hold['t1'] - o['measure_s']
+                    during = runner.window(m0, hold['t1'])
+                    v = during and sum(r[1 + hold['j']] for r in during) / len(during)
+                    unit = 'rad/s' if axes[hold['j']] == ctx.spec.rotational else 'm/s'
+                    ctx.out(f'  + {axes[hold["j"]]}{"+" if hold["sign"] > 0 else "-"} e={hold["level"]:g} '
+                            f'v~{v or 0:.2f}{unit}' + (' from rest' if hold['baseline'] else '')
+                            + (f' ({hold["lane"]})' if hold['lane'] else ''))
+            if cover.fraction() >= 1.0 - 1e-9:
+                break
+            if now - start > o['max_s']:
+                ended = f'max_s {o["max_s"]:g} s'
+                break
+            if now - last_status >= STATUS_S:
+                last_status = now
+                if not _status(ctx, cover.line(current, now)) and int(now - start) % 20 < STATUS_S:
+                    ctx.out(cover.line(current, now) + '  need: ' + '; '.join(cover.missing()[:3]))
+    except KeyboardInterrupt:
+        ended = 'ctrl-c'
+    _clear(ctx)
+    ctx.out(f'  watch ended ({ended}) at {100 * cover.fraction():.0f}%'
+            + (': still missing ' + '; '.join(cover.missing()) if cover.fraction() < 1 else ''))
+    return watch_fit(ctx, runner, cover, o, target, ended)
+
+
+def watch_fit(ctx, runner, cover, o, target, ended):
+    from . import fit
+    axes, n = ctx.spec.axes, len(ctx.spec.axes)
+    calm_rows = [r for t0, t1 in cover.calm for r in runner.window(t0, t1)]
+    drift = fit.drift(calm_rows) if calm_rows and all(r[4] is not None for r in calm_rows) else None
+    reference = calm_rows or None            # baseline of a hold not started from rest: the still windows
+    prefix = target.get('key', 'characterization')
+    changes, parts, points, cross, skipped, rises_all = [], [], {}, {}, [], {}
+    for j, axis in enumerate(axes):
+        unit = 'rad/s' if axis == ctx.spec.rotational else 'm/s'
+        curves, rises = {}, []
+        for sign in (1, -1):
+            name = f'{axis}{"+" if sign > 0 else "-"}'
+            raw = []
+            for h in (h for h in cover.holds if h['j'] == j and h['sign'] == sign):
+                m0 = h['t1'] - o['measure_s']
+                during = runner.window(m0, h['t1'])
+                if h['baseline']:
+                    before = runner.window(*h['baseline'])
+                elif reference:
+                    before = reference
+                else:     # no still moment at all: no drift to take out
+                    before = [(m0, 0.0, 0.0, 0.0, during[0][4] if during else None)]
+                if not during or not before:
+                    continue
+                delta = fit.response(before, during)
+                raw.append((sign * delta[j], h['level']))
+                cross.setdefault(axis, []).append([round(delta[k] / delta[j], 4) if abs(delta[j]) > 1e-3 else None
+                                                   for k in range(n)])
+                b0 = h['baseline'][0] if h['baseline'] else h['t0']
+                record(ctx, (axis, sign, h['level']), h['efforts'], h['t0'], h['t1'], runner.window(b0, h['t1']),
+                       h['baseline'], (m0, h['t1']), bool(h['baseline']))
+                ctx.holds[-1]['lane'] = h.get('lane')
+                if h['baseline']:
+                    rows = runner.window(b0, h['t1'])
+                    rise = fit.t95([r[0] for r in rows], [sign * r[1 + j] for r in rows], h['t0'], h['t1'])
+                    if rise is not None:
+                        rises.append(rise)
+            # repeats of one level are averaged, then the usual monotone check
+            groups = {}
+            for v, level in raw:
+                key = next(g[0] for g in clusters([p[1] for p in raw], o['level_gap']) if level in g)
+                groups.setdefault(key, []).append((v, level))
+            averaged = [(sum(v for v, _ in g) / len(g), sum(e for _, e in g) / len(g)) for g in groups.values()]
+            kept, dropped = monotone(averaged)
+            points[name] = [[round(v, 4), round(e, 4)] for v, e in averaged]
+            curve = fit.speed_curve(kept) if len(kept) >= 2 else None
+            if curve:
+                curves[name] = curve
+                parts.append(f'{name} d1={curve["d1"]:.3g} d2={curve["d2"]:.3g}')
+            else:
+                skipped.append(f'{name} ({len(kept)} level(s))')
+        rise = round(statistics.median(rises), 3) if rises else None
+        rises_all[axis] = rises
+        if len(curves) == 2:
+            axis_changes, velocity, _ = curve_changes(prefix, axis, curves, rise)
+            changes.extend(axis_changes)
+            parts.append(f'{axis} vmax={velocity:.3g}{unit}' + (f' t95={rise:.2f}s' if rise else ''))
+        elif curves:
+            changes.extend(dict(key=f'{prefix}.speed_curves.{k}', value=dict(d1=round(c['d1'], 5),
+                                                                              d2=round(c['d2'], 5)))
+                           for k, c in curves.items())
+    if changes and target.get('version') is not None:
+        changes.append(dict(key=f'{prefix}.version', value=target['version']))
+    cross_median = {}
+    for axis, ratios in cross.items():
+        columns = list(zip(*ratios))
+        cross_median[axis] = [round(statistics.median([v for v in c if v is not None]), 3)
+                              if any(v is not None for v in c) else None for c in columns]
+    summary = (' | '.join(parts) or 'no axis had two levels') + \
+        (f' | not fitted: {", ".join(skipped)}' if skipped else '') + f' ({ended}, {len(cover.holds)} holds)'
+    return dict(summary=summary, changes=changes, live=list(target.get('live') or []),
+                measured=dict(points=points, t95=rises_all, drift=drift, still_s=round(cover.neutral_s, 1),
+                              cross=cross_median, coverage=round(cover.fraction(), 3), ended=ended,
+                              missing=cover.missing()))

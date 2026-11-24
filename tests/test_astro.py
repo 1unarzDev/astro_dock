@@ -298,6 +298,71 @@ class Results(unittest.TestCase):
         self.assertEqual((found['verdict'], found['ceiling'], found['drift_trust']), ('rough', 'L4', False))
 
 
+class DriverRunner(FakeRunner):
+    """FakeRunner a person drives: the script's (efforts, seconds) are what the mux applies, at 25 Hz."""
+    SCRIPT = [([0, 0, 0], 12)] + [step for j in (0, 1, 2) for sign in (1, -1) for level in (0.2, 0.35, 0.5)
+                                  for step in (([sign * level if k == j else 0 for k in range(3)], 4.5),
+                                               ([0, 0, 0], 3))]
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.efforts, self.script = [], list(self.SCRIPT)
+
+    def listen(self, topic):
+        pass
+
+    def hold(self, command, seconds):
+        t0 = self.t
+        while self.t - t0 < seconds:
+            effort, left = self.script[0] if self.script else ([0, 0, 0], 1)
+            super().hold(effort, 0.04)
+            self.efforts.append((self.t, *effort))
+            if self.script:
+                self.script[0] = (effort, left - 0.04)
+                if self.script[0][1] <= 1e-9:
+                    self.script.pop(0)
+        return t0, self.t
+
+
+class Watch(unittest.TestCase):
+    def spec(self, tmp, axes):
+        tests = Path(tmp, 'tests.yaml')
+        tests.write_text(yaml.safe_dump({
+            'topics': {'applied': '/a', 'odom': '/o'}, 'axes': axes,
+            'tests': {'watch': {'type': 'watch', 'max_s': 300, 'apply': {'key': 'c', 'version': 1}}}}))
+        return procedures_module().Spec(tests)
+
+    def test_driving_covers_and_fits_the_speed_curves(self):
+        procedures = procedures_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = self.spec(tmp, AXES)
+            seen = []
+            ctx = procedures.Context(spec, Path(tmp, 'state.yaml'), tmp, make_runner=DriverRunner, out=seen.append)
+            data = yaml.safe_load(procedures.run(ctx, 'watch').read_text())
+        self.assertEqual(data['measured']['coverage'], 1.0, seen)
+        self.assertEqual(data['measured']['ended'], 'complete')
+        changes = {c['key']: c['value'] for c in data['changes']}
+        # the fake boat's steady speed equals its effort: e^2 = v^2, so d1 ~ 0 and d2 ~ 1
+        self.assertAlmostEqual(changes['c.speed_curves.surge+']['d2'], 1.0, delta=0.1)
+        self.assertLess(changes['c.speed_curves.surge+']['d1'], 0.05)
+        self.assertIn('c.t95.surge', changes)
+        self.assertEqual(len(data['holds']), 18)
+
+    def test_mixed_commands_are_not_holds(self):
+        procedures = procedures_module()
+        o = procedures.watch_options({})
+        steady = [(t * 0.04, 0.3, 0.0, 0.0) for t in range(120)]
+        mixed = [(t * 0.04, 0.3, 0.2, 0.0) for t in range(120)]
+        self.assertEqual([r[0] for r in procedures.runs(steady, o)[0]], [])     # still running: not closed
+        self.assertEqual(procedures.runs(steady + [(4.9, 0, 0, 0)], o)[0][0][:4], ('hold', 0, 1, 0.3))
+        self.assertEqual(procedures.runs(mixed + [(4.9, 0, 0, 0)], o)[0], [])
+
+
+def procedures_module():
+    from astro.engine import procedures
+    return procedures
+
+
 def mixed_wrench(command, plus, minus):
     """The body wrench a command makes through a thruster stack's law: each axis decoupled alone through its
     signed column, mixed per thruster, thrust e|e| summed per thruster, desaturated; wrench = M^T T / 4."""
