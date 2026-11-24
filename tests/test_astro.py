@@ -57,12 +57,16 @@ class Fit(unittest.TestCase):
         t = numpy.arange(0, 12, 0.01)
         y = numpy.where(t < t_on, 0.0, 1.3 * (1 - numpy.exp(-(t - t_on) / tau)))
         self.assertAlmostEqual(fit.t95(t, y, t_on, 12.0), 3 * tau, delta=0.02)
+        y[(t > 2.3) & (t < 2.32)] = 1.3                       # one noisy sample over the line early on
+        self.assertAlmostEqual(fit.t95(t, y, t_on, 12.0), 3 * tau, delta=0.02)
 
     def test_nav2_caps(self):
         rules = {'delay_s': 0.15, 'stop_distance_m': 1.0, 'ramp_lags': 3.0, 'yaw_tolerance': 0.25}
         t95 = {'surge': 1.5, 'sway': 1.8, 'yaw': 0.45}
-        out = fit.nav2_limits({'surge': 9, 'sway': 0.1, 'yaw': 9}, {'surge': 9, 'sway': 9, 'yaw': 0.05},
-                              t95, rules, AXES, 'yaw')
+        out, why = fit.nav2_limits({'surge': 9, 'sway': 0.1, 'yaw': 9}, {'surge': 9, 'sway': 9, 'yaw': 0.05},
+                                   t95, rules, AXES, 'yaw')
+        self.assertEqual(why['sway']['velocity'], 'measured')
+        self.assertIn('stop_distance_m', why['surge']['velocity'])
         lag = 0.5 + 0.15
         self.assertAlmostEqual(out['velocity'][0], round(1.0 / (lag * 2.5), 4))
         self.assertEqual(out['velocity'][1], 0.1)                             # measured is lower
@@ -117,7 +121,14 @@ class Apply(unittest.TestCase):
         self.assertEqual(data['characterization']['speed_curves']['surge+'], {'d1': 0.4, 'd2': 0.2})
         self.assertEqual(data['other'], 1)
         self.assertTrue(backup.exists())
-        name, live = apply.undo(self.state, self.check)
+        now = datetime.datetime(2026, 11, 24, 13, 7, 2)            # two applies in the same instant
+        first, _ = apply.apply(self.state, [dict(key='x', value=1)], {}, None, now=now)
+        second, _ = apply.apply(self.state, [dict(key='x', value=2)], {}, None, now=now)
+        self.assertNotEqual(first, second)
+        self.assertEqual(apply.undo(self.state)[0], second.name)
+        self.assertEqual(apply.undo(self.state)[0], first.name)
+        name, live, problem = apply.undo(self.state, self.check)
+        self.assertIn('fails the check', problem)                    # {'other': 1} has no decoupling
         self.assertEqual(name, backup.name)
         self.assertEqual(live, [{'node': '/n', 'param': 'decoupling'}])
         self.assertEqual(yaml.safe_load(self.state.read_text()), {'other': 1})

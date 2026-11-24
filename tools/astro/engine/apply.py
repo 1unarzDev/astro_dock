@@ -83,7 +83,22 @@ def changed(state, defaults, changes, axes=None):
 
 
 def stamp(now=None):
-    return f'{now or datetime.datetime.now():%Y%m%d-%H%M%S}'
+    return f'{now or datetime.datetime.now():%Y%m%d-%H%M%S-%f}'
+
+
+def new_backup(path, text, now=None):
+    """A fresh backup file holding ``text``; never overwrites one (two applies in one microsecond, or a
+    clock step back, get a numbered suffix)."""
+    base = path.with_name(f'{path.name}.bak-{stamp(now)}')
+    for n in range(100):
+        backup = base if n == 0 else base.with_name(f'{base.name}.{n:02d}')
+        try:
+            with open(backup, 'x') as handle:
+                handle.write(text)
+            return backup
+        except FileExistsError:
+            continue
+    raise Refused(f'no free backup name next to {path}')
 
 
 def backups(path):
@@ -91,13 +106,18 @@ def backups(path):
     return sorted(path.parent.glob(path.name + '.bak-*'))
 
 
-def write_state(path, data):
+def write_text(path, text):
+    """Atomic: a sibling temp file renamed over ``path``."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + '.tmp')
-    tmp.write_text('# Written by astro apply: measured and tuned state. Undo: astro undo.\n'
-                   + yaml.safe_dump(data, sort_keys=False, default_flow_style=None, width=110))
+    tmp.write_text(text)
     tmp.replace(path)
+
+
+def write_state(path, data):
+    write_text(path, '# Written by astro apply: measured and tuned state. Undo: astro undo.\n'
+               + yaml.safe_dump(data, sort_keys=False, default_flow_style=None, width=110))
 
 
 def run_check(check, path):
@@ -121,8 +141,8 @@ def apply(path, changes, defaults=None, check=None, axes=None, live=(), now=None
     diffs = [d for d in diffs if d[1] != d[2]]
     if not diffs:
         return None, []
-    backup = path.with_name(f'{path.name}.bak-{stamp(now)}')
-    backup.write_text(path.read_text() if path.exists() else ABSENT)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup = new_backup(path, path.read_text() if path.exists() else ABSENT, now)
     Path(str(backup) + '.json').write_text(json.dumps({'live': list(live)}))
     write_state(path, new)
     ok, output = run_check(check, path)
@@ -138,7 +158,7 @@ def restore(path, backup):
     if text == ABSENT:
         path.unlink(missing_ok=True)
     else:
-        path.write_text(text)
+        write_text(path, text)
     backup.unlink()
     side = Path(str(backup) + '.json')
     live = json.loads(side.read_text()).get('live', []) if side.exists() else []
@@ -147,7 +167,8 @@ def restore(path, backup):
 
 
 def undo(path, check=None):
-    """Restore the newest backup (and remove it). Returns (backup name, live params to re-set)."""
+    """Restore the newest backup (and remove it). Returns (backup name, live params to re-set, the failed
+    check's text or None)."""
     found = backups(path)
     found = [b for b in found if not b.name.endswith('.json')]
     if not found:
@@ -155,9 +176,9 @@ def undo(path, check=None):
     newest = found[-1]
     live = restore(path, newest)
     ok, output = run_check(check, path) if Path(path).exists() else (True, '')
-    if not ok:
-        print(f'warning: the restored state fails the check:\n{output}')
-    return newest.name, live
+    problem = None if ok else (f'restored {Path(path).name} from {newest.name}, but the restored state fails '
+                               f'the check (fix it, or astro undo again):\n{output}')
+    return newest.name, live, problem
 
 
 def param_value(value):

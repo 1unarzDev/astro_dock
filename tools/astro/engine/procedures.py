@@ -188,21 +188,48 @@ def neutral(n):
 
 def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s, main=None):
     """Neutral baseline, then the command for settle + measure; (baseline rows, measure rows, all, t_on, t_cut).
-    The neutral lasts until the boat stops coasting: its velocity no longer changes (a steady current is
-    allowed, so this works in a current where "below the noise" never comes), at most coast_max_s."""
+    The neutral lasts until the boat stops coasting: its velocity no longer changes and its speed is near the
+    drift the last `still` measured (a steady current is allowed), at most COAST_MAX_S; a hold that starts
+    unsettled says so and is recorded `settled: false`."""
     start = runner.now()
+    reference = still_drift(ctx)
     b0, b1 = runner.hold(neutral(n), baseline_s)
-    while b1 - start < COAST_MAX_S and not coasted(runner.window(b1 - 2 * COAST_WINDOW_S, b1)):
+    while b1 - start < COAST_MAX_S and not settled(runner.window(b1 - 2 * COAST_WINDOW_S, b1), reference):
         _, b1 = runner.hold(neutral(n), 0.5)
+    calm = settled(runner.window(b1 - 2 * COAST_WINDOW_S, b1), reference)
+    if not calm:
+        ctx.out(f'  warning: still coasting after {COAST_MAX_S:g} s of neutral; this hold is recorded unsettled')
     b0 = b1 - baseline_s
     t_on, _ = runner.hold(command, settle_s)
     m0, t_cut = runner.hold(command, measure_s)
-    record(ctx, main, command, t_on, t_cut, runner.window(b0, t_cut), (b0, b1), (m0, t_cut))
+    record(ctx, main, command, t_on, t_cut, runner.window(b0, t_cut), (b0, b1), (m0, t_cut), calm)
     check_lane(ctx, runner, m0, t_cut)
     return runner.window(b0, b1), runner.window(m0, t_cut), runner.window(b0, t_cut), t_on, t_cut
 
 
 COAST_MAX_S, COAST_WINDOW_S, COAST_TOLERANCE = 8.0, 1.0, 0.03   # s, s, m/s (rad/s)
+DRIFT_TOLERANCE = 0.05                                          # m/s (rad/s) over the still drift
+
+
+def still_drift(ctx):
+    """The drift speed (m/s) of the latest `still` result, or None (then only the coasting check counts)."""
+    names = [k for k, t in ctx.spec.tests.items() if t.get('type') == 'still']
+    found = [r for r in results.load_all(ctx.data_root) if r.get('test') in names and r.get('status') == 'done']
+    drift = ((found[-1].get('measured') or {}).get('drift') or {}) if found else {}
+    return float(drift['speed']) if drift.get('speed') is not None else None
+
+
+def settled(rows, reference):
+    """Coasted, and (with a still drift) the speed within DRIFT_TOLERANCE of it and no turn left."""
+    if not coasted(rows):
+        return False
+    if reference is None or len(rows) < 4:
+        return True
+    from . import fit
+    now = fit.drift(rows)
+    wz = sum(r[3] for r in rows) / len(rows)
+    speed = now['speed'] if now else math.hypot(sum(r[1] for r in rows) / len(rows), sum(r[2] for r in rows) / len(rows))
+    return abs(speed - reference) < DRIFT_TOLERANCE and abs(wz) < DRIFT_TOLERANCE
 
 
 def coasted(rows):
@@ -249,7 +276,7 @@ HOLD_HZ = 30.0       # result samples are decimated to about this rate
 CLOCKS_APART_S = 1.0  # t_sensor is left out when the message stamps are this far from the node clock
 
 
-def record(ctx, main, command, start, end, rows, baseline=None, measure=None):
+def record(ctx, main, command, start, end, rows, baseline=None, measure=None, calm=True):
     """One hold for the result file: its command (axis, sign, level; the efforts sent), start (command on) and
     end on the node clock, the neutral baseline [b0, b1] and measure window [m0, end] before and in it, and
     body-frame odometry from the baseline's start to end (t on the node clock; t_sensor, the message stamps,
@@ -273,6 +300,8 @@ def record(ctx, main, command, start, end, rows, baseline=None, measure=None):
         hold['baseline'] = [round(t, 3) for t in baseline]
     if measure:
         hold['measure'] = [round(t, 3) for t in measure]
+    if not calm:
+        hold['settled'] = False
     ctx.holds.append(dict(hold, samples=samples))
 
 
@@ -435,7 +464,9 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
             raise Abort(f'{name}: no level moved the boat forward along the axis ({points[sign]})')
         curves[name] = curve
     rise = round(statistics.median(rises), 3) if rises else None
-    velocity = round(min(fit.speed_at(c['d1'], c['d2'], 1.0) for c in curves.values()), 4)
+    # the highest measured level's speed, never the curve extrapolated to full effort (kept as `extrapolated`)
+    velocity = round(min(c['max_speed'] for c in curves.values()), 4)
+    extrapolated = round(min(fit.speed_at(c['d1'], c['d2'], 1.0) for c in curves.values()), 4)
     changes = [dict(key=f'{prefix}.speed_curves.{name}', value=dict(d1=round(c['d1'], 5), d2=round(c['d2'], 5)))
                for name, c in curves.items()]
     changes.append(dict(key=f'{prefix}.motion_limits.velocity.{axis}', value=velocity))
@@ -446,10 +477,12 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
         changes.append(dict(key=f'{prefix}.version', value=target['version']))
     for name, c in curves.items():
         parts.append(f'{name} d1={c["d1"]:.3g} d2={c["d2"]:.3g}')
-    summary = ' | '.join(parts) + (f' t95={rise:.2f}s' if rise else '') + f' vmax={velocity:.3g}'
+    summary = (' | '.join(parts) + (f' t95={rise:.2f}s' if rise else '') +
+               f' vmax={velocity:.3g} (measured at e={max(levels):g}; curve at e=1: {extrapolated:.3g})')
     return dict(summary=summary, changes=changes, live=list(target.get('live') or []),
                 measured=dict(points={k: [list(p) for p in v] for k, v in
-                                      (('+', points[1]), ('-', points[-1]))}, t95=rises))
+                                      (('+', points[1]), ('-', points[-1]))}, t95=rises,
+                              extrapolated_velocity=extrapolated))
 
 
 def steps(ctx, runner, test, state, defaults, room, amplitude):
@@ -495,8 +528,11 @@ def nav2(ctx, test, state, defaults):
         missing = [a for a in axes if not isinstance(values[part], dict) or values[part].get(a) is None]
         if missing:
             raise Abort(f'no {key}.{"/".join(missing)} in the state: run and apply the speed tests first')
-    limits = fit.nav2_limits(values['velocity'], values['acceleration'], values['t95'], test['rules'],
-                             axes, ctx.spec.rotational)
+    limits, why = fit.nav2_limits(values['velocity'], values['acceleration'], values['t95'], test['rules'],
+                                  axes, ctx.spec.rotational)
+    for k, a in enumerate(axes):
+        ctx.out(f'  {a}: velocity {limits["velocity"][k]:g} ({why[a]["velocity"]}), '
+                f'acceleration {limits["acceleration"][k]:g} ({why[a]["acceleration"]})')
     summary = f'velocity={fmt(limits["velocity"])} acceleration={fmt(limits["acceleration"])}'
     return dict(summary=summary, changes=[dict(key=target.get('key'), value=limits)],
-                live=list(target.get('live') or []))
+                measured=dict(why=why), live=list(target.get('live') or []))

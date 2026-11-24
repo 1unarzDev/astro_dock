@@ -214,7 +214,7 @@ def cmd_apply(s, args):
 def cmd_undo(s, args):
     state_path = s.vessel.state()
     try:
-        name, live = applying.undo(state_path, s.vessel.astro.get('check'))
+        name, live, problem = applying.undo(state_path, s.vessel.astro.get('check'))
     except applying.Refused as error:
         raise config.Error(str(error)) from None
     log.write(s.root, 'apply', f'undo  {state_path.name} restored from {name}', s.events)
@@ -222,6 +222,9 @@ def cmd_undo(s, args):
     if live and config.have_ros():
         for line in applying.set_live(live, state_path, s.spec.defaults()):
             print('  ' + line)
+    if problem:
+        raise config.Error(problem)
+    print(f'  restored {state_path} from {name}')
     return 0
 
 

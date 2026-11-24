@@ -181,9 +181,10 @@ def speed_at(d1, d2, effort):
 
 # ---- rise time and step metrics ------------------------------------------------------------------
 
-def t95(t, y, t_on, t_cut):
-    """Seconds after ``t_on`` until ``y`` first reaches 95 % of its change from the mean before ``t_on``
-    to the mean over the hold's last third; None if never (a first-order rise gives 3 tau)."""
+def t95(t, y, t_on, t_cut, hold_s=0.5):
+    """Seconds after ``t_on`` until ``y`` reaches 95 % of its change from the mean before ``t_on`` to the
+    mean over the hold's last third and stays there for ``hold_s`` (at least 3 samples), so one noisy
+    sample over the line does not count; None if never (a first-order rise gives 3 tau)."""
     t, y = numpy.asarray(t, float), numpy.asarray(y, float)
     before = y[t < t_on]
     base = float(before.mean()) if before.size else 0.0
@@ -194,8 +195,15 @@ def t95(t, y, t_on, t_cut):
     steady = float(y[tail].mean())
     if steady == base:
         return None
-    reached = numpy.nonzero(hold & ((y - base) / (steady - base) >= 0.95))[0]
-    return float(t[reached[0]] - t_on) if reached.size else None
+    index = numpy.nonzero(hold)[0]
+    above = (y[index] - base) / (steady - base) >= 0.95
+    for i in range(len(index)):
+        if not above[i]:
+            continue
+        run = index[i:][t[index[i:]] <= t[index[i]] + hold_s]
+        if len(run) >= 3 and above[i:i + len(run)].all():
+            return float(t[index[i]] - t_on)
+    return None
 
 
 RISE_LOW, RISE_HIGH = 0.1, 0.9
@@ -252,8 +260,18 @@ def rule_limits(rules, tau, rotational):
 
 
 def nav2_limits(velocity, acceleration, t95s, rules, axes, rotational):
-    """{velocity: [..], acceleration: [..]} in axis order: what the boat showed, capped by its lag."""
+    """{velocity: [..], acceleration: [..]} in axis order: what the boat showed, capped by its lag, and
+    ``why``: per axis, which rule set each limit (measured, or the stop-distance / yaw-tolerance /
+    ramp cap with its lag)."""
     tau = {axis: float(t95s[axis]) / 3.0 for axis in axes}
     cap_v, cap_a = rule_limits(rules, tau, rotational)
+    lag = {axis: tau[axis] + float(rules['delay_s']) for axis in axes}
+    why = {}
+    for a in axes:
+        rule = (f'yaw_tolerance {float(rules["yaw_tolerance"]):g} / (2 lag)' if a == rotational else
+                f'stop_distance_m {float(rules["stop_distance_m"]):g} / (lag (ramp_lags/2 + 1))')
+        v = ('measured' if float(velocity[a]) <= cap_v[a] else f'{rule}, lag {lag[a]:.2f}s')
+        acc = ('measured' if float(acceleration[a]) <= cap_a[a] else f'v / (ramp_lags lag), lag {lag[a]:.2f}s')
+        why[a] = dict(velocity=v, acceleration=acc)
     return dict(velocity=[round(min(float(velocity[a]), cap_v[a]), 4) for a in axes],
-                acceleration=[round(min(float(acceleration[a]), cap_a[a]), 4) for a in axes])
+                acceleration=[round(min(float(acceleration[a]), cap_a[a]), 4) for a in axes]), why
