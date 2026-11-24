@@ -1,4 +1,4 @@
-"""`astro status [--watch]`: one plain-text page - the ROS nodes, the last message on each topic of the tests
+"""`astro status [--watch]`: one plain-text page - the stacks (host, up/down, uptime, ready rates, log), the ROS nodes, the last message on each topic of the tests
 file, the recording, the last log lines and the next test."""
 import json
 import math
@@ -69,8 +69,14 @@ def sample(topics, seconds=2.0):
         rclpy.try_shutdown()
 
 
-def page(vessel, spec, rows_next, lines=6):
+def stacks_block(lines):
+    """The stacks part of the page (stacks.table lines), or nothing when the vessel has no stacks."""
+    return ['stacks ' + lines[0]] + ['       ' + line for line in lines[1:]] if lines else []
+
+
+def page(vessel, spec, rows_next, lines=6, stack_lines=()):
     out = [f'vessel {vessel.name}  data {vessel.data_root()}  {time.strftime("%H:%M:%S")}']
+    out += stacks_block(list(stack_lines))
     if config.have_ros() and spec:
         topics = [t for t in dict.fromkeys(spec.topics.values()) if isinstance(t, str)]
         nodes, seen = sample(topics)

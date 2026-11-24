@@ -21,7 +21,7 @@ WHICH = re.compile(r'(?:command -v|\bwhich|shutil\.which\()\s*[\'"]?([A-Za-z][A-
 
 
 def shell_files():
-    out = [ROOT / 'hw.sh', ROOT / 'fetch_bags.sh']   # the setup scripts are the installers, not callers
+    out = [ROOT / 'hw.sh']   # the setup scripts are the installers, not callers
     out += sorted((ROOT / 'net').glob('*.sh')) + sorted((ROOT / 'devices').glob('**/*.sh'))
     for d in sorted((ROOT / 'src').glob('*/tools')):   # every repo's tools/, whatever the team calls its repos
         out += [p for p in sorted(d.iterdir()) if p.is_file()]

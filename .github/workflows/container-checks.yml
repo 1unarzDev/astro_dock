@@ -48,8 +48,6 @@ jobs:
         run: .github/scripts/test-linger-stage.sh
       - name: Validate the DDS address choice
         run: .github/scripts/test-ros-net.sh
-      - name: Validate the bag fetch fallback
-        run: .github/scripts/test-fetch-bags.sh
       - name: Run every unit test (fakes only)
         run: python3 -m unittest discover -s tests
       - name: Validate the boat revert

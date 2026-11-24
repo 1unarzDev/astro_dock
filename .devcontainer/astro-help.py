@@ -2,8 +2,9 @@
 """Browse, fill in and run the commands that workspace packages describe in help.yaml (`astro help`).
 
     astro help                 interactive browser (a terminal is required)
-    astro help --list [WORD]   plain text: every command, or full details of matching ones
+    astro help --list [WORD]   plain text: the core commands, or full details of matching ones (any level)
     astro help WORD            the same details, without a terminal check
+    astro help --all           also the setup-level commands (host setup, overlays, images)
 
 help.yaml schema (unknown keys are ignored):
 
@@ -13,6 +14,9 @@ help.yaml schema (unknown keys are ignored):
       - name: boat_trial check  # display name
         run: ros2 run pkg boat_trial check   # command prefix (default: name)
         summary: one line
+        level: core             # core (default) | setup: setup commands show only with --all
+        host: ROLE|HOST         # optional: where it runs; `astro NAME` from elsewhere forwards it there
+                                # (astro on HOST RUN ..., printing "(on HOST)"); --here runs it here
         ros: optional; the plain ROS 2 an astro verb composes (shown beside it)
         notes: optional text (safety, which host)
         params:
@@ -22,6 +26,8 @@ help.yaml schema (unknown keys are ignored):
             type: str           # str | int | float | bool | path | list (space-separated)
             default: 5.0
             choices: [a, b]
+            choices_from: 'CMD' # shell command, run here: one choice per line, optionally VALUE<TAB>about;
+                                # a missing required one is picked from that list on a terminal
             description: one line
             required: false     # positional params default to required
             form: option        # positional | option | switch | launch, overrides the inference
@@ -48,6 +54,7 @@ import yaml
 
 OWN = Path(__file__).resolve().with_name('astro-help.yaml')
 FORMS = ('positional', 'option', 'switch', 'launch')
+LEVELS = ('core', 'setup')
 TRUE = ('true', 'on', 'yes', '1')
 EXTRA = []                 # more help.yaml paths, set by the caller (astro: the profile's astro.help)
 
@@ -93,7 +100,11 @@ def parse(path):
             if param['form'] not in FORMS:
                 raise ValueError(f'{command["name"]}: unknown form {param["form"]}')
             params.append(param)
+        level = str(command.get('level') or 'core')
+        if level not in LEVELS:
+            raise ValueError(f'{command["name"]}: level {level} (core or setup)')
         commands.append(dict(command, name=str(command['name']), run=str(command.get('run') or command['name']),
+                             level=level, host=str(command.get('host') or ''),
                              summary=str(command.get('summary', '')), notes=str(command.get('notes') or ''),
                              ros=str(command.get('ros') or ''),
                              params=params, examples=[str(e) for e in command.get('examples') or []]))
@@ -178,6 +189,102 @@ def matches(package, command, word):
     return any(word in text.lower() for text in (package['package'], command['name'], command['summary']))
 
 
+def parse_choices(text):
+    """[(value, about)] from a choices_from command's output: one per line, optionally VALUE<TAB>about."""
+    out = []
+    for line in text.splitlines():
+        value, _, about = line.partition('\t')
+        if value.strip():
+            out.append((value.strip(), about.strip()))
+    return out
+
+
+def run_choices(command, env=None, timeout=30):
+    """[(value, about)] printed by a choices_from shell command (run here); [] when it fails."""
+    try:
+        done = subprocess.run(['bash', '-c', command], capture_output=True, text=True, timeout=timeout,
+                              env=env, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return parse_choices(done.stdout)
+
+
+def pick(title, choices, stream=None):
+    """The chosen value from [(value, about)]: an arrow-key list on a terminal (a numbered one without
+    curses); None when cancelled. Without a terminal it prints the choices and returns None."""
+    stream = stream or sys.stderr
+    if not choices:
+        print(f'{title}: nothing to choose from', file=stream)
+        return None
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print(f'{title}: give one of', file=stream)
+        width = max(len(v) for v, _ in choices)
+        for value, about in choices:
+            print(f'  {value:<{width}}  {about}'.rstrip())
+        return None
+    try:
+        locale.setlocale(locale.LC_ALL, '')
+        os.environ.setdefault('ESCDELAY', '25')
+        return curses.wrapper(lambda screen: Picker(screen, title, choices).run())
+    except curses.error:
+        pass
+    width = max(len(v) for v, _ in choices)
+    for i, (value, about) in enumerate(choices, 1):
+        print(f'{i:>3}) {value:<{width}}  {about}'.rstrip(), file=stream)
+    try:
+        entered = input(f'{title} [1-{len(choices)}]: ').strip()
+    except EOFError:
+        return None
+    if entered.isdigit() and 1 <= int(entered) <= len(choices):
+        return choices[int(entered) - 1][0]
+    return next((v for v, _ in choices if v == entered), None)
+
+
+def menu(screen, y, x, h, w, title, choices, row=0, attr=0):
+    """Draw and run an arrow-key list in the box (y, x, h, w); the chosen index or None (Esc, q)."""
+    width = max(len(v) for v, _ in choices)
+    while True:
+        room = max(h - 2, 1)
+        top = max(0, min(row - room // 2, len(choices) - room))
+        for i in range(h):
+            try:
+                screen.addstr(y + i, x, ' ' * (w - 1))
+            except curses.error:
+                pass
+        try:
+            screen.addstr(y, x, f' {title} '[:w - 1], curses.A_BOLD | attr)
+            for i, (value, about) in enumerate(choices[top:top + room], 1):
+                mark = '> ' if top + i - 1 == row else '  '
+                line = f'{mark}{value:<{width}}  {about}'
+                screen.addstr(y + i, x, line[:w - 1], curses.A_REVERSE if mark != '  ' else 0)
+            screen.addstr(y + h - 1, x, ' up/down move, enter choose, q cancel'[:w - 1], curses.A_DIM)
+        except curses.error:
+            pass
+        key = screen.get_wch()
+        if key in (curses.KEY_UP, 'k'):
+            row = max(0, row - 1)
+        elif key in (curses.KEY_DOWN, 'j'):
+            row = min(len(choices) - 1, row + 1)
+        elif key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            row = max(0, min(len(choices) - 1, row + (room if key == curses.KEY_NPAGE else -room)))
+        elif key in ('\n', '\r', curses.KEY_ENTER, ' '):
+            return row
+        elif key in ('q', '\x1b', curses.KEY_LEFT):
+            return None
+
+
+class Picker:
+    def __init__(self, screen, title, choices):
+        self.screen, self.title, self.choices = screen, title, choices
+        curses.curs_set(0)
+
+    def run(self):
+        h, w = self.screen.getmaxyx()
+        self.screen.erase()
+        index = menu(self.screen, 0, 0, min(h, len(self.choices) + 2), w, self.title, self.choices)
+        return None if index is None else self.choices[index][0]
+
+
 # ---- plain text -------------------------------------------------------------------------
 
 def details(command, paint=lambda code, s: s):
@@ -187,20 +294,23 @@ def details(command, paint=lambda code, s: s):
         out.append(paint('2', f'    $ astro {command["name"]}{build(command, {})[len(command["run"]):]}'))
     if command['ros']:
         out.append(paint('2', f'    ros: {command["ros"]}'))
+    if command['host']:
+        out.append(paint('2', f'    runs on {command["host"]} (forwarded from elsewhere; --here runs it here)'))
     if command['notes']:
         out.extend(paint('33', '    ' + line) for line in wrap(command['notes'], 88))
     for param in command['params']:
         default = f' (default {shown(param["default"])})' if 'default' in param else ''
         choices = f' [{"|".join(map(str, param["choices"]))}]' if param.get('choices') else ''
+        choices += f' [from: {param["choices_from"]}]' if param.get('choices_from') else ''
         out.append(f'    {param["name"]:<22} {param["type"]:<6} '
                    f'{param.get("description", "")}{choices}{paint("2", default)}')
     out.extend(paint('2', f'    e.g. {example}') for example in command['examples'])
     return out
 
 
-def text(packages, word=None, color=False, exact=None):
-    """Every command with its summary, or full details of the commands matching word (or, with exact,
-    the commands of that package whose name is exact or starts with it)."""
+def text(packages, word=None, color=False, exact=None, levels=('core',)):
+    """Every command of LEVELS with its summary, or full details of the commands matching word (any level;
+    or, with exact, the commands of that package whose name is exact or starts with it)."""
     def paint(code, s):
         return f'\033[{code}m{s}\033[0m' if color else s
     out = []
@@ -209,7 +319,8 @@ def text(packages, word=None, color=False, exact=None):
             commands = [c for c in package['commands'] if package['package'] == exact[0]
                         and (c['name'] == exact[1] or c['name'].startswith(exact[1] + ' '))]
         else:
-            commands = [c for c in package['commands'] if not word or matches(package, c, word)]
+            commands = [c for c in package['commands']
+                        if (matches(package, c, word) if word else c['level'] in levels)]
         if not commands:
             continue
         out.append(paint('1;36', package['package']) + paint('2', f' · {package["summary"]}'))
@@ -234,9 +345,16 @@ HINTS = {'list': [('move', 'move'), ('open', 'params'), ('/', 'filter'), ('x', '
                     ('r', 'run'), ('q', 'quit')]}
 
 
+def invocation(command, values):
+    """The line the browser runs: `astro NAME ...` for a command with a host (so it is forwarded there),
+    else its run line."""
+    line = build(command, values)
+    return f'astro {command["name"]}{line[len(command["run"]):]}' if command['host'] else line
+
+
 class Browser:
-    def __init__(self, screen, packages):
-        self.screen, self.packages = screen, packages
+    def __init__(self, screen, packages, levels=('core',)):
+        self.screen, self.packages, self.levels = screen, packages, levels
         self.values, self.word, self.status, self.focus = {}, '', '', 'list'
         self.row = self.param = self.top = self.cmd_top = 0
         self.examples = False
@@ -268,7 +386,8 @@ class Browser:
     def rows(self):
         out = []
         for package in self.packages:
-            commands = [c for c in package['commands'] if not self.word or matches(package, c, self.word)]
+            commands = [c for c in package['commands']
+                        if (matches(package, c, self.word) if self.word else c['level'] in self.levels)]
             if commands:
                 out.append((package, None))
                 out.extend((package, c) for c in commands)
@@ -294,7 +413,7 @@ class Browser:
         package, command = self.selected(rows)
         # The built line is wrapped, never truncated: it is what runs. Lines that do not fit
         # scroll with PgUp/PgDn, and the separator shows which part is on screen.
-        line = build(command, self.values_for(package, command)) if command else ''
+        line = invocation(command, self.values_for(package, command)) if command else ''
         parts = [('  ' if i else '$ ') + line[i:i + w - 6] for i in range(0, len(line), w - 6)]
         room = h - 10
         self.cmd_top = max(0, min(self.cmd_top, len(parts) - room))
@@ -360,7 +479,7 @@ class Browser:
                           width - name_w - 12)
             for i, param in enumerate(params):
                 value = shown(values.get(param['name'], param.get('default')), param)
-                kind = 'choice' if param.get('choices') else 'switch' if param['form'] == 'switch' \
+                kind = 'choice' if param.get('choices') or param.get('choices_from') else 'switch' if param['form'] == 'switch' \
                     else param['type']
                 mark = self.g['mark'] if self.focus == 'params' and i == self.param else ' '
                 body.append(([(f'{mark} {param["name"][:name_w]:<{name_w}} ', curses.A_BOLD if mark != ' ' else 0),
@@ -417,6 +536,22 @@ class Browser:
         current = values.get(param['name'], param.get('default'))
         if param['form'] == 'switch' or param['type'] == 'bool':
             values[param['name']] = shown(current).lower() not in TRUE
+        elif param.get('choices_from'):
+            self.status = f'listing {param["name"]} ...'
+            self.draw()
+            self.screen.refresh()
+            choices = run_choices(param['choices_from'])
+            self.status = ''
+            if not choices:
+                self.status = f'{param["choices_from"]}: no choices'
+                return
+            h, w = self.screen.getmaxyx()
+            values_now = [v for v, _ in choices]
+            row = values_now.index(shown(current)) if shown(current) in values_now else 0
+            index = menu(self.screen, 2, w // 3, min(h - 4, len(choices) + 2), w - w // 3 - 2, param['name'],
+                         choices, row, self.style('accent'))
+            if index is not None:
+                values[param['name']] = choices[index][0]
         elif param.get('choices'):
             choices = [str(c) for c in param['choices']]
             values[param['name']] = choices[(choices.index(shown(current)) + 1) % len(choices)
@@ -484,7 +619,7 @@ class Browser:
                 self.status = 'Run this command? [y/N] '
                 self.draw()
                 if self.screen.get_wch() in ('y', 'Y'):
-                    return build(command, values)
+                    return invocation(command, values)
                 self.status = 'Not run.'
 
 
@@ -505,14 +640,20 @@ def main(argv=None):
     packages, errors = discover()
     for error in errors:
         print(error, file=sys.stderr)
+    levels = LEVELS if '--all' in argv else ('core',)
+    argv = [a for a in argv if a != '--all']
     if argv[:1] == ['--list'] or argv or not (sys.stdin.isatty() and sys.stdout.isatty()):
         words = [a for a in argv if a != '--list']
         sys.stdout.write(text(packages, ' '.join(words) or None,
-                              color=sys.stdout.isatty() and 'NO_COLOR' not in os.environ))
+                              color=sys.stdout.isatty() and 'NO_COLOR' not in os.environ, levels=levels))
+        if levels == ('core',) and not words:
+            hidden = sum(c['level'] != 'core' for p in packages for c in p['commands'])
+            if hidden:
+                print(f'(+{hidden} setup commands: astro help --all)')
         return 0
     locale.setlocale(locale.LC_ALL, '')
     os.environ.setdefault('ESCDELAY', '25')
-    line = curses.wrapper(lambda screen: Browser(screen, packages).run())
+    line = curses.wrapper(lambda screen: Browser(screen, packages, levels).run())
     return execute(line) if line else 0
 
 

@@ -11,13 +11,15 @@ import sys
 import tarfile
 import time
 
-from . import config, field, rec, remote, stacks, status
+from . import clock, config, field, rec, remote, stacks, status
 from .engine import apply as applying
 from .engine import log, procedures, results
 
-VERBS = ('docs', 'on', 'up', 'down', 'ps', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
-         'check', 'issue', 'sync', 'show', 'help')
-HEADER = ('up', 'down', 'ps', 'status', 'rec', 'test', 'apply', 'undo', 'bundle', 'show')   # one context line
+VERBS = ('docs', 'on', 'up', 'down', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
+         'check', 'issue', 'sync', 'show', 'clock', 'help')
+HEADER = ('up', 'down', 'status', 'rec', 'test', 'apply', 'undo', 'bundle', 'show')   # one context line
+# Hidden: `_choices KIND` prints a picker's choices (help.yaml choices_from); `_rsh` is rec fetch's rsync shell.
+CHOICES = ('test', 'apply', 'on', 'stacks', 'check', 'bags')
 # Verbs that need ROS or the vessel's data dir and state: run outside ROS, they forward to the profile's
 # astro.home (a registry host or role) unless --here or ASTRO_HERE=1. Every other verb runs where it is typed.
 HOME_VERBS = ('status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle')
@@ -60,7 +62,20 @@ def forwards(verb, here, ros, home):
     return verb in HOME_VERBS and not here and not ros and bool(home)
 
 
-def forward(vessel, home, args, tty=None):
+class NoChoice(Exception):
+    """A picker was cancelled, or had no terminal (the choices were printed): exit 2."""
+
+
+def choose(title, options):
+    """The value picked from [(value, about)]: an arrow-key list on a terminal; else the choices are printed
+    and NoChoice is raised."""
+    value = help_module().pick(title, options)
+    if value is None:
+        raise NoChoice
+    return value
+
+
+def forward(vessel, home, args, tty=None, env=None):
     """Run `astro ARGS` on HOME, then send any pending marks. A mark goes in the background with its time
     (ssh killed after MARK_TIMEOUT s; when it fails the mark is kept pending, see remote.deliver_mark)."""
     tty = remote._tty() if tty is None else tty
@@ -73,9 +88,9 @@ def forward(vessel, home, args, tty=None):
         subprocess.Popen([sys.executable, '-c', DELIVER, str(config.WS / 'tools'), home, at, *args[1:]],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, start_new_session=True)
         return 0
-    host, argv, env = remote.home_words(vessel, home, args, tty)
+    host, argv, env = remote.home_words(vessel, home, args, tty, env)
     print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
-    if verb == 'test' and args[1:2] not in (['list'], ['status']):
+    if verb == 'test' and args[1:2] not in (['list'], ['status'], []):
         print(f'running on {host}; if the link drops the test continues \u2014 RC is the stop')
     try:
         code = subprocess.call(argv, env=env)
@@ -144,10 +159,67 @@ class Session:
         return out
 
 
+def choices(s, kind):
+    """[(value, about)] for a picker: tests in ladder order with their status, unapplied results, ssh hosts
+    and local vessels, stacks, checklists, or the home host's bags."""
+    if kind == 'test':
+        rows = s.rows()
+        out = [(name, f'{state:<8} {s.spec.layer(name)}') for name, state, _ in rows]
+        return out + [(group, 'group: ' + ' '.join(items)) for group, items in s.spec.groups.items()]
+    if kind == 'apply':
+        return [(name, f'{result.get("date", "")} {result.get("time", "")}  {state}  '
+                       f'{result.get("summary") or ""}'.rstrip())
+                for name, state, result in s.rows()
+                if result and result.get('status') == 'done' and result.get('changes') and not result.get('applied')]
+    if kind == 'on':
+        try:
+            hosts = s.vessel.hosts()
+        except config.Error:
+            hosts = {}
+        out = [(name, f'{spec["address"]}  {" ".join(spec["roles"])}') for name, spec in hosts.items() if spec['ssh']]
+        return out + [(name, 'local vessel (here, with its environment)') for name in remote.local_vessels()]
+    if kind == 'stacks':
+        return [(st.name, f'on {st.host}' + ('' if st.default else '  (not default)'))
+                for st in stacks.parse(s.vessel.astro).values()]
+    if kind == 'check':
+        f = field.Field(s.vessel)
+        return [(p.stem, '') for p in sorted((f.dir / 'checklists').glob('*.md'))]
+    if kind == 'bags':
+        home = s.vessel.astro.get('home')
+        return [rec.choice(b) for b in rec.remote_bags(s.vessel, str(home))] if home else []
+    raise config.Error(f'no choices {kind!r} ({", ".join(CHOICES)})')
+
+
+def print_choices(s, kind, here):
+    """`astro _choices KIND`: one VALUE<TAB>about line each. Tests and results live on astro.home, so outside
+    ROS those are asked there."""
+    home = s.vessel.astro.get('home') if kind in ('test', 'apply') else None
+    if forwards('test', here, config.have_ros(), home):
+        _, argv, env = remote.home_words(s.vessel, str(home), ['_choices', kind], False)
+        done = subprocess.run(argv, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        sys.stdout.write(done.stdout)
+        return done.returncode
+    for value, about in choices(s, kind):
+        print(f'{value}\t{about}' if about else value)
+    return 0
+
+
+def stack_lines(s):
+    """The stacks table for astro status ([] without stacks, or when the caller already showed them)."""
+    if os.environ.get('ASTRO_NO_STACKS') == '1' or not s.vessel.astro.get('stacks'):
+        return []
+    try:
+        return stacks.table(stacks.rows(s.vessel))
+    except config.Error as error:
+        return [f'({error})']
+
+
 # ---- verbs ---------------------------------------------------------------------------------------
 
 def cmd_test(s, args):
     spec = s.spec
+    if not args.name:
+        args.name = choose('test', choices(s, 'test'))
     if args.name == 'list':
         width = max(map(len, spec.tests), default=0)
         for name in spec.order():
@@ -224,6 +296,12 @@ def find_result(s, what):
 
 
 def cmd_apply(s, args):
+    if not args.result:
+        options = choices(s, 'apply')
+        if not options:
+            print('nothing measured waits to be applied (astro test status)')
+            return 0
+        args.result = choose('result to apply', options)
     result = find_result(s, args.result)
     name = result['test']
     if result.get('status') != 'done':
@@ -314,7 +392,7 @@ def cmd_status(s, args):
             nxt = results.next_step(s.rows())
         except config.Error as error:
             spec, nxt = None, str(error)
-        text = status.page(s.vessel, spec, nxt)
+        text = status.page(s.vessel, spec, nxt, stack_lines=stack_lines(s))
         if not args.watch:
             print(text)
             return 0
@@ -330,8 +408,51 @@ def cmd_log(s, args):
     return 0
 
 
+def entry_host(vessel, command, here, me, inside):
+    """(host, spec) a help.yaml command with `host:` is forwarded to, or None to run it here: --here, no host,
+    or already inside a container on that host."""
+    if here or not command.get('host'):
+        return None
+    host, spec = remote.place(vessel, command['host'])
+    return None if host == me and inside else (host, spec)
+
+
+def fill(module, command, args, pick=None):
+    """ARGS with each missing required positional param that has choices_from picked (on a terminal; else the
+    choices are printed and NoChoice raised)."""
+    pick = pick or choose
+    given = [a for a in args if not a.startswith('-')]
+    args = list(args)
+    for i, param in enumerate(p for p in command['params'] if p['form'] == 'positional'):
+        if i < len(given):
+            continue
+        if not (param.get('choices_from') and module.is_required(param)):
+            break
+        options = module.run_choices(param['choices_from'], env=dispatch_env())
+        value = pick(f'{command["name"]}: {param["name"]}', options)
+        args.append(value)
+        given.append(value)
+    return args
+
+
+def dispatch_env():
+    env = dict(os.environ)
+    env.setdefault('ROS_WS', str(config.WS))
+    try:                                  # the vessel's env, as for the built-in verbs
+        env.update(config.Vessel().env())
+    except config.Error:
+        pass
+    return env
+
+
+def nouns(packages, word):
+    """[(package, command)] whose name starts with WORD and a space: the subcommands of a noun."""
+    return [(p, c) for p in packages for c in p['commands'] if c['name'].startswith(word + ' ')]
+
+
 def dispatch(argv):
-    """`astro NAME [args]`: the help.yaml command whose name is the longest prefix of argv."""
+    """`astro NAME [args]`: the help.yaml command whose name is the longest prefix of argv. A noun alone
+    (astro thrusters) lists its subcommands; a command with `host:` runs there, forwarded like the ROS verbs."""
     module = help_module()
     packages, _ = module.discover()
     best = None
@@ -341,60 +462,87 @@ def dispatch(argv):
             if argv[:len(words)] == words and (best is None or len(words) > len(best[0])):
                 best = (words, command)
     if not best:
-        print(f'astro: no verb or help.yaml command {argv[0]!r} (astro help)', file=sys.stderr)
-        return 2
+        subs = nouns(packages, argv[0])
+        if not subs:
+            print(f'astro: no verb or help.yaml command {argv[0]!r} (astro help)', file=sys.stderr)
+            return 2
+        width = max(len(c['name']) for _, c in subs)
+        for _, command in subs:
+            print(f'  astro {command["name"]:<{width}}  {command["summary"]}')
+        return 0
     words, command = best
-    if any(a in ('-h', '--help') for a in argv[len(words):]):     # help asked: never run the command
+    rest = argv[len(words):]
+    if any(a in ('-h', '--help') for a in rest):     # help asked: never run the command
         package = next(p['package'] for p in packages if command in p['commands'])
         sys.stdout.write(module.text(packages, exact=(package, command['name'])))
         return 0
     if command['run'].startswith('astro '):
         print(f'astro: {command["name"]} is an astro verb', file=sys.stderr)
         return 2
-    line = command['run'] + ''.join(' ' + shlex.quote(a) for a in argv[len(words):])
-    env = dict(os.environ)
-    env.setdefault('ROS_WS', str(config.WS))
-    try:                                  # the vessel's env, as for the built-in verbs
-        env.update(config.Vessel().env())
-    except config.Error:
-        pass
-    return subprocess.call(['bash', '-c', line], env=env)
+    here = os.environ.get('ASTRO_HERE') == '1'
+    if command['host'] and '--here' in rest:
+        rest, here = [a for a in rest if a != '--here'], True
+    try:
+        rest = fill(module, command, rest)
+        target = None
+        if command['host'] and not here:
+            vessel = config.Vessel()
+            target = entry_host(vessel, command, here, config.this_host(), remote.in_container())
+    except NoChoice:
+        return 2
+    except config.Error as error:
+        print(f'astro {command["name"]}: {error}', file=sys.stderr)
+        return 1
+    line = command['run'] + ''.join(' ' + shlex.quote(a) for a in rest)
+    if target:
+        host, spec = target
+        dim = sys.stderr.isatty() and 'NO_COLOR' not in os.environ
+        print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
+        tty = remote._tty()
+        if host == config.this_host():           # this machine, outside its container: exec into it
+            argv_, env = remote.local_words(vessel, spec['container'], line, tty)
+        else:
+            argv_, env = remote.ssh_command(vessel, host, spec, [line], tty), None
+        try:
+            return subprocess.call(argv_, env=env)
+        except KeyboardInterrupt:
+            return 130
+    return subprocess.call(['bash', '-c', line], env=dispatch_env())
 
 
 def parser():
     p = argparse.ArgumentParser(prog='astro', add_help=False)
     sub = p.add_subparsers(dest='verb')
     on = sub.add_parser('on', add_help=False)
-    on.add_argument('host')
+    on.add_argument('host', nargs='?')
     on.add_argument('cmd', nargs=argparse.REMAINDER)
     u = sub.add_parser('up', add_help=False)
     u.add_argument('names', nargs='*')
     u.add_argument('--with', dest='options', action='append', default=[])
     sub.add_parser('down', add_help=False).add_argument('names', nargs='*')
-    sub.add_parser('ps', add_help=False)
     g = sub.add_parser('logs', add_help=False)
-    g.add_argument('name')
+    g.add_argument('name', nargs='?')
     g.add_argument('-f', dest='follow', action='store_true')
     sub.add_parser('status', add_help=False).add_argument('--watch', action='store_true')
     r = sub.add_parser('rec', add_help=False)
-    r.add_argument('action', choices=('start', 'stop', 'ls'))
+    r.add_argument('action', choices=('start', 'stop', 'ls', 'fetch'))
     r.add_argument('words', nargs='*')
     m = sub.add_parser('mark', add_help=False)
     m.add_argument('text', nargs='+')
     m.add_argument('--at')                       # a forwarded or pending mark's original time (ISO)
     sub.add_parser('log', add_help=False).add_argument('-n', type=int, default=0)
     t = sub.add_parser('test', add_help=False)
-    t.add_argument('name')
+    t.add_argument('name', nargs='?')
     t.add_argument('--space', default='large')
     t.add_argument('--amp', type=float)
-    sub.add_parser('apply', add_help=False).add_argument('result')
+    sub.add_parser('apply', add_help=False).add_argument('result', nargs='?')
     sub.add_parser('undo', add_help=False)
     sub.add_parser('bundle', add_help=False).add_argument('--bags', action='store_true')
     sim = sub.add_parser('sim', add_help=False)
     sim.add_argument('action')   # passed to the backend (up, down, status, check, restart …)
     sim.add_argument('args', nargs=argparse.REMAINDER)
     c = sub.add_parser('check', add_help=False)
-    c.add_argument('name')
+    c.add_argument('name', nargs='?')
     c.add_argument('--list', dest='listing', action='store_true')
     i = sub.add_parser('issue', add_help=False)
     i.add_argument('text', nargs='+')
@@ -402,6 +550,7 @@ def parser():
     sub.add_parser('sync', add_help=False).add_argument('--pack')   # DATE: the day's tar for a remote sync
     sub.add_parser('show', add_help=False).add_argument('date', nargs='?')
     sub.add_parser('docs', add_help=False)
+    sub.add_parser('clock', add_help=False).add_argument('--fix', action='store_true')
     return p
 
 
@@ -410,39 +559,55 @@ def main(argv=None):
     if not argv or argv[0] in ('-h', '--help'):
         return help_module().main(['--list'])
     verb = argv[0]
+    here = os.environ.get('ASTRO_HERE') == '1'
+    if verb == '_rsh':
+        return rec.rsh_main(config.Vessel(), argv[1:])
+    if verb == '_choices':
+        if '--here' in argv:
+            argv, here = [a for a in argv if a != '--here'], True
+        try:
+            return print_choices(Session(), argv[1] if argv[1:] else '', here)
+        except config.Error as error:
+            print(f'astro _choices: {error}', file=sys.stderr)
+            return 1
     if verb not in VERBS:
         return dispatch(argv)
     if verb == 'help':
         return help_module().main(argv[1:])
     if any(a in ('-h', '--help') for a in argv[1:]) and (verb != 'on' or argv[1:2] in (['-h'], ['--help'])):
-        sub = argv[1] if verb == 'rec' and argv[1] in ('start', 'stop', 'ls') else None
+        sub = argv[1] if verb == 'rec' and argv[1] in ('start', 'stop', 'ls', 'fetch') else None
         return verb_help(f'rec {sub}' if sub else verb)
-    here = os.environ.get('ASTRO_HERE') == '1'
     if verb in HOME_VERBS and '--here' in argv:
         argv, here = [a for a in argv if a != '--here'], True
     args = parser().parse_args(argv)
     s = Session()
     try:
-        if verb in HOME_VERBS and not here and not config.have_ros():
+        fetching = verb == 'rec' and args.action == 'fetch'      # copies from home to here: never forwarded
+        if verb in HOME_VERBS and not fetching and not here and not config.have_ros():
             home = s.vessel.astro.get('home')
             if forwards(verb, here, False, home):
+                if verb == 'status' and not args.watch:      # the stacks from here (as ssh reaches them)
+                    shown = stack_lines(s)
+                    if shown:
+                        print('\n'.join(status.stacks_block(shown)))
+                    return forward(s.vessel, str(home), argv, env={'ASTRO_NO_STACKS': '1'} if shown else None)
                 return forward(s.vessel, str(home), argv)
-        if verb in HEADER and not (verb == 'test' and args.name == 'list'):
+        if verb in HEADER and not (verb == 'test' and args.name == 'list') and not fetching:
             print(f'astro {verb} · vessel {s.vessel.name} · state {s.vessel.state()} · data {s.root}')
         if verb == 'on':
-            return remote.on(args.host, args.cmd)
+            return remote.on(args.host or choose('host', choices(s, 'on')), args.cmd)
         if verb == 'sim':
             return remote.sim(args.action, args.args)
         if verb == 'up':
             return stacks.main_up(s.vessel, s.root, args)
         if verb == 'down':
             return stacks.down(s.vessel, s.root, args.names)
-        if verb == 'ps':
-            return stacks.ps(s.vessel)
         if verb == 'logs':
-            return stacks.logs(s.vessel, args.name, args.follow)
+            return stacks.logs(s.vessel, args.name or choose('stack', choices(s, 'stacks')), args.follow)
         if verb == 'check':
-            return field.check(s.vessel, args.name, args.listing)
+            return field.check(s.vessel, args.name or choose('checklist', choices(s, 'check')), args.listing)
+        if verb == 'clock':
+            return clock.main(s.vessel, config.this_host(), args.fix)
         if verb == 'issue':
             return field.issue(s.vessel, ' '.join(args.text), args.labels)
         if verb == 'sync':
@@ -459,12 +624,19 @@ def main(argv=None):
                       when=remote.mark_time(args.at) if args.at else None)
             return 0
         if verb == 'rec':
+            if fetching:
+                home = s.vessel.astro.get('home')
+                if not home:
+                    raise config.Error('rec fetch copies from the profile\'s astro.home, and it has none')
+                return rec.fetch(s.vessel, str(home), ' '.join(args.words), help_module().pick)
             if args.action == 'ls':
                 return rec.ls(s.vessel)
             need_ros('rec')
             return rec.start(s.vessel, args.words) if args.action == 'start' else rec.stop(s.vessel)
         return {'test': cmd_test, 'apply': cmd_apply, 'undo': cmd_undo, 'bundle': cmd_bundle,
                 'status': cmd_status, 'log': cmd_log}[verb](s, args)
+    except NoChoice:
+        return 2
     except config.Error as error:
         print(f'astro {verb}: {error}', file=sys.stderr)
         return 1

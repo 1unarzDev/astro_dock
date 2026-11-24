@@ -9,16 +9,20 @@ computer, and print `(on HOST)`; `--here` runs one here):
 
 ```bash
 astro up                           # start the robot's stacks, each on its host; waits until they publish
+astro status                       # each stack (host, uptime, rates), then nodes, topics, recording, next test
 astro rec start lean lake          # record a bag of the "lean" preset, labelled "lake"
-astro test still                   # run one test in this terminal (Ctrl-C sends neutral)
-astro apply still                  # write its result into the state file
+astro test                         # pick a test (ladder order, with status); runs in this terminal, Ctrl-C = neutral
+astro apply                        # pick a measured result and write it into the state file
 astro mark "wind picked up"        # a line in the day's log, also in the bag
-astro rec stop && astro down       # close the bag, stop the stacks
+astro rec stop && astro rec fetch  # close the bag, then pick one of the home host's bags and copy it here
+astro clock                        # each host's clock offset and chrony source; --fix sets the robot clocks
 ```
 
-`astro help` browses every command (astro's and each package's), `astro help --list` prints them all, and
-`astro VERB --help` explains one, with the plain ROS 2 command it runs. `astro docs` prints where everything
-lives: the field repo, today's log and bags, and every repo's docs with their GitHub links.
+A verb that needs a choice and gets none (`test`, `apply`, `on`, `logs`, `check`, `rec fetch`) opens a
+picker on a terminal, and prints the choices otherwise. `astro help` browses the core commands (astro's and
+each package's), `--all` adds the setup ones, `astro help --list` prints them, and `astro VERB --help`
+explains one with the plain ROS 2 it runs. A noun alone (`astro rec`, `astro profile`) lists its
+subcommands. `astro docs` prints where everything lives.
 
 ## Setup
 
@@ -43,8 +47,8 @@ Then point the machine at your team's profile set and check what it found:
 
 ```bash
 astro profile sync URL REF          # records the profile repo and ref in ~/.config/astro/profiles.env
-astro whoami                        # this machine's host, vessel and station, and how they were found
-astro secrets check                 # missing secret names (never values)
+astro profile                       # this machine's host, vessel and station, and how they were found
+astro profile secrets               # missing secret names (never values)
 ```
 
 ## astro
@@ -54,17 +58,19 @@ team's files (tests, bag presets, state file, stacks, field repo).
 
 | Commands | What they do |
 | --- | --- |
-| `up [NAMES] [--with OPT]`, `down`, `ps`, `logs NAME [-f]` | Start, stop, list and tail the vessel's stacks. Each runs on its host in the dev container (private `tmux -L astro`, else `setsid`), so an ssh drop never stops it |
-| `on HOST [cmd]` | A shell or one command in a host's dev container (ssh + `docker exec`) |
-| `status [--watch]` | Nodes, the latest message on each test topic, recording, last log lines, next test |
-| `rec start [PRESET] [LABEL]`, `rec stop`, `rec ls` | Record a bag (mcap, 300 s splits); list today's bags with the log lines inside each |
+| `up [NAMES] [--with OPT]`, `down [NAMES]`, `logs [NAME] [-f]` | Start, stop and tail the vessel's stacks. Each runs on its host in the dev container (private `tmux -L astro`, else `setsid`), so an ssh drop never stops it |
+| `status [--watch]` | Each stack (host, up/down, uptime, ready rates, log), then nodes, the latest message on each test topic, recording, last log lines, next test |
+| `on [HOST] [cmd]` | A shell or one command in a host's dev container (ssh + `docker exec`) |
+| `rec start [PRESET] [LABEL]`, `rec stop`, `rec ls`, `rec fetch [BAG]` | Record a bag (mcap, 300 s splits); list today's bags with the log lines inside each; copy one of the home host's bags into `DATA/DATE/bags/` here (rsync through `astro on`) |
 | `mark TEXT`, `log [-n N]` | Add to, or print, the day's log |
 | `test list`, `test status`, `test NAME [--space S]` | Run a test or group in this terminal. Each prints its control layer, old -> new and the exact apply command |
 | `apply RESULT`, `undo` | Write a result into the state file (backup first, checked, rolled back on refusal), then set the live parameters; `undo` restores the newest backup |
 | `bundle [--bags]` | The state file, today's results and log (and bags) in one tgz, for the sim |
 | `sim up\|down\|status\|check` | The sim vessel's world; then `astro on sim` works like a boat |
-| `check NAME`, `issue TEXT`, `sync`, `show [DATE]` | The field log: checklists, issues, and the day's log and results pushed to the field repo |
-| `NAME [args]` | Any package command from a `help.yaml`, e.g. `astro mix 0.5 0 0` |
+| `check [NAME]`, `issue TEXT`, `sync`, `show [DATE]` | The field log: checklists, issues, and the day's log and results pushed to the field repo |
+| `clock [--fix]` | Each registry host's clock offset from this machine, its chrony source and whether it reaches it; `--fix` sets each robot host (no operator role) more than 0.5 s off from this machine (`sudo -n date`, `chronyc makestep`) |
+| `profile [show\|sync\|env KEY\|secrets]` | This machine's host and vessel; the merged profile; the profile set's ref; a network env value; missing secrets |
+| `NAME [args]` | Any package command from a `help.yaml`, e.g. `astro mix 0.5 0 0`; an entry with `host:` runs on that host, forwarded like the verbs above |
 
 A **stack** runs in the background on its host. A **test** runs in your terminal; forwarded from a host
 shell over ssh (`docker exec`) it keeps running if the link drops, so RC is the stop.
@@ -73,6 +79,12 @@ Outside ROS (no `rclpy`: a host shell), `status`, `rec`, `mark`, `log`, `test`, 
 `bundle` run on the profile's `astro.home` (a registry role or host) as `astro on HOME astro ARGS`, so the day
 log, bags, results and state stay there; `mark` goes in the background. `--here` (or `ASTRO_HERE=1`) runs
 one here. Every other verb runs where it is typed.
+
+A `help.yaml` entry may say `level: setup` (shown only with `astro help --all`), `host: ROLE|HOST` (run
+there: from anywhere else, or from that host outside its container, astro forwards it as `astro on`, printing
+`(on HOST)`; `--here` runs it here), and on a param `choices_from: 'CMD'` (a shell command run here, one
+choice per line, optionally `VALUE<TAB>about`): a missing required one is picked from that list, and the help
+browser offers it as a drop-down.
 
 ### Where things are
 
@@ -132,7 +144,7 @@ workspace.
 
 | Command | Does |
 | --- | --- |
-| `astro whoami`, `astro env [KEY]`, `astro profile show` | Which host and vessel this is; the network env or one of its values; the merged profile |
+| `astro profile`, `astro profile env [KEY]`, `astro profile show` | Which host and vessel this is; the network env or one of its values; the merged profile |
 | `astro device KIND VERB` | A device kind's `status`, `plan`, `verify` (read only), `apply` (typed confirmation; network changes roll back unless verified) or `rollback` |
 | `astro station take`, `astro station release` | Make this computer the operator station, or stop that |
 | `astro hot REPO [--dry-run]` | Push a repo's working tree to the hosts that run it and build there (LAN only) |

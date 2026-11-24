@@ -11,6 +11,9 @@ commands:
       - name: --list
         type: bool
         description: Print the commands as plain text instead of opening the browser.
+      - name: --all
+        type: bool
+        description: Also the setup-level commands (host setup, images, overlays).
       - name: word
         required: false
         description: Show full details of the commands matching this word.
@@ -24,7 +27,7 @@ commands:
     ros: ssh USER@HOST docker exec -it CONTAINER bash
     notes: The host is a registry host of the vessel profile, matched by name or substring.
     params:
-      - {name: host, description: 'Registry host (or a unique part of its name), or a local vessel profile such as sim.'}
+      - {name: host, choices_from: 'astro _choices on', description: 'Registry host (or a unique part of its name), or a local vessel profile such as sim; none picks one.'}
       - {name: cmd, type: list, required: false, description: 'Command to run there; none opens a shell.'}
     examples:
       - astro on sim
@@ -36,7 +39,7 @@ commands:
     ros: ssh USER@HOST docker exec CONTAINER bash -c 'setsid -f ros2 launch PKG FILE.launch.py ARGS > LOG'; ros2 topic hz TOPIC
     notes: In order, needs first; one line per stack (up with its topic rates, or FAILED with the last log lines). A stack runs in a private tmux server (tmux -L astro) when the container has tmux, else under setsid, so an ssh drop never stops it; its log is DATA/DATE/stacks/NAME.log. Waits at most 60 s per stack.
     params:
-      - {name: names, type: list, required: false, description: 'Stacks to start (none: the default ones); their needs start first.'}
+      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', description: 'Stacks to start (none: the default ones); their needs start first.'}
       - {name: --with, description: 'An option a stack names under with: (e.g. controller), appended to its command.'}
     examples:
       - astro up
@@ -48,31 +51,26 @@ commands:
     summary: Stop stacks in reverse order (SIGINT to the process group, then SIGTERM after 20 s); no names = all.
     ros: ssh USER@HOST docker exec CONTAINER kill -INT -- -PGID
     params:
-      - {name: names, type: list, required: false, description: 'Stacks to stop; those that need them stop first.'}
+      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', description: 'Stacks to stop; those that need them stop first.'}
     examples:
       - astro down
       - astro down drive
-
-  - name: ps
-    run: astro ps
-    summary: Each stack - running or not, host, uptime, its ready topics' rates and its log path.
-    ros: ssh USER@HOST docker exec CONTAINER ps -o etimes= -p PID; ros2 topic hz TOPIC
 
   - name: logs
     run: astro logs
     summary: The last 40 lines of a stack's log on its host; -f follows it.
     ros: ssh USER@HOST docker exec CONTAINER tail -F DATA/DATE/stacks/NAME.log
     params:
-      - {name: name, description: The stack.}
+      - {name: name, choices_from: 'astro _choices stacks', description: The stack (none picks one).}
       - {name: -f, type: bool, description: Follow until Ctrl-C.}
     examples:
       - astro logs drive -f
 
   - name: status
     run: astro status
-    summary: Plain-text snapshot of the stack - nodes, the tests file's topics, recording, last log lines and the next test.
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
-    ros: ros2 node list; ros2 topic echo --once TOPIC
+    summary: One page - each stack (host, up/down, uptime, ready rates, log path), then nodes, the tests file's topics, recording, last log lines and the next test.
+    notes: The stacks are asked from here, over ssh like astro up. Outside ROS (a host shell) the rest runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it all here.
+    ros: ps -o etimes= -p PID; ros2 topic hz TOPIC; ros2 node list; ros2 topic echo --once TOPIC
     params:
       - {name: --watch, type: bool, description: Refresh every second until Ctrl-C.}
 
@@ -99,6 +97,17 @@ commands:
     notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: ros2 bag info DIR
 
+  - name: rec fetch
+    run: astro rec fetch
+    summary: Copy one of the home host's bags into DATA/DATE/bags/ here; without a name, pick from its bags (date, label, size, start-end).
+    ros: rsync -a --partial -e 'ssh HOST docker exec -i CONTAINER' HOST:DATA/DATE/bags/NAME/ DATA/DATE/bags/NAME/
+    notes: Runs here (never forwarded). Resumable; needs rsync here and in the home host's container.
+    params:
+      - {name: bag, required: false, choices_from: 'astro _choices bags', description: 'DATE/NAME, NAME (the newest) or a unique part.'}
+    examples:
+      - astro rec fetch
+      - astro rec fetch 2026-11-24/101500-lake
+
   - name: mark
     run: astro mark
     summary: One log line, also published on the events topic (so it lands in the bag); returns at once.
@@ -123,7 +132,7 @@ commands:
     ros: ros2 topic pub /EFFORT geometry_msgs/msg/Twist ... (20 Hz) while ros2 topic echo /ODOM
     notes: Each test prints its control layer, old -> new and the exact astro apply command. `astro test status` shows what is applied, measured, stale, aborted or pending, and the next step. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; forwarded over ssh, a test keeps running if the link drops (RC is the stop); --here runs it here.
     params:
-      - {name: name, description: 'list, status, a test or a group (astro test list).'}
+      - {name: name, choices_from: 'astro _choices test', description: 'list, status, a test or a group (astro test list); none picks one.'}
       - {name: --space, choices: [large, small], description: The space preset (amplitudes and levels).}
       - {name: --amp, type: float, description: Override the space's amplitude.}
     examples:
@@ -137,7 +146,7 @@ commands:
     notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: ros2 param set NODE PARAM VALUE
     params:
-      - {name: result, description: A test name (its latest result) or a result file.}
+      - {name: result, choices_from: 'astro _choices apply', description: 'A test name (its latest result) or a result file; none picks an unapplied one.'}
 
   - name: undo
     run: astro undo
@@ -169,9 +178,9 @@ commands:
     run: astro check
     summary: Go through a field checklist (checklists/NAME.md of the field repo, astro.field) item by item; ticks save to the session's checks.yaml.
     ros: bash -c COMMAND (each check:)
-    notes: 'An item that ends in check: `COMMAND` runs it (exit 0 = ok, its last line is shown); other items are manual, asked y/n on a terminal. Example item: "- [ ] sensors up - check: `astro ps`".'
+    notes: 'An item that ends in check: `COMMAND` runs it (exit 0 = ok, its last line is shown); other items are manual, asked y/n on a terminal. Example item: "- [ ] sensors up - check: `astro status`".'
     params:
-      - {name: name, description: 'The checklist (e.g. lake).'}
+      - {name: name, choices_from: 'astro _choices check', description: 'The checklist (e.g. lake); none picks one.'}
       - {name: --list, type: bool, description: Print the items and their last state; run nothing.}
     examples:
       - astro check lake --list
@@ -213,8 +222,20 @@ commands:
       - astro show
       - astro show 2026-11-24
 
+  - name: clock
+    run: astro clock
+    summary: Each registry host's clock offset from this machine, with its chrony source and whether it reaches it; --fix sets the robot hosts' clocks from this one.
+    ros: ssh USER@HOST 'date +%s.%N; chronyc -n -c sources'
+    notes: --fix runs sudo -n date -u -s @EPOCH; sudo -n chronyc makestep on each robot host (every ssh host without the operator role) more than 0.5 s off, and says what it did. Chrony keeps a host right only while it reaches its source.
+    params:
+      - {name: --fix, type: bool, description: Set the robot hosts' clocks from this machine.}
+    examples:
+      - astro clock
+      - astro clock --fix
+
   - name: astro-ros-install
     run: astro-ros-install
+    level: setup
     summary: Install a ROS or apt package into this running container by distro-independent name.
     notes: >-
       ROS names resolve to ros-$ROS_DISTRO-* debs, else build from source into /opt/astro-extra.
@@ -232,28 +253,14 @@ commands:
       - astro-ros-install nav2_bringup
       - astro-ros-install --source examples_rclcpp_minimal_publisher
 
-  - name: colcon build
-    run: colcon build
-    summary: Build the workspace; the shell reloads the new install/ when it succeeds.
-    params:
-      - name: --packages-up-to
-        type: list
-        description: Build these packages and their dependencies only.
-      - name: --packages-select
-        type: list
-        description: Build exactly these packages.
-      - name: --symlink-install
-        type: bool
-        description: Symlink Python and data files so edits apply without a rebuild.
-    examples:
-      - colcon build --packages-up-to my_package
-
   - name: ros_env
     run: ros_env
+    level: setup
     summary: Reload ROS, the image overlays and the workspace install/ in this shell.
 
   - name: ros_net
     run: ros_net
+    level: setup
     summary: Re-detect this host's robot-subnet address and pin DDS to it (each new shell does this).
     notes: Set ASTRO_DDS_ADDRESS to force an address; off the robot subnet DDS uses all interfaces.
     params:
@@ -263,10 +270,12 @@ commands:
 
   - name: rviz2
     run: rviz2
+    level: setup
     summary: RViz with the workspace dark theme, pinned to the robot network interface.
 
   - name: setup.linux.sh
     run: ./setup.linux.sh
+    level: setup
     summary: Prepare a Linux host for the containers, stage by stage (run on the host, not in a container).
     notes: Each stage explains itself and asks first; reruns are safe.
     params:
@@ -295,13 +304,13 @@ commands:
       - ./setup.linux.sh --components mdns
 
   # hw.sh verbs (machine, network and deploy): astro VERB runs $ROS_WS/hw.sh VERB; hw.sh stays usable directly.
-  - name: whoami
+  - name: profile
     run: $ROS_WS/hw.sh whoami
-    summary: This machine's host and vessel, and how they were found.
+    summary: This machine's host, vessel and station, and how they were found (profile show|sync|env|secrets below).
     params:
       - {name: --root, type: bool, description: Print the profile root instead.}
       - {name: --registry, type: bool, description: Print the host registry path instead.}
-  - name: env
+  - name: profile env
     run: $ROS_WS/hw.sh env
     summary: The vessel's network env path, or one key or role address (<ROLE>_IP).
     params:
@@ -314,7 +323,7 @@ commands:
   - name: profile sync
     run: $ROS_WS/hw.sh profile sync
     summary: Check out your profile set at its recorded ref (URL REF records new ones first).
-  - name: secrets check
+  - name: profile secrets
     run: $ROS_WS/hw.sh secrets check
     summary: The secrets file and the missing key names (never values).
   - name: hot
@@ -328,20 +337,24 @@ commands:
       - astro hot REPO --dry-run
   - name: station take
     run: $ROS_WS/hw.sh station take
+    level: setup
     summary: Make this computer the operator station (robot link, gateway and time roles, keys, station file).
     params:
       - {name: --dry-run, type: bool, description: Show the steps; change nothing.}
   - name: station release
     run: $ROS_WS/hw.sh station release
+    level: setup
     summary: Stop this computer's operator station services.
   - name: overlay
     run: $ROS_WS/hw.sh overlay
+    level: setup
     summary: Colcon-build a worktree's changed packages as an overlay on the workspace install; prints the source line.
     params:
       - {name: path, description: The worktree.}
       - {name: --base, required: false, description: 'Compare against this ref (default origin/main).'}
   - name: pyenv
     run: $ROS_WS/hw.sh pyenv
+    level: setup
     summary: The PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon.
     params:
       - {name: path, description: The worktree.}
@@ -350,6 +363,7 @@ commands:
     summary: The workspace's colcon build in its dev container (from clean when the image or colcon defaults changed).
   - name: image
     run: $ROS_WS/hw.sh image
+    level: setup
     summary: The dev image the Compose config names.
     params:
       - {name: --pull, type: bool, description: Pull when the registry has a newer one.}
@@ -370,29 +384,12 @@ commands:
 
   - name: net/share.sh
     run: $ROS_WS/net/share.sh
+    level: setup
     summary: Create a Samba network folder (interactive; run on the host). Its HOST.local name comes from setup.linux.sh --components mdns.
     notes: Asks for the share name, user and password; mounts it at /mnt/NAME and keeps the login in ~/.smbcredentials.
 
   - name: net/mesh.sh
     run: $ROS_WS/net/mesh.sh
+    level: setup
     summary: Join a WARP mesh with the code its owner sent, leave it, or own one on your Cloudflare account (run on the host).
     notes: join and leave need only curl and sh; setup, invite, devices, revoke and teardown run cx mesh, or cx's standalone util without cx.
-
-  - name: fetch_bags.sh
-    run: $ROS_WS/fetch_bags.sh
-    summary: Copy a host's session bags into bags/NAME (reads the remote only; rsync, else tar over ssh).
-    params:
-      - name: source
-        description: HOST:REMOTE_DIR, e.g. jetson:~/astro_dock/bags/SESSION.
-      - name: name
-        description: The directory under bags/ to copy into.
-
-  - name: astro-clock.py
-    run: $ROS_WS/.devcontainer/astro-clock.py
-    summary: Clock offset of each LAN host by one SNTP query (default the time_server role and the STATIC_LEASES hosts).
-    notes: Exits 1 when a host is more than 50 ms off, unsynchronised or silent.
-    params:
-      - name: hosts
-        type: list
-        required: false
-        description: Hosts to ask instead of the vessel's network env.

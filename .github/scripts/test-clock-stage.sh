@@ -193,25 +193,6 @@ for mode in unmatched generic; do
     unclock >/dev/null || fail "$mode: plain clock stage failed"
     out="$(ASTRO_NTP_ALLOW=lan unclock --dry-run)" && fail "$mode: lan mode ran without a network env"
     grep -q "need the vessel's network env" <<<"$out" || fail "$mode: lan mode error unclear"
-    out="$(env -u ASTRO_VESSEL "${vars[@]}" ASTRO_NETWORK_ENV="$tmp/missing.env" python3 "$dir/.devcontainer/astro-clock.py" 2>&1)" \
-        && fail "$mode: astro-clock.py ran without a network env"
-    [[ $(wc -l <<<"$out") == 1 && $out == astro-clock:* ]] || fail "$mode: astro-clock.py did not print one error line: $out"
 done
 
-python3 "$root/.devcontainer/astro-clock.py" --help >/dev/null
-python3 - "$root" <<'EOF'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location('clock', sys.argv[1] + '/.devcontainer/astro-clock.py')
-clock = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(clock)
-hosts = clock.lan_hosts()
-assert hosts[0][0] == 'time server' and len(hosts) >= 2, hosts
-# Read as profile.py reads it: a comment is dropped and a malformed lease word skipped, not raised on.
-import tempfile
-with tempfile.NamedTemporaryFile('w', suffix='.env') as env:
-    env.write('LAN_SUBNET=10.1.0.0/24   # boat LAN\nSTATIC_LEASES="aa:bb=h1=10.1.0.2 bad"\n')
-    env.flush()
-    leased = [host for host in clock.lan_hosts(env.name) if host[0] != 'time server']
-    assert leased == [('h1', '10.1.0.2')], leased
-EOF
 echo "clock stage ok"

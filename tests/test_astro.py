@@ -412,7 +412,7 @@ class Verbs(unittest.TestCase):
         named = {re.match(r'astro (\S+)', run).group(1) for run in runs}
         self.assertEqual(named, set(cli.VERBS))
         rec = {run.split()[2] for run in runs if run.startswith('astro rec ')}
-        self.assertEqual(rec, {'start', 'stop', 'ls'})
+        self.assertEqual(rec, {'start', 'stop', 'ls', 'fetch'})
 
 
 class Stacks(unittest.TestCase):

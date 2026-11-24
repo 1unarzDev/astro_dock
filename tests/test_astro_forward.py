@@ -49,7 +49,7 @@ class Decision(unittest.TestCase):
             self.assertTrue(cli.forwards(verb, False, False, 'computer'), verb)
 
     def test_local_verbs_never_forward(self):
-        for verb in ('help', 'docs', 'on', 'up', 'down', 'ps', 'logs', 'sim', 'check', 'issue', 'sync', 'show',
+        for verb in ('help', 'docs', 'on', 'up', 'down', 'clock', 'logs', 'sim', 'check', 'issue', 'sync', 'show',
                      'whoami', 'env', 'hot'):
             self.assertFalse(cli.forwards(verb, False, False, 'computer'), verb)
 

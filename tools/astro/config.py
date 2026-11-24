@@ -16,7 +16,7 @@ else this machine's registry host. Its `astro:` section points at team files and
       env: {VAR: value}                 # optional: more variables for `on`/`sim`
       sim: CMD                          # optional (sim profiles): the world backend, `CMD up|down|status`
       sim_time: false                   # optional: test runs follow /clock (use_sim_time)
-      stacks: {NAME: {host, run, ready, needs, default, with}}   # optional: astro up/down/ps (stacks.py)
+      stacks: {NAME: {host, run, ready, needs, default, with}}   # optional: astro up/down/status (stacks.py)
       field: {repo: OWNER/NAME, url: GIT_URL, dir: PATH, auto: true}  # optional: check/issue/sync/show (field.py)
       help: [PATH]                      # optional: more help.yaml files (~, ${VAR:-default}), each its own group
       bundle_next: 'TEXT {bundle}'      # optional: printed after `astro bundle`, {bundle} = the file
@@ -202,6 +202,19 @@ def compose_default_container(local_root=WS):
     run = subprocess.run(['bash', '-c', 'source "$1/devices/lib.sh"; hw_compose_default "$1" ASTRO_CONTAINER',
                           '_', str(local_root)], capture_output=True, text=True)
     return run.stdout.strip()
+
+
+def this_host():
+    """This machine's registry host name as hw.sh whoami finds it (ASTRO_HOST wins), or ''."""
+    if os.environ.get('ASTRO_HOST'):
+        return os.environ['ASTRO_HOST']
+    root = profiles_root()
+    if root is None:
+        return ''
+    try:
+        return _assignments(profile.resolve(root)).get('ASTRO_HOST', '')
+    except profile.Error:
+        return ''
 
 
 def have_ros():

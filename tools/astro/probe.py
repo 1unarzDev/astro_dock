@@ -1,5 +1,5 @@
 """Message rates of some topics, measured where they are published. Standalone (no astro imports): `astro up`
-and `astro ps` send this file as the stdin of `python3 - TIMEOUT WINDOW PID TOPIC...` on a stack's host.
+and `astro status` send this file as the stdin of `python3 - TIMEOUT WINDOW PID TOPIC...` on a stack's host.
 
 Waits (at most TIMEOUT s, or until process group PID is gone; 0 = none) until every topic has published,
 then counts messages for WINDOW s, and prints one line: `astro-rates {"topic": hz, ..., "_dead": bool}`."""

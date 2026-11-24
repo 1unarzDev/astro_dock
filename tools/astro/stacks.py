@@ -1,4 +1,4 @@
-"""`astro up|down|ps|logs`: the vessel's long-running stacks, each started on its own host, so an ssh drop never
+"""`astro up|down|logs` and the stacks part of `astro status`: the vessel's long-running stacks, each started on its own host, so an ssh drop never
 stops one. The vessel profile's `astro.stacks` is an ordered map:
 
     stacks:
@@ -279,10 +279,11 @@ def down(vessel, root, names):
     return 0
 
 
-def ps(vessel):
-    stacks = parse(vessel.astro)
-    width = max((len(n) for n in stacks), default=0)
-    for stack in stacks.values():
+def rows(vessel):
+    """[(name, state, host, uptime, rates text, log path)] of every stack, measured on its host: state is up,
+    down or unreachable, with * when the stack is started outside astro (run: null: its ready topics only)."""
+    out = []
+    for stack in parse(vessel.astro).values():
         host = host_of(vessel, stack)
         state, since, logfile = 'external', '', ''
         if stack.run:
@@ -293,12 +294,20 @@ def ps(vessel):
                 since = str(datetime.timedelta(seconds=int(time.time()) - int(epoch)))
         rates = probe(vessel, stack, 3.0) if state in ('up', 'external') else {}
         if state == 'external':
-            state = 'up' if all(rates.get(t) for t in stack.ready) else 'down'
-            state += '*'
-        print(f'{stack.name:<{width}}  {state:<5} {host}  {since:>8}  {rate_text(rates)}  {logfile}'.rstrip())
-    if any(not s.run for s in stacks.values()):
-        print('* started outside astro (run: null): its ready topics only')
-    return 0
+            state = ('up' if all(rates.get(t) for t in stack.ready) else 'down') + '*'
+        out.append((stack.name, state, host, since, rate_text(rates), logfile))
+    return out
+
+
+def table(found):
+    """The stack rows as text lines (astro status)."""
+    width = max((len(r[0]) for r in found), default=0)
+    wide = max((len(r[1]) for r in found), default=0)
+    lines = [f'{name:<{width}}  {state:<{wide}} {host}  {since:>8}  {rates}  {logfile}'.rstrip()
+             for name, state, host, since, rates, logfile in found]
+    if any(r[1].endswith('*') for r in found):
+        lines.append('* started outside astro (run: null): its ready topics only')
+    return lines
 
 
 def logs(vessel, name, follow):
@@ -318,5 +327,5 @@ def main_up(vessel, root, args):
     try:
         return up(vessel, root, args.names, [o for words in args.options for o in words.split(',') if o])
     except KeyboardInterrupt:
-        print('\ninterrupted: started stacks keep running (astro ps, astro down)', file=sys.stderr)
+        print('\ninterrupted: started stacks keep running (astro status, astro down)', file=sys.stderr)
         return 130

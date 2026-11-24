@@ -3,7 +3,7 @@
 
 # System packages
 geographiclib-tools
-rsync  # bag transfers to the operator station; fetch_bags.sh pulls them
+rsync  # bag transfers to the operator station; astro rec fetch pulls them
 openssh-client
 ccache  # hw.sh overlay compiles C++ worktree packages through it
 iperf3  # hw.sh radio measure throughput between the operator laptop and the boat

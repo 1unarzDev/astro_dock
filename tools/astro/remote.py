@@ -67,7 +67,8 @@ def local_vessels():
     return out
 
 
-def ssh_command(vessel, host, spec, cmd, tty):
+def ssh_base(vessel, host, spec):
+    """(ssh words, target) reaching HOST's own shell: the operator key and the via jump host when set."""
     if not spec['address']:
         raise config.Error(f'{host} has no address in {vessel.registry}')
     target = f'{spec["user"]}@{spec["address"]}' if spec['user'] else spec['address']
@@ -81,6 +82,17 @@ def ssh_command(vessel, host, spec, cmd, tty):
         via = vessel.hosts().get(spec['via'])
         if via and via['address']:
             words += ['-J', f'{via["user"]}@{via["address"]}' if via['user'] else via['address']]
+    return words, target
+
+
+def host_shell(vessel, host, spec, script):
+    """argv running SCRIPT (bash) in HOST's own shell over ssh, outside its container (clocks, chrony)."""
+    words, target = ssh_base(vessel, host, spec)
+    return words + ['-o', 'BatchMode=yes', target, 'bash -c ' + shlex.quote(script)]
+
+
+def ssh_command(vessel, host, spec, cmd, tty):
+    words, target = ssh_base(vessel, host, spec)
     name = spec['container'] or (vessel.hosts_kind.get('container') or {}).get('name') \
         or config.compose_default_container()
     project = vessel.hosts_kind.get('compose_project')
@@ -153,11 +165,12 @@ def words(vessel, host, spec, cmd, tty=False):
     return local_words(vessel, spec['container'], cmd, tty)
 
 
-def home_words(vessel, home, args, tty):
-    """(host name, argv, env) running `astro ARGS` on HOME (a registry host or role) in its dev container.
-    ASTRO_HERE=1 keeps it there."""
+def home_words(vessel, home, args, tty, env=None):
+    """(host name, argv, env) running `astro ARGS` on HOME (a registry host or role) in its dev container,
+    with ENV's variables set. ASTRO_HERE=1 keeps it there."""
     host, spec = place(vessel, home)
-    cmd = 'ASTRO_HERE=1 astro' + ''.join(' ' + shlex.quote(a) for a in args)
+    sets = ''.join(f'{k}={shlex.quote(str(v))} ' for k, v in (env or {}).items())
+    cmd = f'ASTRO_HERE=1 {sets}astro' + ''.join(' ' + shlex.quote(a) for a in args)
     argv, env = words(vessel, host, spec, cmd, tty)
     return host, argv, env
 

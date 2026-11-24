@@ -449,7 +449,7 @@ stage_clock() {
             echo "ASTRO_NTP_ALLOW=$allow needs LAN_SUBNET (the subnet to serve) in $env; set it there or name the subnet in ASTRO_NTP_ALLOW." >&2; exit 1; }
     fi
     servers=(${ASTRO_NTP_SERVER:-time.cloudflare.com})
-    # A client of the LAN server also answers the LAN subnet, so astro-clock.py sees every host.
+    # A client of the LAN server also answers the LAN subnet, so every host can follow it.
     [[ "${servers[*]}" == lan ]] && servers=("$lan_server") peers="$lan_subnet" lan=true
     # The LAN server also follows an operator laptop that has internet time; "operator" serves the
     # subnet from such a laptop, only while it is itself synchronized (no local stratum).
@@ -557,7 +557,7 @@ stage_clock() {
         [[ "$(timedatectl show -p NTPSynchronized --value)" == yes ]] \
             || echo "NTP is not synchronized yet; check the network before installing packages." >&2
     fi
-    echo "Offsets of the LAN hosts: .devcontainer/astro-clock.py"
+    echo "Offsets of the robot hosts: astro clock"
     COMPLETED+=(clock)
 }
 
