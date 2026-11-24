@@ -22,12 +22,21 @@ def github(repo):
     return f'https://github.com/{found.group(1)}/blob/{branch}' if found else None
 
 
-def repo_docs(repo):
-    """README.md and docs/*.md of one repo (and of its packages one level down), relative paths."""
+def repo_docs(repo, skip=()):
+    """README.md and docs/*.md of one repo (and of its packages one level down), relative paths; not in
+    hidden folders, nested repos (listed on their own) or the ``skip`` folders (data)."""
     repo = Path(repo)
     found = [p for p in [repo / 'README.md', *sorted(repo.glob('docs/*.md')), *sorted(repo.glob('*/README.md')),
                          *sorted(repo.glob('*/docs/*.md'))] if p.is_file()]
-    return [p.relative_to(repo) for p in found if not any(part.startswith('.') for part in p.relative_to(repo).parts)]
+    out = []
+    for p in found:
+        rel = p.relative_to(repo)
+        top = repo / rel.parts[0]
+        if any(part.startswith('.') for part in rel.parts) or (len(rel.parts) > 1 and (
+                (top / '.git').exists() or any(top == s or top in s.parents for s in skip))):
+            continue
+        out.append(rel)
+    return out
 
 
 def lines(vessel, ws=config.WS, day=None):
@@ -53,9 +62,11 @@ def lines(vessel, ws=config.WS, day=None):
     root = vessel.data_root()
     out += ['', f'day log     {log.day_dir(root, day) / "log.txt"}  (astro log)',
             f'bags        {log.day_dir(root, day) / "bags"}  (astro rec ls)', '', 'docs']
-    repos = [Path(ws)] + sorted(p for p in Path(ws, 'src').glob('*') if (p / '.git').exists())
+    ws = Path(ws)
+    repos = [ws] + sorted(p for p in [*ws.glob('*'), *ws.glob('src/*')] if (p / '.git').exists())
+    skip = [Path(root).resolve()]
     for repo in repos:
-        found = repo_docs(repo)
+        found = repo_docs(repo, skip)
         if not found:
             continue
         url = github(repo)
