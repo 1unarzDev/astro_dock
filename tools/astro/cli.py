@@ -516,12 +516,15 @@ def dispatch(argv):
         dim = sys.stderr.isatty() and 'NO_COLOR' not in os.environ
         print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
         tty = remote._tty()
-        if host == config.this_host():           # this machine, outside its container: exec into it
-            argv_, env = remote.local_words(vessel, spec['container'], line, tty)
-        else:
-            argv_, env = remote.ssh_command(vessel, host, spec, [line], tty), None
         try:
+            if host == config.this_host():           # this machine, outside its container: exec into it
+                argv_, env = remote.local_words(vessel, spec['container'], line, tty)
+            else:
+                argv_, env = remote.ssh_command(vessel, host, spec, [line], tty), None
             return subprocess.call(argv_, env=env)
+        except config.Error as error:
+            print(f'astro {command["name"]}: {error}', file=sys.stderr)
+            return 1
         except KeyboardInterrupt:
             return 130
     return subprocess.call(['bash', '-c', line], env=dispatch_env())
