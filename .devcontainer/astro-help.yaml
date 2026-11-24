@@ -121,14 +121,32 @@ commands:
 
   - name: rec fetch
     run: astro rec fetch
-    summary: Copy one of the home host's bags into DATA/DATE/bags/ here; without a name, pick from its bags (date, label, size, start-end).
-    ros: rsync -a --partial -e 'ssh HOST docker exec -i CONTAINER' HOST:DATA/DATE/bags/NAME/ DATA/DATE/bags/NAME/
-    notes: Runs here (never forwarded). Resumable; needs rsync here and in the home host's container.
+    summary: Find bags on every computer of the robot and copy the ones you pick to a laptop. With no arguments it searches and lets you pick.
+    notes: Space picks a bag, a picks every new one, Enter asks where to copy them. A copy that stopped picks up where it left off when you run it again.
+    ros: rsync -a --partial -e ssh USER@HOST:DATA/DATE/bags/NAME/ DATA/DATE/bags/NAME/
+    details: >-
+      Searches this machine and every registry ssh host in parallel (25 s each; one line for each it can't
+      reach): on each host's own shell, the data root its dev container sees (astro.data, else
+      $ASTRO_DATA, else $ROS_WS/bags), through the container's mounts. A bag is any directory with
+      metadata.yaml or .mcap/.db3 files (DATE/bags/NAME, older top-level and sessions/ layouts). A bag
+      still being written (no metadata.yaml, or its day's .rec.pid recorder running) is never copied; one at
+      the destination with the same path and size counts as copied. rsync runs on the hosts' own shells
+      (needs rsync there), from here, or on the destination when neither end is here. The summary goes in
+      today's log (rec). --list [--json] lists only; --names prints BAG<TAB>about for pickers; without a
+      terminal and without bags it prints the list and exits 2.
     params:
-      - {name: bag, required: false, choices_from: 'astro _choices bags', description: 'The bag to copy: DATE/NAME, NAME (the newest) or a unique part, e.g. 101500-lake; none picks.'}
+      - {name: bags, type: list, required: false, choices_from: 'astro rec fetch --list --names', description: 'The bags to copy, by name or a unique part of it, e.g. 2026-11-24/101500-lake; leave empty to pick.'}
+      - {name: --from, choices_from: 'astro _choices on', description: 'Copy only bags from this computer, e.g. robot-main; leave empty to look on all of them.'}
+      - {name: --to, choices_from: 'astro _choices on', description: 'The computer the bags are copied to, e.g. station; leave empty for this one.'}
+      - {name: --new, type: bool, description: 'Copy every bag that is not at the destination yet, without asking.'}
+      - {name: --date, free: 'a day is typed, not picked', description: 'Copy every bag recorded on this day, e.g. 2026-11-24.'}
+      - {name: --list, type: bool, description: 'Only show the bags on every computer and which are copied; copy nothing.'}
+      - {name: --json, type: bool, description: 'With --list, print the bags as JSON for scripts and agents.'}
     examples:
       - astro rec fetch
-      - astro rec fetch 2026-11-24/101500-lake
+      - astro rec fetch --list
+      - astro rec fetch --from robot-main --new
+      - astro rec fetch --to station 2026-11-24/101500-lake
 
   - name: mark
     run: astro mark

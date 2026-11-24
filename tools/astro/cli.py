@@ -11,14 +11,14 @@ import sys
 import tarfile
 import time
 
-from . import clock, config, field, rec, remote, stacks, status
+from . import clock, config, fetch, field, rec, remote, stacks, status
 from .engine import apply as applying
 from .engine import log, procedures, results
 
 VERBS = ('docs', 'on', 'up', 'down', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
          'check', 'issue', 'sync', 'show', 'clock', 'help')
 HEADER = ('up', 'down', 'status', 'rec', 'test', 'apply', 'undo', 'bundle', 'show')   # one context line
-# Hidden: `_choices KIND` prints a picker's choices (help.yaml choices_from); `_rsh` is rec fetch's rsync shell.
+# Hidden: `_choices KIND` prints a picker's choices (help.yaml choices_from).
 CHOICES = ('test', 'apply', 'on', 'stacks', 'options', 'check', 'bags', 'presets')
 # Verbs that need ROS or the vessel's data dir and state: run outside ROS, they forward to the profile's
 # astro.home (a registry host or role) unless --here or ASTRO_HERE=1. Every other verb runs where it is typed.
@@ -215,8 +215,8 @@ def choices(s, kind):
         f = field.Field(s.vessel)
         return [(p.stem, '') for p in sorted((f.dir / 'checklists').glob('*.md'))]
     if kind == 'bags':
-        home = s.vessel.astro.get('home')
-        return [rec.choice(b) for b in rec.remote_bags(s.vessel, str(home))] if home else []
+        items = fetch.rows(fetch.search(s.vessel, config.this_host(), say=lambda line: None))
+        return list({b['id']: (b['id'], f'{b["host"]}  {fetch.size_text(b["size"])}') for b in items}.values())
     raise config.Error(f'no choices {kind!r} ({", ".join(CHOICES)})')
 
 
@@ -698,14 +698,28 @@ def parser():
     return p
 
 
+def rec_fetch(args):
+    """`astro rec fetch ...` (fetch.main), with astro's one-line failures."""
+    try:
+        return fetch.main(config.Vessel(), args, choose)
+    except NoChoice:
+        return 2
+    except (Cancelled, fetch.Cancelled):
+        print('astro rec fetch: cancelled, nothing copied', file=sys.stderr)
+        return 1
+    except config.Error as error:
+        print(f'astro rec fetch: {error}', file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ('-h', '--help'):
         return help_module().main(['--list'])
     verb = argv[0]
     here = os.environ.get('ASTRO_HERE') == '1'
-    if verb == '_rsh':
-        return rec.rsh_main(config.Vessel(), argv[1:])
     if verb == '_choices':
         if '--here' in argv:
             argv, here = [a for a in argv if a != '--here'], True
@@ -721,6 +735,8 @@ def main(argv=None):
     if any(a in ('-h', '--help') for a in argv[1:]) and (verb != 'on' or argv[1:2] in (['-h'], ['--help'])):
         sub = argv[1] if verb == 'rec' and argv[1] in ('start', 'stop', 'ls', 'fetch') else None
         return verb_help(f'rec {sub}' if sub else verb)
+    if verb == 'rec' and argv[1:2] == ['fetch']:          # runs here: it searches every computer itself
+        return rec_fetch(argv[2:])
     flag_here = '--here' in argv
     if verb in HOME_VERBS and flag_here:
         argv, here = [a for a in argv if a != '--here'], True
@@ -728,8 +744,7 @@ def main(argv=None):
     s = Session()
     s.no_autostart = s.no_autostart or flag_here
     try:
-        fetching = verb == 'rec' and args.action == 'fetch'      # copies from home to here: never forwarded
-        if verb in HOME_VERBS and not fetching and not here and not config.have_ros():
+        if verb in HOME_VERBS and not here and not config.have_ros():
             home = s.vessel.astro.get('home')
             if forwards(verb, here, False, home):
                 if verb == 'status' and not args.watch:      # the stacks from here (as ssh reaches them)
@@ -744,7 +759,7 @@ def main(argv=None):
                     s.no_autostart = True     # resolved here, once: not again on home
                 return forward(s.vessel, str(home), argv,
                                env={'ASTRO_NO_AUTOSTART': '1'} if s.no_autostart else None)
-        if verb in HEADER and not (verb == 'test' and args.name == 'list') and not fetching:
+        if verb in HEADER and not (verb == 'test' and args.name == 'list'):
             print(f'astro {verb} · vessel {s.vessel.name} · state {s.vessel.state()} · data {s.root}')
         if verb == 'on':
             return remote.on(args.host or choose('Pick a host to open a shell on:', choices(s, 'on'),
@@ -779,11 +794,6 @@ def main(argv=None):
                       when=remote.mark_time(args.at) if args.at else None)
             return 0
         if verb == 'rec':
-            if fetching:
-                home = s.vessel.astro.get('home')
-                if not home:
-                    raise config.Error('rec fetch copies from the profile\'s astro.home, and it has none')
-                return rec.fetch(s.vessel, str(home), ' '.join(args.words), choose)
             if args.action == 'ls':
                 return rec.ls(s.vessel)
             need_ros('rec')

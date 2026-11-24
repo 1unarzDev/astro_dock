@@ -91,8 +91,8 @@ def host_shell(vessel, host, spec, script):
     return words + ['-o', 'BatchMode=yes', target, 'bash -c ' + shlex.quote(script)]
 
 
-def ssh_command(vessel, host, spec, cmd, tty):
-    words, target = ssh_base(vessel, host, spec)
+def container_find(vessel, spec):
+    """(shell that sets c, the container word) naming a registry host's dev container in its own shell."""
     name = spec['container'] or (vessel.hosts_kind.get('container') or {}).get('name') \
         or config.compose_default_container()
     project = vessel.hosts_kind.get('compose_project')
@@ -102,7 +102,12 @@ def ssh_command(vessel, host, spec, cmd, tty):
         if project:
             find = f'c=$(docker ps -q --filter label=com.docker.compose.project={shlex.quote(project)} {dev} | head -n1); '
         find += f'[ -n "$c" ] || c=$(docker ps -q {dev} | head -n1); '
-    container = f'"${{c:-{name}}}"' if find else shlex.quote(name)
+    return find, (f'"${{c:-{name}}}"' if find else shlex.quote(name))
+
+
+def ssh_command(vessel, host, spec, cmd, tty):
+    words, target = ssh_base(vessel, host, spec)
+    find, container = container_find(vessel, spec)
     words += ['-t'] if tty else []
     tz = '-e TZ="$(tail -n1 /etc/localtime 2>/dev/null)" '   # one clock: the container keeps its host's
     remote = f'{find}docker exec {"-it" if tty else "-i"} {tz}{container} bash'

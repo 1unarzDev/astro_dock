@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 os.environ['ASTRO_FIELD'] = 'off'
 
-from astro import cli, clock, config, rec, remote, stacks, status  # noqa: E402
+from astro import bagscan, cli, clock, config, fetch, remote, stacks, status  # noqa: E402
 
 HELP = cli.help_module()
 HOSTS = {'boat-main': {'user': 'crew', 'address': '10.0.0.2', 'ssh': True, 'container': '', 'workspace': '',
@@ -162,35 +162,128 @@ class StatusHasTheStacks(unittest.TestCase):
         self.assertEqual(fwd.call_args[1]['env'], {'ASTRO_NO_STACKS': '1'})
 
 
+def bag_tree(root):
+    """A data root with astro's DATE/bags/NAME bags (one closed, one recording), an older top-level bag and a
+    sessions/.../bag/00 one, and things that are not bags."""
+    def put(rel, text='x'):
+        path = Path(root, rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    meta = ('rosbag2_bagfile_information:\n  duration:\n    nanoseconds: 60000000000\n  starting_time:\n'
+            '    nanoseconds_since_epoch: 1764000000000000000\n  topics_with_message_count:\n'
+            '    - topic_metadata:\n        name: /a\n    - topic_metadata:\n        name: /b\n')
+    put('2026-11-24/bags/101500-lake/metadata.yaml', meta)
+    put('2026-11-24/bags/101500-lake/101500-lake_0.mcap', 'x' * 100)
+    put('2026-11-24/bags/120000-dock/120000-dock_0.mcap', 'x' * 10)       # recording: no metadata.yaml yet
+    put('2026-11-24/bags/120000-dock/metadata.yaml.tmp')
+    put('2026-11-24/.rec.pid', '4242 /d/2026-11-24/bags/120000-dock')
+    put('2026-11-24/log.txt')
+    put('boat_20261018_165600/metadata.yaml', meta)
+    put('boat_20261018_165600/boat_20261018_165600_0.mcap')
+    put('sessions/20261025_tq/bag/00/metadata.yaml', meta)
+    put('sessions/20261025_tq/logs/bag.log')
+    put('INDEX.json')
+
+
 class RecFetch(unittest.TestCase):
-    def test_bags_parsed_newest_first_and_found(self):
-        lines = ['astro-bag\t2026-11-23\t101500-lake\t/d/2026-11-23/bags/101500-lake\t2048\t1000\t1300',
-                 'astro-bag\t2026-11-24\t090000\t/d/2026-11-24/bags/090000\t5\t-\t-', 'noise']
-        bags = rec.parse_bags(lines)
-        self.assertEqual([b['name'] for b in bags], ['090000', '101500-lake'])
-        value, about = rec.choice(bags[1])
-        self.assertEqual(value, '2026-11-23/101500-lake')
-        self.assertIn('lake', about)
-        self.assertIn('2.0 KB', about)
-        self.assertEqual(rec.find(bags, 'lake')['date'], '2026-11-23')
-        with self.assertRaisesRegex(config.Error, 'matches 2'):
-            rec.find(bags, '0')
+    def found(self, tmp, alive=lambda pid: pid == '4242'):
+        return fetch.parse('boat-main', bagscan.lines(tmp, alive))
 
-    def test_rsync_argv_goes_through_astro_rsh_into_the_data_dir(self):
-        argv = rec.fetch_argv('boat-main', '/d/2026-11-23/bags/101500-lake', Path('/here/2026-11-23/bags/101500-lake'),
-                              rec.rsh())
-        self.assertEqual(argv[0], 'rsync')
-        self.assertEqual(argv[-2:], ['boat-main:/d/2026-11-23/bags/101500-lake/', '/here/2026-11-23/bags/101500-lake/'])
-        self.assertTrue(argv[argv.index('-e') + 1].endswith('tools/bin/astro _rsh'))
-        self.assertIn('--partial', argv)
+    def test_bag_dirs_found_in_every_layout_with_their_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bag_tree(tmp)
+            found = self.found(tmp)
+        self.assertEqual(found['root'], tmp)
+        self.assertGreater(found['free'], 0)
+        by = {b['rel']: b for b in found['bags']}
+        self.assertEqual(sorted(by), ['2026-11-24/bags/101500-lake', '2026-11-24/bags/120000-dock',
+                                      'boat_20261018_165600', 'sessions/20261025_tq/bag/00'])
+        lake = by['2026-11-24/bags/101500-lake']
+        self.assertEqual((lake['id'], lake['label'], lake['date']), ('2026-11-24/101500-lake', 'lake', '2026-11-24'))
+        self.assertEqual((lake['size'] > 100, lake['topics'], lake['end'] - lake['start'], lake['open']),
+                         (True, 2, 60.0, ''))
+        old = by['boat_20261018_165600']
+        self.assertEqual((old['id'], old['date']), ('boat_20261018_165600',
+                                                    fetch.datetime.datetime.fromtimestamp(1764000000).strftime('%Y-%m-%d')))
 
-    def test_rsh_runs_rsyncs_server_in_the_hosts_container(self):
-        with mock.patch('os.execvp') as execvp:
-            rec.rsh_main(Vessel(), ['-l', 'crew', 'boat-main', 'rsync', '--server', '--sender', '.', '/d/x/'])
-        argv = execvp.call_args[0][1]
-        self.assertEqual(argv[3], 'crew@10.0.0.2')
-        self.assertIn("rsync --server --sender . /d/x/", argv[-1])
-        self.assertIn('docker exec -i', argv[-1])
+    def test_an_open_segment_is_listed_as_recording_and_never_copied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bag_tree(tmp)
+            found = {'boat-main': self.found(tmp), 'station': {'host': 'station', 'root': '/s', 'free': 0, 'bags': []}}
+            dead = self.found(tmp, alive=lambda pid: False)
+        dock = next(b for b in found['boat-main']['bags'] if b['label'] == 'dock')
+        self.assertEqual(dock['open'], 'recording')
+        self.assertIn('no metadata.yaml', next(b for b in dead['bags'] if b['label'] == 'dock')['open'])
+        self.assertEqual(fetch.state(dock, found['station']), 'recording')
+        said = []
+        self.assertNotIn(dock, fetch.plan([dock], found['station'], said.append))
+        self.assertIn('still being written', said[0])
+
+    def test_a_copy_with_the_same_path_and_size_is_already_there(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bag_tree(tmp)
+            src = self.found(tmp)
+        lake = next(b for b in src['bags'] if b['label'] == 'lake')
+        dest = {'host': 'station', 'bags': [dict(lake, host='station')]}
+        self.assertTrue(fetch.copied(lake, dest))
+        self.assertEqual(fetch.state(lake, dest), 'copied')
+        self.assertEqual(fetch.state(lake, {'host': 'station', 'bags': [dict(lake, size=lake['size'] - 1)]}), 'new')
+        said = []
+        self.assertEqual(fetch.plan([lake], dest, said.append), [])
+        self.assertIn('already on station', said[0])
+
+    def test_list_is_grouped_by_date_newest_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bag_tree(tmp)
+            found = {'boat-main': self.found(tmp)}
+        lines = fetch.table(fetch.rows(found), None)
+        self.assertEqual(lines[0], '2026-11-24')
+        self.assertRegex(lines[1], r'^  boat-main  \(no metadata\)\s+dock .* recording\s+2026-11-24/120000-dock$')
+        self.assertIn(' 2 topics', lines[2])
+        self.assertEqual(fetch.find(fetch.rows(found), 'lake')[0]['id'], '2026-11-24/101500-lake')
+
+    def test_without_a_terminal_and_without_args_it_lists_and_exits_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bag_tree(tmp)
+            found = {'here': fetch.parse('here', bagscan.lines(tmp + '/none')), 'boat-main': self.found(tmp)}
+        with mock.patch.object(fetch, 'search', return_value=found), \
+                mock.patch.object(config, 'this_host', return_value=''), \
+                mock.patch.object(fetch, 'copy') as copy, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(fetch.main(Vessel(), [], pick=None, tty=False), 2)
+            self.assertEqual(fetch.main(Vessel(), ['--list'], pick=None, tty=False), 0)
+            self.assertEqual(fetch.main(Vessel(), ['--list', '--json'], pick=None, tty=False), 0)
+        copy.assert_not_called()
+        self.assertIn('copy with: astro rec fetch', out.getvalue())
+        self.assertIn('"state": "recording"', out.getvalue())
+
+    def test_rsync_argv_for_each_direction(self):
+        src = {'host': 'boat-main', 'spec': HOSTS['boat-main'], 'root': '/d'}
+        here = {'host': 'here', 'spec': None, 'root': '/here'}
+        station = {'host': 'station', 'spec': HOSTS['station'], 'root': '/s/data'}
+        rel = '2026-11-24/bags/101500-lake'
+        pull = fetch.copy_argv(Vessel(), src, here, rel)
+        self.assertEqual(pull[:3], ['rsync', '-a', '--partial'])
+        self.assertEqual(pull[-2:], [f'crew@10.0.0.2:/d/{rel}/', f'/here/{rel}/'])
+        self.assertTrue(pull[pull.index('-e') + 1].startswith('ssh -o ConnectTimeout=8'))
+        push = fetch.copy_argv(Vessel(), here, station, rel, tty=True)
+        self.assertIn('--info=progress2', push)
+        self.assertEqual(push[push.index('--rsync-path') + 1], 'mkdir -p /s/data/2026-11-24/bags && rsync')
+        self.assertEqual(push[-2:], [f'/here/{rel}/', f'op@10.0.0.9:/s/data/{rel}/'])
+        both = fetch.copy_argv(Vessel(), src, station, rel)
+        self.assertEqual(both[:2], ['ssh', '-o'])
+        self.assertIn('op@10.0.0.9', both)
+        self.assertIn(f'crew@10.0.0.2:/d/{rel}/', both[-1])
+        with self.assertRaisesRegex(config.Error, 'both this machine'):
+            fetch.copy_argv(Vessel(), here, here, rel)
+
+    def test_search_runs_bagscan_in_the_hosts_own_shell(self):
+        argv = fetch.scan_argv(Vessel(), 'boat-main', HOSTS['boat-main'])
+        self.assertEqual(argv[argv.index('crew@10.0.0.2') - 1], 'BatchMode=yes')
+        self.assertIn('python3 - ', argv[-1])
+        self.assertIn('ROS_WS', argv[-1])
+        err = fetch.parse('boat-main', ['astro-error\tno dev container running (start it on that host)'])
+        self.assertEqual(err['error'], 'no dev container running (start it on that host)')
 
 
 class Clock(unittest.TestCase):

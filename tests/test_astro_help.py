@@ -122,7 +122,7 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(astro_help.placeholder(port), '(auto)')
         self.assertEqual(astro_help.placeholder(seconds), '(not set)')
         self.assertEqual(astro_help.placeholder(file), '(required)')
-        self.assertRegex(astro_help.text([astro_help.parse(astro_help.OWN)]), r'\n  rec fetch \[bag\] +Copy ')
+        self.assertRegex(astro_help.text([astro_help.parse(astro_help.OWN)]), r'\n  rec fetch \[bags\.\.\.\] .* +Find ')
 
     def test_text_lists_and_details(self):
         packages = [astro_help.parse(astro_help.OWN)]

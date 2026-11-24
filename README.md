@@ -14,7 +14,7 @@ astro rec start lean lake          # record a bag of the "lean" preset, labelled
 astro test                         # pick a test (ladder order, with status); runs in this terminal, Ctrl-C = neutral
 astro apply                        # pick a measured result and write it into the state file
 astro mark "wind picked up"        # a line in the day's log, also in the bag
-astro rec stop && astro rec fetch  # close the bag, then pick one of the home host's bags and copy it here
+astro rec stop && astro rec fetch  # close the bag, then pick bags on any of the robot's computers to copy
 astro clock                        # each host's clock offset and chrony source; --fix sets the robot clocks
 ```
 
@@ -61,7 +61,7 @@ team's files (tests, bag presets, state file, stacks, field repo).
 | `up [NAMES] [--with OPT]`, `down [NAMES]`, `logs [NAME] [-f]` | Start, stop and tail the vessel's stacks. Each runs on its host in the dev container (private `tmux -L astro`, else `setsid`), so an ssh drop never stops it |
 | `status [--watch]` | Each stack (host, up/down, uptime, ready rates, log), then nodes, the latest message on each test topic, recording, last log lines, next test |
 | `on [HOST] [cmd]` | A shell or one command in a host's dev container (ssh + `docker exec`) |
-| `rec start [PRESET] [LABEL]`, `rec stop`, `rec ls`, `rec fetch [BAG]` | Record a bag (mcap, 300 s splits); list today's bags with the log lines inside each; copy one of the home host's bags into `DATA/DATE/bags/` here (rsync through `astro on`) |
+| `rec start [PRESET] [LABEL]`, `rec stop`, `rec ls`, `rec fetch [BAG...] [--from H] [--to H] [--new\|--date D] [--list [--json]]` | Record a bag (mcap, 300 s splits); list today's bags with the log lines inside each; find the bags on this machine and every registry host and copy the picked ones (resumable rsync, never a bag still recording) to this machine or another host |
 | `mark TEXT`, `log [-n N]` | Add to, or print, the day's log |
 | `test list`, `test status`, `test NAME [--space S]` | Run a test or group in this terminal. Each prints its control layer, old -> new and the exact apply command |
 | `apply RESULT`, `undo` | Write a result into the state file (backup first, checked, rolled back on refusal), then set the live parameters; `undo` reverses one chosen apply (its keys only, from the history next to the state file) |
