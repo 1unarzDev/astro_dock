@@ -253,6 +253,10 @@ def dispatch(argv):
     line = command['run'] + ''.join(' ' + shlex.quote(a) for a in argv[len(words):])
     env = dict(os.environ)
     env.setdefault('ROS_WS', str(config.WS))
+    try:                                  # the vessel's env, as for the built-in verbs
+        env.update(config.Vessel().env())
+    except config.Error:
+        pass
     return subprocess.call(['bash', '-c', line], env=env)
 
 

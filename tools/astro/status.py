@@ -37,7 +37,7 @@ def summarize(msg):
     return text[:110]
 
 
-def sample(topics, seconds=1.5):
+def sample(topics, seconds=2.0):
     """{topic: summary} of the last message on each topic within ``seconds``, plus the node list."""
     import rclpy
     from rclpy.signals import SignalHandlerOptions
@@ -46,23 +46,24 @@ def sample(topics, seconds=1.5):
     node = rclpy.create_node('astro_status')
     seen = {}
     try:
-        end = time.monotonic() + 3.0                 # discovery: until every topic shows, at most 3 s
-        while time.monotonic() < end:
-            rclpy.spin_once(node, timeout_sec=0.1)
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+        # Best effort and volatile match every publisher (reliable or not, latched or not).
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.VOLATILE)
+        subscribed, begin = set(), time.monotonic()
+        while time.monotonic() - begin < 6.0:        # discovery and messages: until each topic has spoken, at most 6 s
             types = dict(node.get_topic_names_and_types())
-            if all(t in types for t in topics):
+            for topic in topics:
+                if topic in types and topic not in subscribed:
+                    subscribed.add(topic)
+                    node.create_subscription(get_message(types[topic][0]), topic,
+                                             lambda m, t=topic: seen.__setitem__(t, summarize(m)), qos)
+            rclpy.spin_once(node, timeout_sec=0.1)
+            if all(t in seen for t in topics) or (time.monotonic() - begin > seconds
+                                                  and all(t in seen for t in subscribed)):
                 break
-        for topic in topics:
-            if topic in types:
-                cls = get_message(types[topic][0])
-                node.create_subscription(cls, topic, lambda m, t=topic: seen.__setitem__(t, summarize(m)),
-                                         10)
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
-            rclpy.spin_once(node, timeout_sec=0.05)
         nodes = sorted(f'{ns.rstrip("/")}/{name}' for name, ns in node.get_node_names_and_namespaces()
                        if name != 'astro_status')
-        return nodes, {t: seen.get(t, '(no message)' if t in types else '(not published)') for t in topics}
+        return nodes, {t: seen.get(t, '(no message)' if t in subscribed else '(not published)') for t in topics}
     finally:
         node.destroy_node()
         rclpy.try_shutdown()
@@ -73,7 +74,10 @@ def page(vessel, spec, rows_next, lines=6):
     if config.have_ros() and spec:
         topics = [t for t in dict.fromkeys(spec.topics.values()) if isinstance(t, str)]
         nodes, seen = sample(topics)
-        out.append(f'nodes  {" ".join(nodes) or "(none)"}')
+        wanted = list(spec.nodes)
+        shown = [f'{n} {"up" if n in nodes else "DOWN"}' for n in wanted]
+        others = len([n for n in nodes if n not in wanted and not n.split('/')[-1].startswith('_')])
+        out.append(f'nodes  {"  ".join(shown + [f"+{others} others"])}')
         width = max(map(len, spec.topics)) if spec.topics else 0
         for name, topic in spec.topics.items():
             out.append(f'  {name:<{width}}  {topic}  {seen.get(topic, "")}')

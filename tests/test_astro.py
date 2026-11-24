@@ -85,6 +85,13 @@ class Response(unittest.TestCase):
         main, cross = fit.cross_response(out, 0, 1)
         self.assertAlmostEqual(cross[0], 0.04)
 
+    def test_coasted_allows_a_steady_current(self):
+        from astro.engine.procedures import coasted
+        steady = [(i * 0.1, 0.2, -0.1, 0.0, 0.0) for i in range(20)]               # drifting, not coasting
+        slowing = [(i * 0.1, 1.0 - 0.05 * i, 0.0, 0.0, 0.0) for i in range(20)]
+        self.assertTrue(coasted(steady))
+        self.assertFalse(coasted(slowing))
+
     def test_effective_column_uses_the_signed_matrix(self):
         plus, minus = list(IDENTITY), list(IDENTITY)
         plus[3 * 1 + 2], minus[3 * 0 + 2] = 0.5, 0.3       # C[sway, yaw] and C-[surge, yaw]

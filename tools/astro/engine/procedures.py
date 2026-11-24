@@ -10,7 +10,7 @@ from . import apply as applying
 from . import fit, log, results
 
 TYPES = ('still', 'couple', 'speed', 'steps', 'nav2')
-DEFAULT_LAYER = {'still': 'baseline', 'couple': 'decoupling', 'speed': 'speed curve',
+DEFAULT_LAYER = {'still': 'conditions', 'couple': 'decoupling', 'speed': 'speed curve',
                  'steps': 'velocity loop', 'nav2': 'nav2 limits'}
 
 
@@ -34,6 +34,7 @@ class Spec:
         self.tests = data.get('tests') or {}
         self.groups = data.get('groups') or {}
         self.defaults_path = data.get('defaults')
+        self.nodes = list(data.get('nodes') or [])          # the nodes astro status names
         self.gates = list(data.get('gates') or ([data['gate']] if data.get('gate') else []))
         self._find = find
         for name, test in self.tests.items():
@@ -180,12 +181,33 @@ def neutral(n):
 
 
 def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s):
-    """Neutral baseline, then the command for settle + measure; (baseline rows, measure rows, all, t_on, t_cut)."""
+    """Neutral baseline, then the command for settle + measure; (baseline rows, measure rows, all, t_on, t_cut).
+    The neutral lasts until the boat stops coasting: its velocity no longer changes (a steady current is
+    allowed, so this works in a current where "below the noise" never comes), at most coast_max_s."""
+    start = runner.now()
     b0, b1 = runner.hold(neutral(n), baseline_s)
+    while b1 - start < COAST_MAX_S and not coasted(runner.window(b1 - 2 * COAST_WINDOW_S, b1)):
+        _, b1 = runner.hold(neutral(n), 0.5)
+    b0 = b1 - baseline_s
     t_on, _ = runner.hold(command, settle_s)
     m0, t_cut = runner.hold(command, measure_s)
     record(ctx, command, t_on, t_cut, runner.window(b0, t_cut))
     return runner.window(b0, b1), runner.window(m0, t_cut), runner.window(b0, t_cut), t_on, t_cut
+
+
+COAST_MAX_S, COAST_WINDOW_S, COAST_TOLERANCE = 8.0, 1.0, 0.03   # s, s, m/s (rad/s)
+
+
+def coasted(rows):
+    """True when the mean velocity of the last window differs from the one before by under the tolerance."""
+    if len(rows) < 4:
+        return True
+    middle = rows[0][0] + (rows[-1][0] - rows[0][0]) / 2
+    first, last = [r for r in rows if r[0] < middle], [r for r in rows if r[0] >= middle]
+    if not first or not last:
+        return True
+    return all(abs(sum(r[k] for r in last) / len(last) - sum(r[k] for r in first) / len(first)) < COAST_TOLERANCE
+               for k in (1, 2, 3))
 
 
 def record(ctx, command, start, end, rows):
