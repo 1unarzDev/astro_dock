@@ -232,7 +232,7 @@ class Hot(unittest.TestCase):
         git(repo, 'add', '-A')
         git(repo, 'commit', '-q', '-m', 'one')
 
-    def hot(self, *args, far='', inside='0'):
+    def hot(self, *args, far='', inside='0', **env):
         """hw.sh hot ARGS; FAR: ssh destinations that answer only through a jump (a jump to one fails too)."""
         log = self.tmp / 'calls.log'
         log.write_text('')
@@ -242,7 +242,7 @@ class Hot(unittest.TestCase):
                  'ASTRO_PROFILES': str(self.profiles), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent',
                  'ASTRO_HOST': 'here', 'HW_SRC': str(self.src), 'HW_DOCK': str(self.dock),
                  'HW_IN_CONTAINER': inside, 'FAKE_SSH_LOG': str(log), 'FAKE_FAR': far,
-                 'FAKE_ROOT': str(self.hosts), 'HW_SSH': executable(self.tmp / 'ssh', HOT_SSH)})
+                 'FAKE_ROOT': str(self.hosts), 'HW_SSH': executable(self.tmp / 'ssh', HOT_SSH), **env})
         return run, log.read_text()
 
     def test_working_tree_reaches_every_host_on_the_field_branch(self):
@@ -309,6 +309,27 @@ class Hot(unittest.TestCase):
         self.assertEqual(calls.count('== crew@10.0.1.10 via - '), 1)          # the direct try only
         self.assertGreaterEqual(calls.count('== crew@10.0.1.10 via crew@10.0.1.2 '), 3)   # probe, bundle, checkout
         self.assertEqual((self.pc / 'pkg_dir/pkg_a/node.py').read_text(), 'SPEED = 2\n')
+
+    def test_container_is_found_on_the_host_when_the_registry_names_none(self):
+        devices = self.profiles / 'a/devices.yaml'
+        devices.write_text(devices.read_text().replace('container: dev, ', ''))
+        hosts = self.profiles / 'fleet/hosts.yaml'
+        hosts.write_text(hosts.read_text() + 'compose_project: proj\n')
+        bin_ = self.tmp / 'bin'
+        bin_.mkdir()
+        # The host's docker: the project's dev service when FAKE_PROJECT_DEV, else any compose dev service.
+        executable(bin_ / 'docker', '#!/usr/bin/env bash\n'
+                   '[[ $* == *project=proj* ]] && echo "$FAKE_PROJECT_DEV" || echo "$FAKE_ANY_DEV"\n')
+        path = f'{bin_}:{os.environ["PATH"]}'
+        (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')
+        run, _ = self.hot('alpha', '--dry-run', PATH=path, FAKE_PROJECT_DEV='mine_dev', FAKE_ANY_DEV='other_dev')
+        self.assertIn('route  here → a-pc (container mine_dev, ~/astro_dock)', run.stdout)
+        self.assertIn('a-pc  would build pkg_a in mine_dev', run.stdout)
+        run, _ = self.hot('alpha', '--dry-run', PATH=path, FAKE_PROJECT_DEV='', FAKE_ANY_DEV='other_dev')
+        self.assertIn('route  here → a-pc (container other_dev, ~/astro_dock)', run.stdout)
+        run, calls = self.hot('alpha', '--host', 'a-pc', PATH=path, FAKE_PROJECT_DEV='', FAKE_ANY_DEV='')
+        self.assertIn('route  here → a-pc (container fixture_dev, ~/astro_dock)', run.stdout)   # none runs: the name
+        self.assertIn('fixture_dev bash -s -- --packages-select pkg_a', calls)
 
     def test_dry_run_shows_route_commits_files_and_build_and_sends_nothing(self):
         (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')

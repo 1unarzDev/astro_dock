@@ -122,14 +122,25 @@ hot_heads() {
     done
 }
 
-# hot_route TARGET VIA WORKSPACE REPO...: reach a host and read its heads: straight to TARGET first, else
+# Runs on the host: "CONTAINER NAME", its dev container as astro on finds it: the registry's container: (FIXED
+# yes), else the running dev service of the hosts profile's compose project, else any running compose dev
+# service, else NAME (this checkout's default).
+hot_container() {
+    local dev='--filter label=com.docker.compose.service=dev' project
+    if [[ $2 == yes ]]; then printf 'echo "CONTAINER %s"\n' "$1"; return; fi
+    project=$(cfg compose_project)
+    [[ -z $project ]] || printf 'c=$(docker ps --format "{{.Names}}" --filter label=com.docker.compose.project=%s %s 2>/dev/null | head -n1)\n' "$project" "$dev"
+    printf '[ -n "$c" ] || c=$(docker ps --format "{{.Names}}" %s 2>/dev/null | head -n1)\necho "CONTAINER ${c:-%s}"\n' "$dev" "$1"
+}
+
+# hot_route TARGET VIA WORKSPACE FIND REPO...: reach a host and read its container (FIND: hot_container's
+# script) and heads: straight to TARGET first, else
 # through its registry jump (VIA), else through the vessel's operator station (HOT_STATION "NAME TARGET":
 # its address, then its name, which ssh config or DNS may resolve, e.g. on a mesh). Prints "ROUTE JUMP HOP"
 # (JUMP and HOP - when direct; "ROUTE none TRIED" when nothing answers), then the heads.
 hot_route() {
     local target=$1 via=$2 ws=$3 script out i sname starget tried=direct hops=(-) names=(-)
-    shift 3
-    script=$(hot_heads "$ws" "$@")
+    script=$4$'\n'$(hot_heads "$ws" "${@:5}")
     if [[ $via != - ]]; then hops+=("$via") names+=("$via")
     elif [[ -n ${HOT_STATION:-} ]]; then
         read -r sname starget <<<"$HOT_STATION"
@@ -335,7 +346,7 @@ hot_candidates() {
 
 hot_main() {
     local names=() only=() all=false dry=false choices=false known want=() line name container ws target via roles
-    local repo probes picked candidates n rc=0 results=() result pkgs jump hop sha state
+    local repo probes picked candidates n rc=0 results=() result pkgs jump hop sha state fixed
     while (($#)); do
         case $1 in
             --host) [[ -n ${2:-} ]] || hot_usage 2; only+=("$2"); shift 2 ;;
@@ -374,12 +385,15 @@ hot_main() {
     done <<<"$boat"
     ((${#HOT_HOSTS[@]})) || die "No robot computer runs ${want[*]}${only[*]:+ among ${only[*]}}"
     # The route to each, in parallel: direct, else through the registry jump or the operator station.
+    declare -A HOT_FIXED=()           # the registry's own container: per host ('-' when it names none)
+    while IFS=$'\t' read -r name _ _ _ container _; do HOT_FIXED[$name]=$container; done < <(registry_hosts)
     HOT_STATION=$(key_hosts | awk '$6 ~ /(^|,)operator(,|$)/ {print $1, $2; exit}')
     probes=$(mktemp -d) || exit 1
     for line in "${HOT_HOSTS[@]}"; do
         read -r name container ws target via roles <<<"$line"
         # shellcheck disable=SC2086  # one repo per word
-        hot_route "$target" "$via" "$ws" ${HOT_REPOS[$name]} >"$probes/$name" </dev/null &
+        [[ ${HOT_FIXED[$name]:--} == - ]] && fixed=no || fixed=yes
+        hot_route "$target" "$via" "$ws" "$(hot_container "$container" "$fixed")" ${HOT_REPOS[$name]} >"$probes/$name" </dev/null &
     done
     wait
     if ((${#names[@]} == 0)); then             # none named: the repos that changed
@@ -418,6 +432,8 @@ hot_main() {
         local mine=()
         for repo in "${names[@]}"; do [[ " ${HOT_REPOS[$name]} " == *" $repo "* ]] && mine+=("$repo"); done
         ((${#mine[@]})) || continue
+        container=$(sed -n 's/^CONTAINER //p' "$probes/$name" | head -n1)
+        container=${container:-${line#* }} container=${container%% *}
         if ! hot_route_line "$name" "$container" "$ws" "$probes/$name"; then
             results+=("$name  unreachable"); rc=1; continue
         fi
