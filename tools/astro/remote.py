@@ -82,9 +82,11 @@ def ssh_command(vessel, host, spec, cmd, tty):
         or config.compose_default_container()
     project = vessel.hosts_kind.get('compose_project')
     find = ''
-    if project and not spec['container']:   # the dev service of the host's compose project, else the name
-        find = (f'c=$(docker ps -q --filter label=com.docker.compose.project={shlex.quote(project)} '
-                f'--filter label=com.docker.compose.service=dev | head -n1); ')
+    if not spec['container']:   # the dev service of the host's compose project, else any compose dev service, else the name
+        dev = '--filter label=com.docker.compose.service=dev'
+        if project:
+            find = f'c=$(docker ps -q --filter label=com.docker.compose.project={shlex.quote(project)} {dev} | head -n1); '
+        find += f'[ -n "$c" ] || c=$(docker ps -q {dev} | head -n1); '
     container = f'"${{c:-{name}}}"' if find else shlex.quote(name)
     words += ['-t'] if tty else []
     tz = '-e TZ="$(tail -n1 /etc/localtime 2>/dev/null)" '   # one clock: the container keeps its host's

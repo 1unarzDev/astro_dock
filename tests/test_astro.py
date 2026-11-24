@@ -409,7 +409,7 @@ class Stacks(unittest.TestCase):
         argv, env = remote.words(vessel, host, spec, script)
         self.assertEqual((host, env, argv[:2]), ('boat-computer', None, ['ssh', 'u@10.0.0.5']))
         inner = shlex.split(argv[-1].split('docker exec -i ', 1)[1])
-        self.assertEqual(inner[-4:-1], ['dev', 'bash', '-c'])            # the whole script is one bash -c word
+        self.assertEqual(inner[-4:-1], ['${c:-dev}', 'bash', '-c'])            # the whole script is one bash -c word
         self.assertIn('tmux -L astro new-session -d -s "$n"', inner[-1])  # never the default tmux server
         self.assertIn('setsid -f bash', inner[-1])
         self.assertIn('${ASTRO_DATA:-', inner[-1])
