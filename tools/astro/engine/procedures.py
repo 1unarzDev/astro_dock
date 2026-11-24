@@ -440,6 +440,7 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
     axes, target = ctx.spec.axes, test.get('apply') or {}
     j, n, axis = ctx.spec.axes.index(test['axis']), len(ctx.spec.axes), test['axis']
     levels = _levels(room, amplitude)
+    unit = 'rad/s' if axis == ctx.spec.rotational else 'm/s'
     baseline_s, coast_s = float(test.get('baseline_s', 2)), float(test.get('coast_s', 4))
     settle_s, measure_s = float(test.get('settle_s', 5)), float(test.get('measure_s', 3))
     points, rises, count = {1: [], -1: []}, [], 0
@@ -457,7 +458,7 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
             rise = fit.t95([r[0] for r in rows], [sign * r[1 + j] for r in rows], t_on, t_cut)
             if rise is not None:
                 rises.append(rise)
-            ctx.out(f'  {ctx.progress} {axis}{"+" if sign > 0 else "-"} e={level:g} v={sign * delta[j]:.3f}'
+            ctx.out(f'  {ctx.progress} {axis}{"+" if sign > 0 else "-"} e={level:g} v={sign * delta[j]:.3f}{unit}'
                     + (f' t95={rise:.2f}s' if rise is not None else ''))
     runner.hold(neutral(n), coast_s)
     prefix = target.get('key', 'characterization')
@@ -466,7 +467,7 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
         name = f'{axis}{"+" if sign > 0 else "-"}'
         kept, dropped = monotone(points[sign])
         for v, level in dropped:
-            ctx.out(f'  warning: {name} e={level:g} moved {v:.3f} m/s, slower than a lower level: left out of the fit '
+            ctx.out(f'  warning: {name} e={level:g} moved {v:.3f} {unit}, slower than a lower level: left out of the fit '
                     f'(blocked, grounded or taken over? check the bag; run it again for a clean curve)')
         if dropped:
             unclean.extend(f'{name}@{level:g}' for _, level in dropped)
@@ -490,7 +491,7 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
         parts.append(f'{name} d1={c["d1"]:.3g} d2={c["d2"]:.3g}')
     summary = (' | '.join(parts) + (f' dropped {",".join(unclean)}' if unclean else '') +
                (f' t95={rise:.2f}s' if rise else '') +
-               f' vmax={velocity:.3g} (measured at e={max(levels):g}; curve at e=1: {extrapolated:.3g})')
+               f' vmax={velocity:.3g}{unit} (measured at e={max(levels):g}; curve at e=1: {extrapolated:.3g})')
     return dict(summary=summary, changes=changes, live=list(target.get('live') or []),
                 measured=dict(points={k: [list(p) for p in v] for k, v in
                                       (('+', points[1]), ('-', points[-1]))}, t95=rises,
