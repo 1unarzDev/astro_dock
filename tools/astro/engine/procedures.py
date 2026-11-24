@@ -563,8 +563,9 @@ def nav2(ctx, test, state, defaults):
     limits, why = fit.nav2_limits(values['velocity'], values['acceleration'], values['t95'], test['rules'],
                                   axes, ctx.spec.rotational)
     for k, a in enumerate(axes):
-        ctx.out(f'  {a}: velocity {limits["velocity"][k]:g} ({why[a]["velocity"]}), '
-                f'acceleration {limits["acceleration"][k]:g} ({why[a]["acceleration"]})')
+        unit = 'rad/s' if a == ctx.spec.rotational else 'm/s'
+        ctx.out(f'  {a}: velocity {limits["velocity"][k]:g} {unit} ({why[a]["velocity"]}), '
+                f'acceleration {limits["acceleration"][k]:g} {unit}/s ({why[a]["acceleration"]})')
     summary = f'velocity={fmt(limits["velocity"])} acceleration={fmt(limits["acceleration"])}'
     return dict(summary=summary, changes=[dict(key=target.get('key'), value=limits)],
                 measured=dict(why=why), live=list(target.get('live') or []))
