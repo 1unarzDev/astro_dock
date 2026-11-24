@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -18,6 +19,10 @@ from .engine import log, procedures, results
 VERBS = ('docs', 'on', 'up', 'down', 'ps', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
          'check', 'issue', 'sync', 'show', 'help')
 HEADER = ('up', 'down', 'ps', 'status', 'rec', 'test', 'apply', 'undo', 'bundle', 'show')   # one context line
+# Verbs that need ROS or the vessel's data dir and state: run outside ROS, they forward to the profile's
+# astro.home (a registry host or role) unless --here or ASTRO_HERE=1. Every other verb runs where it is typed.
+HOME_VERBS = ('status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle')
+MARK_TIMEOUT = 20      # seconds a forwarded mark's ssh may take in the background
 HELP = config.WS / '.devcontainer' / 'astro-help.py'
 
 
@@ -44,7 +49,34 @@ def verb_help(verb):
 
 def need_ros(verb):
     if not config.have_ros():
-        raise config.Error(f'astro {verb} needs ROS: run it in the dev container (astro on HOST astro {verb} ...)')
+        raise config.Error(f'astro {verb} needs ROS: run it in the dev container (astro on HOST astro {verb} ...), '
+                           'or set astro.home in the vessel profile so astro forwards it there')
+
+
+def forwards(verb, here, ros, home):
+    """True when VERB should run on the vessel's home host instead of here."""
+    return verb in HOME_VERBS and not here and not ros and bool(home)
+
+
+def forward(vessel, home, args, tty=None):
+    """Run `astro ARGS` on HOME; a mark goes in the background (its ssh killed after MARK_TIMEOUT s)."""
+    tty = remote._tty() if tty is None else tty
+    verb = args[0]
+    host, argv, env = remote.home_words(vessel, home, args, tty and verb != 'mark')
+    dim = sys.stderr.isatty() and 'NO_COLOR' not in os.environ
+    print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
+    if verb == 'mark':
+        if shutil.which('timeout'):
+            argv = ['timeout', str(MARK_TIMEOUT)] + argv
+        subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return 0
+    if verb == 'test' and args[1:2] not in (['list'], ['status']):
+        print(f'running on {host}; if the link drops the test continues \u2014 RC is the stop')
+    try:
+        return subprocess.call(argv, env=env)
+    except KeyboardInterrupt:
+        return 130
 
 
 class Session:
@@ -363,9 +395,16 @@ def main(argv=None):
     if any(a in ('-h', '--help') for a in argv[1:]) and (verb != 'on' or argv[1:2] in (['-h'], ['--help'])):
         sub = argv[1] if verb == 'rec' and argv[1] in ('start', 'stop', 'ls') else None
         return verb_help(f'rec {sub}' if sub else verb)
+    here = os.environ.get('ASTRO_HERE') == '1'
+    if verb in HOME_VERBS and '--here' in argv:
+        argv, here = [a for a in argv if a != '--here'], True
     args = parser().parse_args(argv)
     s = Session()
     try:
+        if verb in HOME_VERBS and not here and not config.have_ros():
+            home = s.vessel.astro.get('home')
+            if forwards(verb, here, False, home):
+                return forward(s.vessel, str(home), argv)
         if verb in HEADER and not (verb == 'test' and args.name == 'list'):
             print(f'astro {verb} · vessel {s.vessel.name} · state {s.vessel.state()} · data {s.root}')
         if verb == 'on':

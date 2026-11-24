@@ -4,6 +4,9 @@ A ROS 2 Jazzy container workspace and the `astro` tool for driving robots. It is
 one team or robot (fleet, network, hosts, devices, tests) lives in a profile set and the team's own repos,
 never here.
 
+From the operator laptop's host shell (no ROS there: these run on the profile's `astro.home`, e.g. the boat
+computer, and print `(on HOST)`; `--here` runs one here):
+
 ```bash
 astro up                           # start the robot's stacks, each on its host; waits until they publish
 astro rec start lean lake          # record a bag of the "lean" preset, labelled "lake"
@@ -63,8 +66,13 @@ team's files (tests, bag presets, state file, stacks, field repo).
 | `check NAME`, `issue TEXT`, `sync`, `show [DATE]` | The field log: checklists, issues, and the day's log and results pushed to the field repo |
 | `NAME [args]` | Any package command from a `help.yaml`, e.g. `astro mix 0.5 0 0` |
 
-A **stack** runs in the background on its host. A **test** runs in your terminal: if the link drops, the
-test stops and the drive's command timeout brings neutral.
+A **stack** runs in the background on its host. A **test** runs in your terminal; forwarded from a host
+shell over ssh (`docker exec`) it keeps running if the link drops, so RC is the stop.
+
+Outside ROS (no `rclpy`: a host shell), `status`, `rec`, `mark`, `log`, `test`, `apply`, `undo` and
+`bundle` run on the profile's `astro.home` (a registry role or host) as `astro on HOME astro ARGS`, so the day
+log, bags, results and state stay there; `mark` goes in the background. `--here` (or `ASTRO_HERE=1`) runs
+one here. Every other verb runs where it is typed.
 
 ### Where things are
 
@@ -88,6 +96,7 @@ astro:
   state: ~/.config/TEAM/state.yaml  # the one file apply writes
   check: ros2 run PKG config_check  # validates the state (path appended); exit 0 = ok
   events: /events                   # every log line is also published here
+  home: ROLE|HOST                   # where the ROS-side verbs run when astro is typed outside ROS
   data: null                        # data root; else $ASTRO_DATA
   sim: null                         # the sim backend command (sim profile)
   help: [PATH]                      # more help.yaml files, each its own group

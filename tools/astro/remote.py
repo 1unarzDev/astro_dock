@@ -150,6 +150,15 @@ def words(vessel, host, spec, cmd, tty=False):
     return local_words(vessel, spec['container'], cmd, tty)
 
 
+def home_words(vessel, home, args, tty):
+    """(host name, argv, env) running `astro ARGS` on HOME (a registry host or role) in its dev container.
+    ASTRO_HERE=1 keeps it there."""
+    host, spec = place(vessel, home)
+    cmd = 'ASTRO_HERE=1 astro' + ''.join(' ' + shlex.quote(a) for a in args)
+    argv, env = words(vessel, host, spec, cmd, tty)
+    return host, argv, env
+
+
 def on(name, cmd):
     tty = _tty()
     root = config.profiles_root()

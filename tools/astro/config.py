@@ -9,6 +9,8 @@ else this machine's registry host. Its `astro:` section points at team files and
       state: ~/.config/TEAM/state.yaml  # what `astro apply` writes
       check: ros2 run PKG config_check  # validates the state (the state path is appended); exit 0 = ok
       events: /events                   # every log line is published here
+      home: ROLE|HOST                   # optional: where ROS-side verbs (test, rec, mark, ...) run; outside ROS
+                                        # astro forwards them there (`astro on HOME astro ...`); --here stops it
       data: bags/sim                    # optional data root (relative: to the workspace); else $ASTRO_DATA
       state_env: VAR                    # optional: `on`/`sim` export the state path as VAR (and ASTRO_STATE)
       env: {VAR: value}                 # optional: more variables for `on`/`sim`

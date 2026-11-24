@@ -71,6 +71,7 @@ commands:
   - name: status
     run: astro status
     summary: Plain-text snapshot of the stack - nodes, the tests file's topics, recording, last log lines and the next test.
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: ros2 node list; ros2 topic echo --once TOPIC
     params:
       - {name: --watch, type: bool, description: Refresh every second until Ctrl-C.}
@@ -79,7 +80,7 @@ commands:
     run: astro rec start
     summary: Record a bag (mcap, 300 s splits) of a preset's topics into DATA/DATE/bags/HHMMSS-LABEL.
     ros: ros2 bag record -s mcap -d 300 -o DIR TOPIC... (or -a)
-    notes: Presets come from the vessel profile's astro.bags file; the events topic is always recorded.
+    notes: Presets come from the vessel profile's astro.bags file; the events topic is always recorded. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     params:
       - {name: preset, required: false, description: A preset of the bags file (default its first).}
       - {name: label, required: false, description: Appended to the bag directory name.}
@@ -89,16 +90,19 @@ commands:
   - name: rec stop
     run: astro rec stop
     summary: Stop the recording astro rec start began (SIGINT, so the bag closes cleanly).
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: kill -INT PID
 
   - name: rec ls
     run: astro rec ls
     summary: Today's bags with their start-end times and the log lines that fall inside each.
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: ros2 bag info DIR
 
   - name: mark
     run: astro mark
     summary: One log line, also published on the events topic (so it lands in the bag); returns at once.
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ... (in the background, ssh killed after 20 s); --here runs it here.
     ros: "ros2 topic pub --once /events std_msgs/msg/String \"{data: 'HH:MM:SS  mark  TEXT'}\""
     params:
       - {name: text, type: list, description: What happened.}
@@ -108,6 +112,7 @@ commands:
   - name: log
     run: astro log
     summary: Today's log (marks, recordings, tests, applies).
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: cat DATA/DATE/log.txt
     params:
       - {name: -n, type: int, description: Only the last N lines.}
@@ -116,7 +121,7 @@ commands:
     run: astro test
     summary: Run one test or a group of the vessel's tests file in this terminal (Ctrl-C sends neutral); `astro test list` names them.
     ros: ros2 topic pub /EFFORT geometry_msgs/msg/Twist ... (20 Hz) while ros2 topic echo /ODOM
-    notes: Each test prints its control layer, old -> new and the exact astro apply command. `astro test status` shows what is applied, measured, stale, aborted or pending, and the next step.
+    notes: Each test prints its control layer, old -> new and the exact astro apply command. `astro test status` shows what is applied, measured, stale, aborted or pending, and the next step. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; forwarded over ssh, a test keeps running if the link drops (RC is the stop); --here runs it here.
     params:
       - {name: name, description: 'list, status, a test or a group (astro test list).'}
       - {name: --space, choices: [large, small], description: The space preset (amplitudes and levels).}
@@ -129,6 +134,7 @@ commands:
   - name: apply
     run: astro apply
     summary: Write a test result into the state file (backup first), check it, roll back on refusal, then set the live parameters.
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: ros2 param set NODE PARAM VALUE
     params:
       - {name: result, description: A test name (its latest result) or a result file.}
@@ -136,13 +142,14 @@ commands:
   - name: undo
     run: astro undo
     summary: Restore the state file from its newest backup and re-set the live parameters of that apply.
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     ros: cp STATE.bak-STAMP STATE; ros2 param set NODE PARAM VALUE
 
   - name: bundle
     run: astro bundle
     summary: The state file, today's results and log (and bags) in one tgz, e.g. to replay in the sim.
     ros: tar czf bundle.tgz STATE DATA/DATE
-    notes: Then prints the vessel profile's astro.bundle_next, if set, with {bundle} replaced by the file.
+    notes: Then prints the vessel profile's astro.bundle_next, if set, with {bundle} replaced by the file. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
     params:
       - {name: --bags, type: bool, description: Include today's bags.}
 
