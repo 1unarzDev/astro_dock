@@ -198,9 +198,10 @@ class HomeFetch(unittest.TestCase):
                     mock.patch.object(field.remote, 'home_words', return_value=('boat-main', ['ssh', 'x'], None)), \
                     mock.patch.object(field.subprocess, 'run', return_value=mock.Mock(returncode=255, stdout=b'')), \
                     mock.patch.object(field.Field, 'fetch') as fetch, \
+                    mock.patch.object(field.Field, 'flush', return_value=(0, 0)), \
                     mock.patch('sys.stdout', new=io.StringIO()) as out:
                 self.assertEqual(field.sync(vessel, 'computer'), 0)
-            fetch.assert_not_called()
+            fetch.assert_called_once()                  # checklists, plans and handoffs still come down
             self.assertEqual(len(out.getvalue().strip().splitlines()), 1)
             self.assertIn('computer not reachable', out.getvalue())
 

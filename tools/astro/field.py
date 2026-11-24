@@ -474,8 +474,10 @@ def sync(vessel, home=None):
     if fetched:
         if not f.fetch_home(home, day, fetched.name):
             fetched.cleanup()
+            f.fetch()                      # checklists, plans and handoffs still come down
+            sent, _ = f.flush()
             print(f'astro sync: {home} not reachable; its day log, results and bag index not synced '
-                  '(synced sessions stay)')
+                  f'(field repo pulled{f", {sent} queued issue(s) filed" if sent else ""}; synced sessions stay)')
             return 0
         f.root = Path(fetched.name)
     try:
