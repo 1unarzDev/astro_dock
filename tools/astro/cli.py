@@ -51,22 +51,21 @@ def verb_help(verb):
     return 0
 
 
-def own_entry(verb):
-    """The astro verb's help entry (astro-help.yaml), or {}."""
-    packages, _ = help_module().discover()
-    return next((c for p in packages if p['package'] == 'astro' for c in p['commands'] if c['name'] == verb), {})
-
-
 def test_needs(s, name):
-    """The stacks `astro test NAME` needs: the verb's help entry's, and any its tests name in the tests file."""
-    needs = [str(n) for n in own_entry('test').get('needs') or []]
+    """The stacks `astro test NAME` needs: each test's own `needs` in the tests file when it names them, else
+    the vessel profile's astro.test_needs (none when unset)."""
+    default = [str(n) for n in s.vessel.astro.get('test_needs') or []]
     try:
         tests = s.spec.tests
         names = s.spec.expand(name)
-    except Exception:                     # the tests file is read on astro.home; the entry's needs still hold
+    except Exception:                     # the tests file is read on astro.home; the profile's needs still hold
         names, tests = [], {}
-    for test in names:
-        needs += [str(n) for n in (tests.get(test) or {}).get('needs') or [] if str(n) not in needs]
+    needs = []
+    for test in names or [None]:
+        own = (tests.get(test) or {}).get('needs') if test else None
+        for need in (default if own is None else own):
+            if str(need) not in needs:
+                needs.append(str(need))
     return needs
 
 
@@ -304,6 +303,11 @@ def cmd_test(s, args):
                       + '; '.join(f'astro apply {w}' for w in blocking)
                       + f', then run astro test {args.name} again (it resumes at {name})')
                 return 0
+        # a test with `rec: PRESET` records a bag while it runs, unless one is recording already
+        preset = spec.tests[name].get('rec')
+        recording = bool(preset) and not rec.running(s.root)
+        if recording:
+            rec.start(s.vessel, [str(preset), name])
         try:
             path = procedures.run(ctx, name, args.space, args.amp)
             done = config.load_yaml(path) or {}
@@ -316,6 +320,9 @@ def cmd_test(s, args):
         except KeyboardInterrupt:
             print(f'\n{name}: stopped, neutral sent', file=sys.stderr)
             return 130
+        finally:
+            if recording:
+                rec.stop(s.vessel)
     rows = s.rows()
     print(f'next: {results.next_step(rows)}')
     return 0

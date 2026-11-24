@@ -769,7 +769,7 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
     tty = _status(ctx, 'listening: drive (RC or keyboard); Ctrl-C to stop and fit what is there')
     if not tty:
         ctx.out('listening: drive (RC or keyboard); Ctrl-C to stop and fit what is there')
-    last_status, ended = start, 'complete'
+    last_status, ended, finished = start, 'complete', set()
     try:
         while True:
             runner.hold(None, 0.5)
@@ -787,9 +787,14 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
                     during = runner.window(m0, hold['t1'])
                     v = during and sum(r[1 + hold['j']] for r in during) / len(during)
                     unit = 'rad/s' if axes[hold['j']] == ctx.spec.rotational else 'm/s'
-                    ctx.out(f'  + {axes[hold["j"]]}{"+" if hold["sign"] > 0 else "-"} e={hold["level"]:g} '
-                            f'v~{v or 0:.2f}{unit}' + (' from rest' if hold['baseline'] else '')
-                            + (f' ({hold["lane"]})' if hold['lane'] else ''))
+                    pair = f'{axes[hold["j"]]}{"+" if hold["sign"] > 0 else "-"}'
+                    # a mark line (log.txt and the events topic, so in the bag too) for each hold that counts
+                    ctx.log('mark', f'watch {pair} e={hold["level"]:g} v~{v or 0:.2f}{unit}'
+                            + (' from rest' if hold['baseline'] else '') + (f' ({hold["lane"]})' if hold['lane'] else '')
+                            + f' t={hold["t0"]:.1f}..{hold["t1"]:.1f}')
+                    if cover.pair(hold['j'], hold['sign']) == int(o['levels']) and pair not in finished:
+                        finished.add(pair)
+                        ctx.log('mark', f'watch {pair} done ({int(o["levels"])} levels)')
             if cover.fraction() >= 1.0 - 1e-9:
                 break
             if now - start > o['max_s']:
