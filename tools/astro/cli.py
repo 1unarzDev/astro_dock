@@ -80,6 +80,7 @@ def forward(vessel, home, args, tty=None, env=None):
     (ssh killed after MARK_TIMEOUT s; when it fails the mark is kept pending, see remote.deliver_mark)."""
     tty = remote._tty() if tty is None else tty
     verb = args[0]
+    sys.stdout.flush()                    # what this side printed (the stacks) comes first in a pipe too
     dim = sys.stderr.isatty() and 'NO_COLOR' not in os.environ
     if verb == 'mark':
         host, _ = remote.place(vessel, home)
