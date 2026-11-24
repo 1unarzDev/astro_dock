@@ -1,0 +1,367 @@
+"""The test types a tests file composes: still, couple, speed, steps, nav2. Each runs alone, writes one result
+file (its changes, the upstream keys it ran on, a one-line summary), logs `test start/done/abort` and prints
+its layer, old -> new and the exact `astro apply` command. Nothing here names a robot: topics, axes, keys,
+spaces and parameters all come from the tests file."""
+import statistics
+
+import yaml
+
+from . import apply as applying
+from . import fit, log, results
+
+TYPES = ('still', 'couple', 'speed', 'steps', 'nav2')
+DEFAULT_LAYER = {'still': 'baseline', 'couple': 'decoupling', 'speed': 'speed curve',
+                 'steps': 'velocity loop', 'nav2': 'nav2 limits'}
+
+
+class Abort(Exception):
+    pass
+
+
+class Spec:
+    """A tests file: topics, axes, spaces, tests, groups, and optionally `defaults:` (a file whose keys
+    stand in for keys the state file does not set), `rotational:` (the rotational axis) and `gate:` (an
+    arbiter whose latched JSON state may hold the command lane: {state, held, clear}; a test refuses to
+    start while its `held` field is set and says how to clear it)."""
+
+    def __init__(self, path, find=None):
+        self.path = path
+        data = yaml.safe_load(open(path)) or {}
+        self.topics = data.get('topics') or {}
+        self.axes = list(data.get('axes') or [])
+        self.rotational = data.get('rotational') or (self.axes[-1] if self.axes else None)
+        self.spaces = data.get('spaces') or {}
+        self.tests = data.get('tests') or {}
+        self.groups = data.get('groups') or {}
+        self.defaults_path = data.get('defaults')
+        self.gate = data.get('gate') or {}
+        self._find = find
+        for name, test in self.tests.items():
+            if test.get('type') not in TYPES:
+                raise ValueError(f'{path}: tests.{name}.type must be one of {", ".join(TYPES)}')
+            if test.get('axis') is not None and test['axis'] not in self.axes:
+                raise ValueError(f'{path}: tests.{name}.axis {test["axis"]!r} is not one of axes {self.axes}')
+
+    def defaults(self):
+        if not self.defaults_path:
+            return {}
+        path = self._find(self.defaults_path) if self._find else self.defaults_path
+        return yaml.safe_load(open(path)) or {}
+
+    def expand(self, name, seen=()):
+        if name in self.tests:
+            return [name]
+        if name in self.groups:
+            if name in seen:
+                raise ValueError(f'group cycle at {name}')
+            return [t for item in self.groups[name] for t in self.expand(item, (*seen, name))]
+        raise KeyError(name)
+
+    def order(self):
+        """Every test in ladder order: the `all` group, else the file's order."""
+        out = []
+        for test in (self.expand('all') if 'all' in self.groups else []) + list(self.tests):
+            if test not in out:
+                out.append(test)
+        return out
+
+    def layer(self, name):
+        test = self.tests[name]
+        return test.get('layer') or DEFAULT_LAYER[test['type']]
+
+    def space(self, name):
+        if name not in self.spaces:
+            raise ValueError(f'no space {name!r} (spaces: {", ".join(self.spaces)})')
+        return self.spaces[name]
+
+
+def fmt(value):
+    if isinstance(value, float):
+        return f'{value + 0.0:.4g}'
+    if isinstance(value, list):
+        return '[' + ', '.join(fmt(v) for v in value) + ']'
+    if isinstance(value, dict):
+        return '{' + ', '.join(f'{k}: {fmt(v)}' for k, v in value.items()) + '}'
+    return str(value)
+
+
+class Context:
+    """What a run needs: the spec, the state file, the data root, the events topic, a runner factory."""
+
+    def __init__(self, spec, state_path, data_root, events=None, sim_time=False, make_runner=None, out=print):
+        self.spec, self.state_path, self.data_root = spec, state_path, data_root
+        self.events, self.sim_time, self.out = events, sim_time, out
+        self.make_runner = make_runner
+        self.progress = 'start'
+        self.software = {}            # repo -> commit, recorded in each result
+        self.holds = []               # raw samples of each hold, recorded in each result
+
+    def state(self):
+        data = applying.yaml.safe_load(open(self.state_path)) if self.state_path.exists() else {}
+        return data or {}
+
+    def log(self, kind, message):
+        return log.write(self.data_root, kind, message, self.events)
+
+
+# ---- one test --------------------------------------------------------------------------------------
+
+def run(ctx, name, space='large', amp=None):
+    spec, test = ctx.spec, ctx.spec.tests[name]
+    kind = test['type']
+    defaults = spec.defaults()
+    state = ctx.state()
+    room = spec.space(space) if kind in ('couple', 'speed', 'steps') else {}
+    amplitude = float(amp if amp is not None else room.get('amp', 0.5)) if room else None
+    upstream = results.snapshot(state, defaults, test.get('upstream'))
+    base = dict(test=name, type=kind, layer=spec.layer(name), space=space if room else None,
+                amp=amplitude, state=results.state_hash(ctx.state_path), upstream=upstream,
+                software=ctx.software)
+    ctx.holds = []
+    ctx.out(f'{name}: {spec.layer(name)} ({kind})')
+    if kind == 'nav2':
+        outcome = nav2(ctx, test, state, defaults)
+        return finish(ctx, name, test, base, outcome, state, defaults)
+    topics = spec.topics
+    command_topic = topics.get('velocity' if kind == 'steps' else 'effort')
+    if not command_topic or not topics.get('odom'):
+        raise Abort(f'{spec.path}: topics needs {"velocity" if kind == "steps" else "effort"} and odom')
+    runner = ctx.make_runner(command_topic, topics['odom'], topics.get('battery'), ctx.sim_time)
+    try:
+        if not runner.wait_ready():
+            raise Abort(f'no odometry on {topics["odom"]} (or no /clock with sim time)')
+        batt = f' batt={runner.battery:.1f}V' if runner.battery else ''
+        amp_text = f' space={space} amp={amplitude:g}' if room else ''
+        ctx.log('test', f'start {name} {amp_text} state={base["state"]}{batt}')
+        gate = spec.gate
+        if gate.get('state'):
+            seen, held = runner.gate_state(gate)
+            if held:
+                raise Abort(f'{gate["state"]} holds the lane ({fmt(held)}); {gate.get("clear", "clear the hold")}, '
+                            'then run again')
+            if not seen:
+                ctx.out(f'  warning: no state on {gate["state"]} (is the stack up?)')
+        procedure = {'still': still, 'couple': couple, 'speed': speed, 'steps': steps}[kind]
+        outcome = procedure(ctx, runner, test, state, defaults, room, amplitude)
+    except KeyboardInterrupt:
+        runner.close()
+        ctx.log('test', f'abort {name} at {ctx.progress} (ctrl-c)')
+        results.save(log.day_dir(ctx.data_root), dict(base, status='aborted', reason='ctrl-c', at=ctx.progress,
+                                                      holds=ctx.holds))
+        raise
+    except (Abort, ValueError) as error:
+        runner.close()
+        ctx.log('test', f'abort {name} at {ctx.progress} ({error})')
+        results.save(log.day_dir(ctx.data_root), dict(base, status='aborted', reason=str(error), at=ctx.progress,
+                                                      holds=ctx.holds))
+        raise Abort(str(error)) from None
+    runner.close()
+    return finish(ctx, name, test, base, outcome, state, defaults)
+
+
+def finish(ctx, name, test, base, outcome, state, defaults):
+    result = dict(base, status='done', **outcome)
+    if ctx.holds:
+        result['holds'] = ctx.holds
+    path = results.save(log.day_dir(ctx.data_root), result)
+    tail = f' -> astro apply {name}' if result.get('changes') else ''
+    ctx.log('test', f'done  {name}  {result["summary"]}{tail}')
+    if result.get('changes'):
+        _, diffs = applying.changed(state, defaults, result['changes'], ctx.spec.axes)
+        for key, old, new in diffs:
+            ctx.out(f'  {key}  {fmt(old)} -> {fmt(new)}')
+        ctx.out(f'  apply: astro apply {name}    (result {path})')
+    else:
+        ctx.out(f'  result {path} (nothing to apply)')
+    return path
+
+
+def neutral(n):
+    return [0.0] * n
+
+
+def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s):
+    """Neutral baseline, then the command for settle + measure; (baseline rows, measure rows, all, t_on, t_cut)."""
+    b0, b1 = runner.hold(neutral(n), baseline_s)
+    t_on, _ = runner.hold(command, settle_s)
+    m0, t_cut = runner.hold(command, measure_s)
+    record(ctx, command, t_on, t_cut, runner.window(b0, t_cut))
+    return runner.window(b0, b1), runner.window(m0, t_cut), runner.window(b0, t_cut), t_on, t_cut
+
+
+def record(ctx, command, start, end, rows):
+    """The raw samples of one hold (from its baseline), for the result file."""
+    ctx.holds.append(dict(command=[round(float(v), 4) for v in command], start=round(start, 3), end=round(end, 3),
+                          samples={name: [round(float(r[k]), 4) for r in rows]
+                                   for k, name in enumerate(('t', 'vx', 'vy', 'wz'))}))
+
+
+def still(ctx, runner, test, state, defaults, room, amplitude):
+    seconds = float(test.get('seconds', 20))
+    ctx.progress = 'neutral'
+    t0, t1 = runner.hold(neutral(len(ctx.spec.axes)), seconds)
+    rows = runner.window(t0, t1)
+    if len(rows) < 5:
+        raise Abort(f'{len(rows)} odometry samples in {seconds:g} s')
+    sigma = [round(statistics.pstdev(r[k] for r in rows), 4) for k in (1, 2, 3)]
+    drift = fit.drift(rows)
+    summary = f'noise sigma={fmt(sigma)}'
+    if drift:
+        summary = f'drift={drift["speed"]:.2f}m/s@{drift["heading_deg"]:.0f}deg ' + summary
+    return dict(summary=summary, measured=dict(drift=drift, sigma=dict(zip(ctx.spec.axes, sigma)),
+                                               samples=len(rows)))
+
+
+def couple(ctx, runner, test, state, defaults, room, amplitude):
+    axes, target = ctx.spec.axes, test.get('apply') or {}
+    j, n = axes.index(test['axis']), len(axes)
+    key, signed = target.get('key'), target.get('signed')
+    plus = applying.current(state, defaults, key)
+    minus = applying.current(state, defaults, signed, key) if signed else plus
+    if not isinstance(plus, list) or len(plus) != n * n:
+        raise Abort(f'{key}: no {n}x{n} matrix in the state or the defaults')
+    tolerance = test.get('tolerance', [0.05, 0.05])
+    limit = max(0.0, float(test.get('headroom', 0.98)) / amplitude - 1.0)
+    holds = int(test.get('holds', 4))
+    searches = {s: fit.Search(tolerance, float(test.get('probe', 0.15)), limit, holds) for s in (1, -1)}
+    min_response = float(test.get('min_response', 0.03))
+    measured, count, total = [], 0, 2 * holds
+    while not all(search.done for search in searches.values()):
+        for sign in (1, -1):
+            search = searches[sign]
+            if search.done:
+                continue
+            count += 1
+            ctx.progress = f'hold {count}/{total}'
+            command = fit.command_for(j, sign, amplitude, search.column, n)
+            before, during, _, _, _ = _hold(ctx, runner, n, command, float(test.get('baseline_s', 2)),
+                                            float(test.get('settle_s', 4)), float(test.get('measure_s', 3)))
+            delta = fit.response(before, during)
+            main, ratios = fit.cross_response(delta, j, sign)
+            if sign * delta[j] < min_response:
+                raise Abort(f'{axes[j]}{"+" if sign > 0 else "-"} moved {sign * delta[j]:.3f} '
+                            f'(under min_response {min_response:g}): too small to measure coupling')
+            measured.append(dict(sign=sign, column=[round(c + 0.0, 4) for c in search.column],
+                                 response=[round(v, 4) for v in delta], cross=[round(r, 4) for r in ratios]))
+            ctx.out(f'  {ctx.progress} {axes[j]}{"+" if sign > 0 else "-"} c={fmt([round(c, 4) for c in search.column])} '
+                    f'main={main:.3f} cross={fmt(list(ratios))}')
+            search.add(ratios)
+    runner.neutral()
+    changes, parts = [], []
+    for sign in (1, -1):
+        best = searches[sign].result()
+        command = fit.command_for(j, sign, amplitude, best['column'], n)
+        column = [round(v + 0.0, 4) + 0.0 for v in fit.effective_column(plus, minus, command, j, sign, amplitude)]
+        name = f'{axes[j]}{"+" if sign > 0 else "-"}'
+        parts.append(f'{name} cross={fmt(list(best["response"]))} '
+                     f'{"converged" if best["converged"] else "best of " + str(best["holds"])}')
+        if sign > 0:
+            changes.append(dict(key=key, column=j, value=column))
+        elif signed:
+            changes.append(dict(key=signed, column=j, value=column, fallback=key))
+    return dict(summary=' | '.join(parts), measured=dict(holds=measured), changes=changes,
+                live=list(target.get('live') or []))
+
+
+def _levels(room, amplitude):
+    levels = [float(v) for v in room.get('levels') or [amplitude]]
+    if amplitude is not None and room.get('amp') and amplitude != float(room['amp']):
+        scale = amplitude / max(levels)
+        levels = [round(v * scale, 3) for v in levels]
+    return levels
+
+
+def speed(ctx, runner, test, state, defaults, room, amplitude):
+    axes, target = ctx.spec.axes, test.get('apply') or {}
+    j, n, axis = ctx.spec.axes.index(test['axis']), len(ctx.spec.axes), test['axis']
+    levels = _levels(room, amplitude)
+    baseline_s, coast_s = float(test.get('baseline_s', 2)), float(test.get('coast_s', 4))
+    settle_s, measure_s = float(test.get('settle_s', 5)), float(test.get('measure_s', 3))
+    points, rises, count = {1: [], -1: []}, [], 0
+    for level in levels:
+        for sign in (1, -1):
+            count += 1
+            ctx.progress = f'hold {count}/{2 * len(levels)}'
+            runner.hold(neutral(n), max(0.0, coast_s - baseline_s))
+            command = neutral(n)
+            command[j] = sign * level
+            before, during, rows, t_on, t_cut = _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s)
+            delta = fit.response(before, during)
+            points[sign].append((sign * delta[j], level))
+            rise = fit.t95([r[0] for r in rows], [sign * r[1 + j] for r in rows], t_on, t_cut)
+            if rise is not None:
+                rises.append(rise)
+            ctx.out(f'  {ctx.progress} {axis}{"+" if sign > 0 else "-"} e={level:g} v={sign * delta[j]:.3f}'
+                    + (f' t95={rise:.2f}s' if rise is not None else ''))
+    runner.hold(neutral(n), coast_s)
+    prefix = target.get('key', 'characterization')
+    curves, parts = {}, []
+    for sign in (1, -1):
+        name = f'{axis}{"+" if sign > 0 else "-"}'
+        curve = fit.speed_curve(points[sign])
+        if not curve:
+            raise Abort(f'{name}: no level moved the boat forward along the axis ({points[sign]})')
+        curves[name] = curve
+    rise = round(statistics.median(rises), 3) if rises else None
+    velocity = round(min(fit.speed_at(c['d1'], c['d2'], 1.0) for c in curves.values()), 4)
+    changes = [dict(key=f'{prefix}.speed_curves.{name}', value=dict(d1=round(c['d1'], 5), d2=round(c['d2'], 5)))
+               for name, c in curves.items()]
+    changes.append(dict(key=f'{prefix}.motion_limits.velocity.{axis}', value=velocity))
+    if rise:
+        changes.append(dict(key=f'{prefix}.t95.{axis}', value=rise))
+        changes.append(dict(key=f'{prefix}.motion_limits.acceleration.{axis}', value=round(velocity * 3 / rise, 4)))
+    if target.get('version') is not None:
+        changes.append(dict(key=f'{prefix}.version', value=target['version']))
+    for name, c in curves.items():
+        parts.append(f'{name} d1={c["d1"]:.3g} d2={c["d2"]:.3g}')
+    summary = ' | '.join(parts) + (f' t95={rise:.2f}s' if rise else '') + f' vmax={velocity:.3g}'
+    return dict(summary=summary, changes=changes, live=list(target.get('live') or []),
+                measured=dict(points={k: [list(p) for p in v] for k, v in
+                                      (('+', points[1]), ('-', points[-1]))}, t95=rises))
+
+
+def steps(ctx, runner, test, state, defaults, room, amplitude):
+    axes = ctx.spec.axes
+    j, n, axis = axes.index(test['axis']), len(axes), test['axis']
+    limit_key = test.get('limits')
+    limit = applying.get(state, f'{limit_key}.{axis}') if limit_key else None
+    if limit_key and not limit:
+        raise Abort(f'no {limit_key}.{axis} in the state: run and apply the speed test first')
+    target_v = float(test.get('fraction', 0.5)) * float(limit) * (amplitude / float(room.get('amp', amplitude))) \
+        if limit else float(test.get('target', 0.3))
+    baseline_s, step_s, coast_s = (float(test.get(k, d)) for k, d in
+                                   (('baseline_s', 2), ('step_s', 6), ('coast_s', 3)))
+    metrics, parts = {}, []
+    for count, sign in enumerate((1, -1), 1):
+        ctx.progress = f'step {count}/2'
+        runner.hold(neutral(n), baseline_s)
+        command = neutral(n)
+        command[j] = sign * target_v
+        t_on, t_off = runner.hold(command, step_s)
+        runner.hold(neutral(n), coast_s)
+        record(ctx, command, t_on, t_off, runner.window(t_on - baseline_s, t_off))
+        samples = [(r[0], r[1 + j]) for r in runner.window(t_on, t_off)]
+        m = fit.step_metrics(samples, sign * target_v, t_on, t_off)
+        name = f'{axis}{"+" if sign > 0 else "-"}'
+        metrics[name] = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
+        parts.append(f'{name} rise={fmt(m.get("rise_time"))} over={fmt(m.get("overshoot"))} '
+                     f'settle={fmt(m.get("settling_time"))} sse={fmt(m.get("steady_state_error"))}')
+    gains = test.get('gains')
+    hint = f' (tune live: ros2 param set {gains})' if gains else ''
+    return dict(summary=' | '.join(parts) + hint, measured=metrics)
+
+
+def nav2(ctx, test, state, defaults):
+    axes, source, target = ctx.spec.axes, test.get('from') or {}, test.get('apply') or {}
+    values = {}
+    for part in ('velocity', 'acceleration', 't95'):
+        key = source.get(part)
+        values[part] = applying.get(state, key) if key else None
+        missing = [a for a in axes if not isinstance(values[part], dict) or values[part].get(a) is None]
+        if missing:
+            raise Abort(f'no {key}.{"/".join(missing)} in the state: run and apply the speed tests first')
+    limits = fit.nav2_limits(values['velocity'], values['acceleration'], values['t95'], test['rules'],
+                             axes, ctx.spec.rotational)
+    summary = f'velocity={fmt(limits["velocity"])} acceleration={fmt(limits["acceleration"])}'
+    return dict(summary=summary, changes=[dict(key=target.get('key'), value=limits)],
+                live=list(target.get('live') or []))

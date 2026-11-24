@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""The astro launcher: runs tools/astro (see `astro help`)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), '..'))
+from astro.cli import main  # noqa: E402
+
+sys.exit(main())
