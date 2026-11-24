@@ -9,6 +9,7 @@
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import yaml
@@ -38,9 +39,11 @@ def save(day_dir, result, now=None):
 
 
 def load_all(data_root):
-    """Every result under the data root, oldest first (by date dir, then file name)."""
+    """Every result under the data root, oldest first (by date dir, then when written: the file names hold
+    the clock time of the host that wrote them, which can change zone within a day)."""
     out = []
-    for path in sorted(Path(data_root).glob('*/results/*.yaml'), key=lambda p: (p.parent.parent.name, p.name)):
+    for path in sorted(Path(data_root).glob('*/results/*.yaml'),
+                       key=lambda p: (p.parent.parent.name, p.stat().st_mtime, p.name)):
         try:
             data = yaml.safe_load(path.read_text())
         except (OSError, yaml.YAMLError):
@@ -60,7 +63,14 @@ def mark_applied(path, backup, when=None):
     data = yaml.safe_load(path.read_text())
     data['applied'] = f'{when or datetime.datetime.now():%Y-%m-%d %H:%M:%S}'
     data['backup'] = str(backup)
+    _rewrite(path, data)
+
+
+def _rewrite(path, data):
+    """Rewrite a result keeping its mtime (the order load_all reads results in)."""
+    stat = path.stat()
     path.write_text(yaml.safe_dump(data, sort_keys=False, width=110))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 def unmark_applied(data_root, backup):
@@ -70,7 +80,7 @@ def unmark_applied(data_root, backup):
             path = Path(result.pop('path'))
             result.pop('applied', None)
             result.pop('backup', None)
-            path.write_text(yaml.safe_dump(result, sort_keys=False, width=110))
+            _rewrite(path, result)
 
 
 def classify(result, state, defaults):
