@@ -18,6 +18,10 @@ help.yaml schema (unknown keys are ignored):
         host: ROLE|HOST         # optional: where it runs; `astro NAME` from elsewhere forwards it there
                                 # (astro on HOST RUN ..., printing "(on HOST)"); --here runs it here
         ros: optional; the plain ROS 2 an astro verb composes (shown beside it)
+        needs: [nav, drive+controller]   # optional: stacks (profile astro.stacks) astro starts first when
+                                # down, their needs too; NAME+OPTION starts it with that `with` option
+        conflicts: [drive]      # optional: stacks astro stops first when up; {drive: why} says why
+                                # (--here or ASTRO_NO_AUTOSTART=1 skips both)
         notes: optional text (safety, which host)
         params:
           - name: --window      # "-x": option ("--x value", a bare switch when type bool;
@@ -29,7 +33,8 @@ help.yaml schema (unknown keys are ignored):
             choices_from: 'CMD' # shell command, run here: one choice per line, optionally VALUE<TAB>about;
                                 # a missing required one is picked from that list on a terminal
                                 # (with default: auto, its first line is what auto finds)
-            description: one line
+            description: one line   # core entries: at least 8 words and, unless a bool or choice, e.g. VALUE
+            free: why it is typed   # a str with no choices: why it cannot be picked (issue text, a label)
             required: false     # positional params default to required
             form: option        # positional | option | switch | launch, overrides the inference
         examples: [full command lines]
@@ -111,6 +116,8 @@ def parse(path):
                              level=level, host=str(command.get('host') or ''),
                              summary=str(command.get('summary', '')), notes=str(command.get('notes') or ''),
                              ros=str(command.get('ros') or ''),
+                             needs=[str(n) for n in command.get('needs') or []],
+                             conflicts=[c if isinstance(c, dict) else str(c) for c in command.get('conflicts') or []],
                              params=params, examples=[str(e) for e in command.get('examples') or []]))
     return {'package': data['package'], 'summary': str(data.get('summary', '')),
             'commands': commands, 'path': str(path)}
@@ -373,6 +380,8 @@ def details(command, paint=lambda code, s: s):
         out.append(paint('2', f'    ros: {command["ros"]}'))
     if command['host']:
         out.append(paint('2', f'    runs on {command["host"]} (forwarded from elsewhere; --here runs it here)'))
+    if stacks_note(command):
+        out.append(paint('2', f'    {stacks_note(command)}'))
     if command['notes']:
         out.extend(paint('33', '    ' + line) for line in wrap(command['notes'], 88))
     for param in command['params']:
@@ -383,6 +392,17 @@ def details(command, paint=lambda code, s: s):
                    f'{param.get("description", "")}{choices}{paint("2", default)}')
     out.extend(paint('2', f'    e.g. {example}') for example in command['examples'])
     return out
+
+
+def stacks_note(command):
+    """One line: the stacks astro starts or stops before the command (needs/conflicts), or ''."""
+    parts = []
+    if command.get('needs'):
+        parts.append('starts first if down: ' + ', '.join(command['needs']))
+    if command.get('conflicts'):
+        parts.append('stops first if up: ' + ', '.join(next(iter(c)) if isinstance(c, dict) else c
+                                                       for c in command['conflicts']))
+    return '; '.join(parts) + (' (--here skips this)' if parts else '')
 
 
 def text(packages, word=None, color=False, exact=None, levels=('core',)):
@@ -612,6 +632,8 @@ class Browser:
         header = [([(command['name'], curses.A_BOLD)], None)] + \
             [([(s, 0)], None) for s in wrap(command['summary'], width)] + [([('', 0)], None)]
         notes = [([(s, self.style('note'))], None) for s in wrap(command['notes'], width)]
+        if stacks_note(command):
+            notes = [([(s, self.style('dim'))], None) for s in wrap(stacks_note(command), width)] + notes
         if command['ros']:
             notes = [([(s, self.style('dim'))], None) for s in wrap('ros: ' + command['ros'], width)] + notes
         if notes:

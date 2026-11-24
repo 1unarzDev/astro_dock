@@ -19,7 +19,7 @@ VERBS = ('docs', 'on', 'up', 'down', 'logs', 'status', 'rec', 'mark', 'log', 'te
          'check', 'issue', 'sync', 'show', 'clock', 'help')
 HEADER = ('up', 'down', 'status', 'rec', 'test', 'apply', 'undo', 'bundle', 'show')   # one context line
 # Hidden: `_choices KIND` prints a picker's choices (help.yaml choices_from); `_rsh` is rec fetch's rsync shell.
-CHOICES = ('test', 'apply', 'on', 'stacks', 'check', 'bags')
+CHOICES = ('test', 'apply', 'on', 'stacks', 'options', 'check', 'bags', 'presets')
 # Verbs that need ROS or the vessel's data dir and state: run outside ROS, they forward to the profile's
 # astro.home (a registry host or role) unless --here or ASTRO_HERE=1. Every other verb runs where it is typed.
 HOME_VERBS = ('status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle')
@@ -49,6 +49,25 @@ def verb_help(verb):
     color = sys.stdout.isatty() and 'NO_COLOR' not in os.environ
     sys.stdout.write(module.text(packages, color=color, exact=('astro', verb)))
     return 0
+
+
+def own_entry(verb):
+    """The astro verb's help entry (astro-help.yaml), or {}."""
+    packages, _ = help_module().discover()
+    return next((c for p in packages if p['package'] == 'astro' for c in p['commands'] if c['name'] == verb), {})
+
+
+def test_needs(s, name):
+    """The stacks `astro test NAME` needs: the verb's help entry's, and any its tests name in the tests file."""
+    needs = [str(n) for n in own_entry('test').get('needs') or []]
+    try:
+        tests = s.spec.tests
+        names = s.spec.expand(name)
+    except Exception:                     # the tests file is read on astro.home; the entry's needs still hold
+        names, tests = [], {}
+    for test in names:
+        needs += [str(n) for n in (tests.get(test) or {}).get('needs') or [] if str(n) not in needs]
+    return needs
 
 
 def need_ros(verb):
@@ -125,6 +144,7 @@ class Session:
 
     def __init__(self):
         self._vessel = self._spec = None
+        self.no_autostart = os.environ.get('ASTRO_NO_AUTOSTART') == '1'
 
     @property
     def vessel(self):
@@ -167,7 +187,7 @@ class Session:
 
 def choices(s, kind):
     """[(value, about)] for a picker: tests in ladder order with their status, unapplied results, ssh hosts
-    and local vessels, stacks, checklists, or the home host's bags."""
+    and local vessels, stacks, their with options, checklists, the home host's bags, or the bag presets."""
     if kind == 'test':
         rows = s.rows()
         out = [(name, f'{state:<8} {s.spec.layer(name)}') for name, state, _ in rows]
@@ -187,6 +207,11 @@ def choices(s, kind):
     if kind == 'stacks':
         return [(st.name, f'on {st.host}' + ('' if st.default else '  (not default)'))
                 for st in stacks.parse(s.vessel.astro).values()]
+    if kind == 'options':
+        return [(o, f'{st.name}: {args}') for st in stacks.parse(s.vessel.astro).values() for o, args in st.options.items()]
+    if kind == 'presets':
+        return [(name, 'all topics but the excluded ones' if topics == 'all' else f'{len(topics)} topics')
+                for name, topics in rec.presets(s.vessel).items()]
     if kind == 'check':
         f = field.Field(s.vessel)
         return [(p.stem, '') for p in sorted((f.dir / 'checklists').glob('*.md'))]
@@ -254,6 +279,10 @@ def cmd_test(s, args):
         names = spec.expand(args.name)
     except KeyError:
         raise config.Error(f'no test or group {args.name!r} (astro test list)') from None
+    if not s.no_autostart:
+        code = stacks.ensure(s.vessel, s.root, f'test {args.name}', test_needs(s, args.name))
+        if code:
+            return code
     from .engine.runner import Runner
     ctx = procedures.Context(spec, s.vessel.state(), s.root, s.events, s.vessel.sim_time(), Runner)
     ctx.software = s.software()
@@ -494,10 +523,17 @@ def dispatch(argv):
         print(f'astro: {command["name"]} is an astro verb', file=sys.stderr)
         return 2
     here = os.environ.get('ASTRO_HERE') == '1'
-    if command['host'] and '--here' in rest:
+    stacked = command['needs'] or command['conflicts']
+    off = '--here' in rest or os.environ.get('ASTRO_NO_AUTOSTART') == '1'   # --here: no needs/conflicts either
+    if (command['host'] or stacked) and '--here' in rest:
         rest, here = [a for a in rest if a != '--here'], True
     try:
         rest = fill(module, command, rest)
+        if stacked and not off:           # its stacks first: conflicts stopped, needs started
+            vessel = config.Vessel()
+            code = stacks.ensure(vessel, vessel.data_root(), command['name'], command['needs'], command['conflicts'])
+            if code:
+                return code
         target = None
         if command['host'] and not here:
             vessel = config.Vessel()
@@ -597,10 +633,12 @@ def main(argv=None):
     if any(a in ('-h', '--help') for a in argv[1:]) and (verb != 'on' or argv[1:2] in (['-h'], ['--help'])):
         sub = argv[1] if verb == 'rec' and argv[1] in ('start', 'stop', 'ls', 'fetch') else None
         return verb_help(f'rec {sub}' if sub else verb)
-    if verb in HOME_VERBS and '--here' in argv:
+    flag_here = '--here' in argv
+    if verb in HOME_VERBS and flag_here:
         argv, here = [a for a in argv if a != '--here'], True
     args = parser().parse_args(argv)
     s = Session()
+    s.no_autostart = s.no_autostart or flag_here
     try:
         fetching = verb == 'rec' and args.action == 'fetch'      # copies from home to here: never forwarded
         if verb in HOME_VERBS and not fetching and not here and not config.have_ros():
@@ -611,7 +649,13 @@ def main(argv=None):
                     if shown:
                         print('\n'.join(status.stacks_block(shown)))
                     return forward(s.vessel, str(home), argv, env={'ASTRO_NO_STACKS': '1'} if shown else None)
-                return forward(s.vessel, str(home), argv)
+                if verb == 'test' and args.name not in (None, 'list', 'status') and not s.no_autostart:
+                    code = stacks.ensure(s.vessel, s.root, f'test {args.name}', test_needs(s, args.name))
+                    if code:
+                        return code
+                    s.no_autostart = True     # resolved here, once: not again on home
+                return forward(s.vessel, str(home), argv,
+                               env={'ASTRO_NO_AUTOSTART': '1'} if s.no_autostart else None)
         if verb in HEADER and not (verb == 'test' and args.name == 'list') and not fetching:
             print(f'astro {verb} · vessel {s.vessel.name} · state {s.vessel.state()} · data {s.root}')
         if verb == 'on':

@@ -203,5 +203,40 @@ class ConventionTest(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith('Usage: ' + name), out.stdout)
 
 
+class EntryQualityTest(unittest.TestCase):
+    """Every workspace help.yaml: no duplicate entries, and the core ones never leave a field to bare typing."""
+
+    def packages(self):
+        packages, _ = astro_help.discover(list(astro_help.candidates(prefixes=[])))
+        self.assertGreater(len(packages), 1)
+        return packages
+
+    def test_no_two_entries_of_a_level_run_the_same_command(self):
+        seen = {}
+        for package in self.packages():
+            for command in package['commands']:
+                key = (command['level'], command['run'])
+                self.assertNotIn(key, seen, f'{package["package"]}: {command["name"]} duplicates {seen.get(key)}')
+                seen[key] = f'{package["package"]}: {command["name"]}'
+
+    def test_core_params_say_what_they_are_and_free_text_says_why(self):
+        for package in self.packages():
+            for command in (c for c in package['commands'] if c['level'] == 'core'):
+                for param in command['params']:
+                    where = f'{package["package"]}: {command["name"]} {param["name"]}'
+                    text = str(param.get('description') or '')
+                    picked = param.get('choices') or param.get('choices_from')
+                    self.assertGreaterEqual(len(text.split()), 8, f'{where}: say what it is ({text!r})')
+                    if param['type'] != 'bool' and not picked:
+                        self.assertIn('e.g.', text, f'{where}: give an example value')
+                    if param['type'] == 'str' and not picked:
+                        self.assertTrue(param.get('free'), f'{where}: give choices/choices_from, or free: why typed')
+
+    def test_needs_and_conflicts_are_lists_shown_in_details(self):
+        cmd = command(name='x', needs=['nav', 'drive+controller'], conflicts=[{'drive': 'it holds the pins'}])
+        self.assertEqual(cmd['needs'], ['nav', 'drive+controller'])
+        self.assertIn('starts first if down: nav, drive+controller; stops first if up: drive (--here skips this)',
+                      '\n'.join(astro_help.details(cmd)))
+
 if __name__ == '__main__':
     unittest.main()

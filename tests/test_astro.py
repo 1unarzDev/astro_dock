@@ -433,6 +433,68 @@ class Stacks(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "no stack 'navv'"):
             stacks.select(found, ['navv'])
 
+    def test_a_commands_needs_start_needs_first_and_conflicts_stop(self):
+        from astro import stacks
+        found = stacks.parse(self.SECTION)
+        down = {}
+        stop, start, restart, options = stacks.plan(found, ['drive+controller', 'nope'],
+                                                    [{'camera': 'it holds the pins'}, 'sensors'], down)
+        self.assertEqual((stop, start, restart, options), ([], ['sensors', 'drive'], [], ['controller']))
+        up = {'sensors': (True, {}), 'camera': (True, {}), 'drive': (True, {})}
+        stop, start, restart, _ = stacks.plan(found, ['drive+controller'], [{'camera': 'it holds the pins'}], up)
+        self.assertEqual((stop, start, restart), ([('camera', 'it holds the pins')], [], ['drive']))
+        up['drive'] = (True, {'controller': True})
+        self.assertEqual(stacks.plan(found, ['drive+controller', 'nav'], ['camera'], up),
+                         ([('camera', '')], [], [], ['controller']))     # nav: run null, up only waits
+        self.assertEqual(stacks.split_need('drive+controller'), ('drive', ['controller']))
+
+    def test_ensure_says_why_then_stops_and_starts(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from astro import stacks
+        vessel = mock.Mock(astro=self.SECTION)
+        states = {'sensors': (False, {}), 'camera': (True, {}), 'drive': (False, {})}
+        out = io.StringIO()
+        with mock.patch.object(stacks, 'states_of', return_value=states), \
+                mock.patch.object(stacks, 'down') as down, mock.patch.object(stacks, 'up', return_value=0) as up, \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(stacks.ensure(vessel, '/d', 'trial', ['drive+controller'], [{'camera': 'it holds X'}]), 0)
+        self.assertEqual(out.getvalue().splitlines(), ['stopping camera (it holds X)',
+                                                       'starting sensors (needed by trial)',
+                                                       'starting drive (needed by trial)'])
+        down.assert_called_once_with(vessel, '/d', ['camera'])
+        up.assert_called_once_with(vessel, '/d', ['sensors', 'drive'], ['controller'])
+
+    def test_inside_a_container_on_the_stacks_host_it_runs_here_and_unreached_hosts_are_skipped(self):
+        import contextlib
+        import io
+        import subprocess as sp
+        from unittest import mock
+        from astro import config, remote, stacks
+        vessel = mock.Mock(astro=self.SECTION)
+        vessel.env.return_value = {}
+        specs = {'computer': ('boat', {'ssh': True, 'container': ''}), 'camera': ('cam', {'ssh': True, 'container': ''})}
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            if argv[0] == 'bash':
+                return sp.CompletedProcess(argv, 0, 'astro-ps sensors down\nastro-ps drive up\n', '')
+            raise FileNotFoundError('docker')
+        out = io.StringIO()
+        with mock.patch.object(remote, 'in_container', return_value=True), \
+                mock.patch.object(config, 'this_host', return_value='boat'), \
+                mock.patch.object(remote, 'place', side_effect=lambda v, h: specs[h]), \
+                mock.patch.object(remote, 'words', return_value=(['ssh', 'cam', 'docker', 'exec'], None)), \
+                mock.patch.object(stacks.subprocess, 'run', side_effect=run), contextlib.redirect_stdout(out):
+            found = stacks.parse(self.SECTION)
+            states = stacks.states_of(vessel, [found['sensors'], found['camera'], found['drive']], [])
+        self.assertEqual(calls[0][:2], ['bash', '-c'])                  # this host: no docker exec
+        self.assertEqual(states, {'sensors': (False, {}), 'drive': (True, {}), 'camera': None})
+        self.assertEqual(out.getvalue(), 'cam not reached: skipping camera\n')
+        self.assertEqual(stacks.plan(found, ['camera', 'drive'], ['camera'], states)[:2], ([], ['sensors']))
+
     def test_profile_errors_name_the_stack(self):
         from astro import config, stacks
         for bad, word in (({'a': {'run': 'x'}}, 'needs host'), ({'a': {'host': 'h', 'needs': ['b']}}, "needs 'b'"),

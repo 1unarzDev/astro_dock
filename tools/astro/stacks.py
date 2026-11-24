@@ -13,8 +13,10 @@ DATA/DATE/stacks/NAME.log."""
 from dataclasses import dataclass, field
 import datetime
 import json
+import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -180,14 +182,21 @@ exec tail -n 40 {"-F " if follow else ""}"$l"
 
 # ---- verbs --------------------------------------------------------------------------------------------
 
-def run_on(vessel, stack, script, stdin=None, tag='astro-'):
-    """(returncode, stdout lines) of SCRIPT on the stack's host; its stderr is shown only when no line
-    carries TAG (the host was not reached, or the script broke)."""
+def run_on(vessel, stack, script, stdin=None, tag='astro-', quiet=False):
+    """(returncode, stdout lines) of SCRIPT on the stack's host: right here when this is a dev container on
+    that host (or a container without docker), else ssh + docker exec. Its stderr is shown only when no line
+    carries TAG (the host was not reached, or the script broke), unless QUIET."""
     host, spec = remote.place(vessel, stack.host)
-    argv, env = remote.words(vessel, host, spec, script)
-    done = subprocess.run(argv, env=env, input=stdin or '', capture_output=True, text=True)
+    if remote.in_container() and (host == config.this_host() or not spec['ssh'] and not shutil.which('docker')):
+        argv, env = ['bash', '-c', script], dict(os.environ, **remote.local_env(vessel, True))
+    else:
+        argv, env = remote.words(vessel, host, spec, script)
+    try:
+        done = subprocess.run(argv, env=env, input=stdin or '', capture_output=True, text=True)
+    except OSError as error:              # no ssh or docker here
+        done = subprocess.CompletedProcess(argv, 127, '', f'{host}: {error}\n')
     lines = done.stdout.splitlines()
-    if not any(line.startswith(tag) for line in lines):
+    if not quiet and not any(line.startswith(tag) for line in lines):
         sys.stderr.write(done.stderr[-2000:])
     return done.returncode, lines
 
@@ -321,6 +330,107 @@ def logs(vessel, name, follow):
         return subprocess.call(argv, env=env)
     except KeyboardInterrupt:
         return 0
+
+
+# ---- a command's stacks: help.yaml needs/conflicts ------------------------------------------------------
+# A help.yaml entry may name stacks: `needs: [nav, drive+controller]` (NAME+OPTION: started with that `with`
+# option) start first when down; `conflicts: [drive]` or `[{drive: why}]` stop first when up. Stacks the
+# vessel does not have are skipped. --here or ASTRO_NO_AUTOSTART=1 skips it all.
+
+def split_need(word):
+    """('drive', ['controller']) from 'drive+controller'."""
+    name, *options = str(word).split('+')
+    return name, [o for o in options if o]
+
+
+def split_conflict(item):
+    """(stack, why) from 'drive' or {drive: 'why'}."""
+    if isinstance(item, dict) and len(item) == 1:
+        (name, why), = item.items()
+        return str(name), str(why or '')
+    return str(item), ''
+
+
+def plan(stacks, needs, conflicts, states):
+    """(stop, start, restart, options) for a command: STOP [(name, why)] of its conflicts that are up; START
+    the needed stacks (and their needs, needs first) that are down; RESTART those up without a needed
+    option; OPTIONS the `with` options asked. STATES maps a stack name to (up, {option: present}), or None when its host was not reached (skipped)."""
+    stop = [(n, why) for n, why in map(split_conflict, conflicts) if n in stacks and (states.get(n) or (False,))[0]]
+    wanted = {}
+    for name, options in map(split_need, needs):
+        if name in stacks:
+            wanted.setdefault(name, []).extend(o for o in options if o in stacks[name].options)
+    start, restart = [], []
+    for stack in select(stacks, list(wanted)) if wanted else []:
+        if not stack.run or (stack.name in states and states[stack.name] is None):
+            continue                      # started elsewhere (up only waits for it), or its host not reached
+        up, present = states.get(stack.name, (False, {}))
+        if not up:
+            start.append(stack.name)
+        elif not all(present.get(o) for o in wanted.get(stack.name, [])):
+            restart.append(stack.name)
+    options = sorted({o for opts in wanted.values() for o in opts})
+    return stop, start, restart, options
+
+
+def states_of(vessel, stacks, options):
+    """{name: (up, {option: in its running command})} for STACKS, one ssh per host."""
+    data, out = data_expr(vessel.astro), {}
+    by_host = {}
+    for stack in stacks:
+        if stack.run:
+            by_host.setdefault(stack.host, []).append(stack)
+    for group in by_host.values():
+        body = ''
+        for stack in group:
+            n = shlex.quote(stack.name)
+            body += f'if alive {n}; then echo "astro-ps {stack.name} up"; else echo "astro-ps {stack.name} down"; fi\n'
+            for o in options:
+                if o in stack.options:
+                    body += (f'grep -qF -- {shlex.quote(stack.options[o])} "$s/"{n}.sh 2>/dev/null '
+                             f'&& echo "astro-opt {stack.name} {o}"\n')
+        _, lines = run_on(vessel, group[0], prelude(data) + body, quiet=True)
+        if not tagged(lines, 'astro-ps'):     # not reached: neither started nor stopped
+            print(f'{host_of(vessel, group[0])} not reached: skipping {", ".join(s.name for s in group)}')
+            out.update({s.name: None for s in group})
+            continue
+        found = {s.name: (False, {}) for s in group}
+        for row in tagged(lines, 'astro-ps'):
+            name, state = row.split()[:2]
+            found[name] = (state == 'up', {})
+        for row in tagged(lines, 'astro-opt'):
+            name, option = row.split()[:2]
+            if name in found:
+                found[name][1][option] = True
+        out.update(found)
+    return out
+
+
+def ensure(vessel, root, by, needs=(), conflicts=()):
+    """Before command BY runs: stop its conflicts that are up, start its needs that are down (one line each
+    saying why). Returns 0, or up's exit code when a needed stack failed."""
+    if not needs and not conflicts:
+        return 0
+    stacks = parse(vessel.astro)
+    names = {split_need(w)[0] for w in needs} | {split_conflict(c)[0] for c in conflicts}
+    if not names & set(stacks):
+        return 0
+    asked = sorted({o for w in needs for o in split_need(w)[1]})
+    needed = {s.name for s in select(stacks, [n for n in {split_need(w)[0] for w in needs} if n in stacks])} \
+        if any(split_need(w)[0] in stacks for w in needs) else set()
+    involved = [s for s in stacks.values() if s.name in names or s.name in needed]
+    stop, start, restart, options = plan(stacks, needs, conflicts, states_of(vessel, involved, asked))
+    for name, why in stop:
+        print(f'stopping {name} ({why or by + " conflicts with it"})')
+        down(vessel, root, [name])
+    for name in restart:
+        print(f'restarting {name} with {", ".join(o for o in options if o in stacks[name].options)} (needed by {by})')
+        down(vessel, root, [name])
+    for name in start:
+        print(f'starting {name} (needed by {by})')
+    if not start and not restart:
+        return 0
+    return up(vessel, root, start + restart, options)
 
 
 def main_up(vessel, root, args):
