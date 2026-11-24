@@ -1,22 +1,26 @@
 # Commands astro_dock itself provides, read first by astro help (.devcontainer/astro-help.py): astro's own
 # verbs (run: astro VERB; ros: the plain ROS 2 they compose), then the workspace helpers. Packages in the
 # workspace ship their own help.yaml (package root or share/<package>/); the schema is in astro-help.py.
+# Voice: summary and notes in everyday words for a new teammate ("the robot", "its computers"); config keys,
+# topics, paths and code words go in details.
 package: astro
-summary: The astro tool and the ROS 2 container workspace helpers.
+summary: Run the robot day to day - start and stop it, test it, record, log and keep notes.
 commands:
   - name: help
     run: astro help
-    summary: Browse every workspace package's commands, fill in parameters, and run them (astro VERB --help for one).
+    summary: Look up any command, fill in its options and run it from one screen; use it whenever you forget how something works.
+    notes: Arrow keys move, Enter opens a command, r runs it. For one command in plain text, type astro COMMAND --help.
+    details: Reads every help.yaml of the workspace packages, plus the extra files the vessel profile lists under astro.help.
     params:
       - name: --list
         type: bool
         description: Print the commands as plain text instead of opening the browser.
       - name: --all
         type: bool
-        description: Also the setup-level commands (host setup, images, overlays).
+        description: Also list the rarely used setup commands (computer setup, images, overlays).
       - name: word
         required: false
-        description: 'Show full details of every command whose name or summary contains this word, e.g. rec.'
+        description: 'Show everything about each command whose name or summary mentions this word, e.g. rec.'
         free: any word to search for
     examples:
       - astro help --list
@@ -24,24 +28,29 @@ commands:
 
   - name: "on"
     run: astro on
-    summary: A shell (or one command) in a host's dev container over ssh; a vessel without ssh hosts (the sim) runs here with its env.
+    summary: Open a terminal on one of the robot's computers (or run one command there), from wherever you are.
+    notes: Pick the computer by name, or a unique part of it. With the simulator selected, it runs right here.
     ros: ssh USER@HOST docker exec -it CONTAINER bash
-    notes: The host is a registry host of the vessel profile, matched by name or substring.
+    details: The host is a registry host of the vessel profile; a vessel without ssh hosts (the sim) runs the shell here with its environment.
     params:
-      - {name: host, choices_from: 'astro _choices on', description: 'Registry host (or a unique part of its name), or a local vessel profile, e.g. sim; none opens a picker.'}
-      - {name: cmd, type: list, required: false, description: 'Command line to run in that container, e.g. astro test list; none opens a shell.'}
+      - {name: host, choices_from: 'astro _choices on', description: 'Which computer of the robot to open, e.g. a part of its name or sim; leave empty to pick from a list.'}
+      - {name: cmd, type: list, required: false, description: 'One command to run there instead of a terminal, e.g. astro test list.'}
     examples:
       - astro on sim
-      - astro on boat astro test list
+      - astro on sim astro test list
 
   - name: up
     run: astro up
-    summary: Start the vessel's stacks (profile astro.stacks), each on its host in the background, and wait until their ready topics publish.
+    summary: Start the robot's software (each part on the computer it belongs to) and wait until it's running. Run this first after power-on.
+    notes: Each part prints one line, "up" when it is running or FAILED with the end of its log (see astro logs NAME). It keeps running if your connection drops.
     ros: ssh USER@HOST docker exec CONTAINER bash -c 'setsid -f ros2 launch PKG FILE.launch.py ARGS > LOG'; ros2 topic hz TOPIC
-    notes: In order, needs first; one line per stack (up with its topic rates, or FAILED with the last log lines). A stack runs in a private tmux server (tmux -L astro) when the container has tmux, else under setsid, so an ssh drop never stops it; its log is DATA/DATE/stacks/NAME.log. Waits at most 60 s per stack.
+    details: >-
+      The parts are the vessel profile's astro.stacks, started in order with their needs first; a part is up when
+      its ready topics publish (at most 60 s each). Each runs in a private tmux server (tmux -L astro) when the
+      container has tmux, else under setsid; its log is DATA/DATE/stacks/NAME.log.
     params:
-      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', description: 'Stacks of the profile astro.stacks to start, e.g. drive nav; none starts the default ones; their needs start first.'}
-      - {name: --with, choices_from: 'astro _choices options', description: 'An option a chosen stack names under with:, e.g. controller, appended to that stack''s command.'}
+      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', description: 'Only these parts of the software, e.g. drive nav; leave empty for the usual set. Parts they rely on start too.'}
+      - {name: --with, choices_from: 'astro _choices options', description: 'An optional extra for a part you start, e.g. controller to also start the speed controller with drive.'}
     examples:
       - astro up
       - astro up drive --with controller
@@ -49,54 +58,66 @@ commands:
 
   - name: down
     run: astro down
-    summary: Stop stacks in reverse order (SIGINT to the process group, then SIGTERM after 20 s); no names = all.
+    summary: Stop the robot's software, all of it or only the parts you name, cleanly and in the right order.
+    notes: Run it before powering off or before a bench tool that needs the hardware to itself.
     ros: ssh USER@HOST docker exec CONTAINER kill -INT -- -PGID
+    details: Stops in reverse start order with SIGINT to each process group, then SIGTERM after 20 s; parts that need a stopped part stop first.
     params:
-      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', description: 'Stacks of the profile astro.stacks to stop, e.g. drive; none stops all; those that need them stop first.'}
+      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', description: 'Only these parts of the software, e.g. drive; leave empty to stop everything.'}
     examples:
       - astro down
       - astro down drive
 
   - name: logs
     run: astro logs
-    summary: The last 40 lines of a stack's log on its host; -f follows it.
+    summary: Show what one part of the robot's software has been printing, to see why it failed or what it is doing.
+    notes: Add -f to keep watching new lines; Ctrl-C stops watching (the part keeps running).
     ros: ssh USER@HOST docker exec CONTAINER tail -F DATA/DATE/stacks/NAME.log
+    details: The last 40 lines of DATA/DATE/stacks/NAME.log on the part's computer.
     params:
-      - {name: name, choices_from: 'astro _choices stacks', description: 'The stack whose log to show, e.g. drive; none opens a picker.'}
+      - {name: name, choices_from: 'astro _choices stacks', description: 'The part of the software whose output to show, e.g. drive; leave empty to pick.'}
       - {name: -f, type: bool, description: 'Keep following the log as it grows, until Ctrl-C.'}
     examples:
       - astro logs drive -f
 
   - name: status
     run: astro status
-    summary: One page - each stack (host, up/down, uptime, ready rates, log path), then nodes, the tests file's topics, recording, last log lines and the next test.
-    notes: The stacks are asked from here, over ssh like astro up. Outside ROS (a host shell) the rest runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it all here.
+    summary: One page that tells you whether the robot is ready - which parts are running, its sensors, any recording, and the next test to do.
+    notes: Use --watch to keep it on screen and updating while you work.
     ros: ps -o etimes= -p PID; ros2 topic hz TOPIC; ros2 node list; ros2 topic echo --once TOPIC
+    details: >-
+      Each stack (host, up/down, uptime, ready rates, log path), then nodes, the tests file's topics, recording,
+      the last log lines and the next test. The stacks are asked from here over ssh; outside ROS the rest runs on
+      the profile's astro.home host (astro on HOME astro ...); --here runs it all here.
     params:
       - {name: --watch, type: bool, description: 'Redraw the whole page every second until you press Ctrl-C.'}
 
   - name: rec start
     run: astro rec start
-    summary: Record a bag (mcap, 300 s splits) of a preset's topics into DATA/DATE/bags/HHMMSS-LABEL.
+    summary: Start recording the robot's data (sensors, commands, position) so you can replay or study a run later.
+    notes: Use a short label so you can find it later, e.g. astro rec start lean lake. Stop it with astro rec stop.
     ros: ros2 bag record -s mcap -d 300 -o DIR TOPIC... (or -a)
-    notes: Presets come from the vessel profile's astro.bags file; the events topic is always recorded. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
+    details: >-
+      Records an mcap bag in 300 s splits into DATA/DATE/bags/HHMMSS-LABEL. Presets come from the vessel
+      profile's astro.bags file; the events topic is always recorded. Outside ROS it runs on the profile's
+      astro.home host; --here runs it here.
     params:
-      - {name: preset, required: false, choices_from: 'astro _choices presets', description: 'A topic preset of the bags file (profile astro.bags), e.g. lean; none uses its first.'}
-      - {name: label, required: false, description: 'A short word appended to the bag directory name, e.g. lake or trial3.', free: a label of your choosing}
+      - {name: preset, required: false, choices_from: 'astro _choices presets', description: 'Which set of data to record, e.g. lean for the essentials only; leave empty for the first set.'}
+      - {name: label, required: false, description: 'A short word to find the recording by later, e.g. lake or trial3.', free: a label of your choosing}
     examples:
       - astro rec start lean lake
 
   - name: rec stop
     run: astro rec stop
-    summary: Stop the recording astro rec start began (SIGINT, so the bag closes cleanly).
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
+    summary: Stop the recording you started, closing the file cleanly so nothing is lost.
     ros: kill -INT PID
+    details: Sends SIGINT to the recorder. Outside ROS it runs on the profile's astro.home host; --here runs it here.
 
   - name: rec ls
     run: astro rec ls
-    summary: Today's bags with their start-end times and the log lines that fall inside each.
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
+    summary: List today's recordings with when each started and stopped, and the notes you logged during each.
     ros: ros2 bag info DIR
+    details: Outside ROS it runs on the profile's astro.home host; --here runs it here.
 
   - name: rec fetch
     run: astro rec fetch
@@ -111,32 +132,41 @@ commands:
 
   - name: mark
     run: astro mark
-    summary: One log line, also published on the events topic (so it lands in the bag); returns at once.
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ... (in the background with its time, ssh killed after 20 s; if that fails the mark is kept in ~/.local/state/astro/VESSEL-marks.pending, said in one line, and sent with its original time after the next forwarded command or astro sync); --here runs it here.
+    summary: Write a quick note about what just happened ("wind picked up") into today's log and the recording, stamped with the time.
+    notes: It returns at once. If the robot can't be reached, the note is kept and sent later with its original time.
     ros: "ros2 topic pub --once /events std_msgs/msg/String \"{data: 'HH:MM:SS  mark  TEXT'}\""
+    details: >-
+      Published on the events topic. Outside ROS it runs on the profile's astro.home host in the background
+      (ssh killed after 20 s); a failed one is kept in ~/.local/state/astro/VESSEL-marks.pending and sent after
+      the next forwarded command or astro sync. --here runs it here.
     params:
-      - {name: text, type: list, description: 'What happened, in words, as the log line, e.g. wind picked up from north.'}
+      - {name: text, type: list, description: 'What happened, in your own words, e.g. wind picked up from north.'}
     examples:
       - astro mark wind picked up from north
 
   - name: log
     run: astro log
-    summary: Today's log (marks, recordings, tests, applies).
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
+    summary: Read today's log - your notes, recordings, tests and changes - to see what happened and when.
     ros: cat DATA/DATE/log.txt
+    details: DATA/DATE/log.txt. Outside ROS it runs on the profile's astro.home host; --here runs it here.
     params:
-      - {name: -n, type: int, description: 'Show only the last N lines of the day log, e.g. 20.'}
+      - {name: -n, type: int, description: 'Show only the last few lines of the log, e.g. 20.'}
 
   - name: test
     run: astro test
-    summary: Run one test or a group of the vessel's tests file in this terminal (Ctrl-C sends neutral); `astro test list` names them.
-    needs: [localization, drive]   # stacks of the vessel profile; one it lacks is skipped
+    summary: Run a guided test that measures how the robot really moves, so its settings can be tuned. Ctrl-C stops the robot.
+    notes: Start with astro test list, and astro test status for what to do next; a passive "watch" test just watches while you drive by hand, for small spaces. Each test ends with the astro apply line that saves its result.
     ros: ros2 topic pub /EFFORT geometry_msgs/msg/Twist ... (20 Hz) while ros2 topic echo /ODOM
-    notes: Each test prints its control layer, old -> new and the exact astro apply command. `astro test status` shows what is applied, measured, stale, aborted or pending, and the next step. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; forwarded over ssh, a test keeps running if the link drops (RC is the stop); --here runs it here.
+    details: >-
+      Tests and groups come from the vessel profile's astro.tests file; Ctrl-C sends neutral. The software it
+      needs (the profile's astro.test_needs, or a test's own needs) starts first. Each test prints its control
+      layer and old -> new values; a test with rec: records a bag while it runs. A watch test publishes nothing:
+      it fits from the operator's steady single-axis holds until its levels are covered. Outside ROS it runs on the profile's astro.home host, and keeps running if
+      the link drops; --here runs it here.
     params:
-      - {name: name, choices_from: 'astro _choices test', description: 'A test or group of the tests file, e.g. still, or list or status; none opens a picker.'}
-      - {name: --space, choices: [large, small], default: large, description: 'The space preset (its amplitudes and levels) the water allows, e.g. small for a pond.'}
-      - {name: --amp, type: float, description: 'Override the space preset''s effort amplitude, 0 to 1, e.g. 0.3.'}
+      - {name: name, choices_from: 'astro _choices test', description: 'The test or group of tests to run, e.g. still; or list or status; leave empty to pick.'}
+      - {name: --space, choices: [large, small], default: large, description: 'How much room the robot has: small is a pool or tank (a few metres), large is open space.'}
+      - {name: --amp, type: float, description: 'How hard to push, from 0 to 1, instead of the room''s usual strength, e.g. 0.3.'}
     examples:
       - astro test list
       - astro test status
@@ -144,11 +174,12 @@ commands:
 
   - name: apply
     run: astro apply
-    summary: Write a test result into the state file (backup first), check it, roll back on refusal, then set the live parameters.
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
+    summary: Save a test's result into the robot's settings and use it right away; a backup is kept so astro undo can take it back.
+    notes: Leave the name empty to pick from results not yet saved. A result the settings check refuses is rolled back.
     ros: ros2 param set NODE PARAM VALUE
+    details: Writes the profile's astro.state file (backup first), runs astro.check on it, rolls back on refusal, then sets the live parameters. Outside ROS it runs on astro.home; --here runs it here.
     params:
-      - {name: result, choices_from: 'astro _choices apply', description: 'A test name (applies its latest result) or a result file, e.g. couple-surge; none picks an unapplied one.'}
+      - {name: result, choices_from: 'astro _choices apply', description: 'The test whose latest result to save, or a result file, e.g. couple-surge; leave empty to pick.'}
 
   - name: undo
     run: astro undo
@@ -158,74 +189,80 @@ commands:
 
   - name: bundle
     run: astro bundle
-    summary: The state file, today's results and log (and bags) in one tgz, e.g. to replay in the sim.
+    summary: Pack today's settings, results and log into one file, to share or to replay the day in the simulator.
+    notes: It prints the file's name and, if your team set one, the next step to run with it.
     ros: tar czf bundle.tgz STATE DATA/DATE
-    notes: Then prints the vessel profile's astro.bundle_next, if set, with {bundle} replaced by the file. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
+    details: A tgz of the state file and DATA/DATE; then prints the vessel profile's astro.bundle_next with {bundle} replaced. Outside ROS it runs on astro.home; --here runs it here.
     params:
-      - {name: --bags, type: bool, description: 'Also include today''s recorded bags in the tgz (it gets large).'}
+      - {name: --bags, type: bool, description: 'Also include today''s recordings in the file (it gets large).'}
 
   - name: sim up
     run: astro sim up
     level: core
-    summary: Start the simulated world of the sim vessel profile and wait until it is ready.
-    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    summary: Start the simulator, a virtual robot in a virtual world, and wait until it is ready to drive.
+    notes: Then use the other commands as on the real robot, with the sim selected (e.g. astro on sim).
+    details: "The backend is the sim profile's astro.sim, run as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE)."
     params:
-      - {name: args, type: list, required: false, description: 'Extra options passed to the sim backend untouched, e.g. --headless (up --help lists them).'}
+      - {name: args, type: list, required: false, description: 'Extra options for the simulator, passed on as they are, e.g. --headless (sim up --help lists them).'}
     examples:
       - astro sim up --headless
 
   - name: sim down
     run: astro sim down
     level: core
-    summary: Stop the simulated world.
-    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    summary: Stop the simulator when you are done with it.
+    details: "The backend is the sim profile's astro.sim, run as `CMD VERB [args]` with that profile's environment."
     params:
-      - {name: args, type: list, required: false, description: 'Extra options passed to the sim backend untouched, e.g. --headless (down --help lists them).'}
+      - {name: args, type: list, required: false, description: 'Extra options for the simulator, passed on as they are, e.g. --force (sim down --help lists them).'}
 
   - name: sim status
     run: astro sim status
     level: core
-    summary: What runs in the simulated world (read-only).
-    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    summary: See what is running in the simulator, without changing anything.
+    details: "The backend is the sim profile's astro.sim, run as `CMD VERB [args]` with that profile's environment."
     params:
-      - {name: args, type: list, required: false, description: 'Extra options passed to the sim backend untouched, e.g. --headless (status --help lists them).'}
+      - {name: args, type: list, required: false, description: 'Extra options for the simulator, passed on as they are, e.g. --json (sim status --help lists them).'}
 
   - name: sim check
     run: astro sim check
     level: core
-    summary: Is the running sim ready? Exit 0 when it is.
-    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    summary: Ask whether the simulator is ready to use; handy in scripts that should wait for it.
+    details: "Exit 0 when ready. The backend is the sim profile's astro.sim, run as `CMD VERB [args]` with that profile's environment."
     params:
-      - {name: args, type: list, required: false, description: 'Extra options passed to the sim backend untouched, e.g. --headless (check --help lists them).'}
+      - {name: args, type: list, required: false, description: 'Extra options for the simulator, passed on as they are, e.g. --wait 120 (sim check --help lists them).'}
     examples:
       - astro sim check --wait 120
 
   - name: sim restart
     run: astro sim restart
     level: core
-    summary: Restart one part of the running world and keep the rest.
-    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    summary: Restart one part of the simulator (say, navigation after a code change) and keep the rest running.
+    details: "The backend is the sim profile's astro.sim, run as `CMD VERB [args]` with that profile's environment."
     params:
-      - {name: part, description: 'The part of the running world to restart, as the backend names it, e.g. nav.', free: the sim backend defines its parts}
-      - {name: args, type: list, required: false, description: 'Extra options passed to the sim backend untouched, e.g. --headless (restart --help lists them).'}
+      - {name: part, description: 'The part of the simulator to restart, as the simulator names it, e.g. nav.', free: the sim backend defines its parts}
+      - {name: args, type: list, required: false, description: 'Extra options for the simulator, passed on as they are, e.g. --headless (sim restart --help lists them).'}
     examples:
       - astro sim restart nav
 
   - name: sim logs
     run: astro sim logs
     level: setup
-    summary: The last lines of the sim's logs.
-    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    summary: Show the simulator's recent output, to see why it failed to start.
+    details: "The backend is the sim profile's astro.sim, run as `CMD VERB [args]` with that profile's environment."
     params:
-      - {name: args, type: list, required: false, description: 'Extra options passed to the sim backend untouched, e.g. --headless (logs --help lists them).'}
+      - {name: args, type: list, required: false, description: 'Extra options for the simulator, passed on as they are, e.g. -f (sim logs --help lists them).'}
 
   - name: check
     run: astro check
-    summary: Go through a field checklist (checklists/NAME.md of the field repo, astro.field) item by item; ticks save to the session's checks.yaml.
+    summary: Walk through your team's checklist for the day (before launch, after a run) item by item; some items check themselves.
+    notes: Use --list to see the items and how they went last time without running anything.
     ros: bash -c COMMAND (each check:)
-    notes: 'An item that ends in check: `COMMAND` runs it (exit 0 = ok, its last line is shown); other items are manual, asked y/n on a terminal. Example item: "- [ ] sensors up - check: `astro status`".'
+    details: >-
+      Checklists are checklists/NAME.md of the field repo (the profile's astro.field); ticks save to the
+      session's checks.yaml. An item ending in check: `COMMAND` runs it (exit 0 = ok); other items are asked y/n.
+      Example item: "- [ ] sensors up - check: `astro status`".
     params:
-      - {name: name, choices_from: 'astro _choices check', description: 'The field checklist to go through (checklists/NAME.md), e.g. lake; none opens a picker.'}
+      - {name: name, choices_from: 'astro _choices check', description: 'Which checklist to go through, e.g. lake; leave empty to pick from the list.'}
       - {name: --list, type: bool, description: 'Print the items and their last state, and run nothing.'}
     examples:
       - astro check lake --list
@@ -233,47 +270,57 @@ commands:
 
   - name: issue
     run: astro issue
-    summary: File a GitHub issue on the field repo with the time, vessel, current bag and the last 10 log lines; offline it is queued for astro sync.
+    summary: Report a problem you just saw to the team's issue list, with the time, the robot and the latest log lines attached.
+    notes: Offline, it is kept and filed by the next astro sync.
     ros: gh issue create -R OWNER/REPO --title TEXT --body-file -
+    details: Files a GitHub issue on the field repo (the profile's astro.field) with the current bag and the last 10 log lines.
     params:
-      - {name: text, description: 'The issue title, one line in quotes, e.g. "mux ignores RC after restart".', free: issue text}
-      - {name: --label, description: 'A GitHub label of the field repo to add (repeat for more), e.g. safety.', free: labels live on GitHub}
+      - {name: text, description: 'A one-line title for the problem, in quotes, e.g. "remote ignored after restart".', free: issue text}
+      - {name: --label, description: 'A label to tag the issue with (repeat for more), e.g. safety.', free: labels live on GitHub}
     examples:
-      - astro issue "mux ignores RC after restart" --label safety
+      - astro issue "remote ignored after restart" --label safety
 
   - name: sync
     run: astro sync
-    summary: Clone or pull the field repo, copy today's log, results (without raw samples) and a bag index into the session folder, commit, push and file queued issues.
+    summary: Save today's log, results and recording list to the team's shared notes and send any queued issues and notes. Run it at the end of the day.
+    notes: Safe to run any time and more than once. Offline, it says so and changes nothing.
     ros: git pull; cp DATA/DATE/log.txt SESSION/; git commit; git push; gh issue create
-    notes: Safe to repeat. Offline, or with astro.home not reachable, it prints one line and exits 0 (synced sessions stay). When astro.home is reached over ssh (the operator laptop) it first fetches that host's day folder - log.txt, results and a bag index (name, start-end, size), never bag data - and sends pending marks. ASTRO_FIELD_DIR overrides field.dir. The session folder is sessions/DATE-LABEL (an existing one, else the day's first rec start label, else session).
+    details: >-
+      Clones or pulls the field repo, copies log.txt, results (without raw samples) and a bag index (never bag
+      data) into sessions/DATE-LABEL, commits and pushes. With astro.home reached over ssh it first fetches that
+      host's day folder and sends pending marks. ASTRO_FIELD_DIR overrides field.dir.
     examples:
       - astro sync
 
   - name: docs
     run: astro docs
-    summary: Where the information lives - the field repo (clone, today's session and its plan, checklists, handoff/, plans/, issues), the day log and bags, and each repo's README.md and docs/*.md with GitHub links.
+    summary: Show where to read up - today's plan, checklists, handoff notes, issues, today's log and recordings, and each project's documentation with links.
     ros: 'none: reads files only (ls; git remote get-url origin)'
+    details: The field repo (clone, session, plan, checklists, handoff/, plans/, issues), the day log and bags, and each repo's README.md and docs/*.md with GitHub links.
     examples:
       - astro docs
 
   - name: show
     run: astro show
-    summary: A session in plain text - its plan, check states, the log's counts (tests, applies, marks, bags) and the open issues.
+    summary: Summarize a day's session - its plan, which checks passed, how many tests, results and notes, and the open issues.
     ros: cat SESSION/plan.md; gh issue list
-    notes: With astro.home reached over ssh it reads the synced copy, else today's astro log on home.
+    details: With astro.home reached over ssh it reads the synced copy, else today's astro log on home.
     params:
-      - {name: date, default: auto, description: 'The session day to show as YYYY-MM-DD, e.g. 2026-11-24; auto is today.', free: a date}
+      - {name: date, default: auto, description: 'The day to summarize, as YYYY-MM-DD, e.g. 2026-11-24; auto is today.', free: a date}
     examples:
       - astro show
       - astro show 2026-11-24
 
   - name: clock
     run: astro clock
-    summary: Each registry host's clock offset from this machine, with its chrony source and whether it reaches it; --fix sets the robot hosts' clocks from this one.
+    summary: Check that the robot's computers agree on the time with this one (recordings and logs line up only if they do); --fix corrects them.
+    notes: Each computer prints how far off it is. If one keeps drifting, it can't reach its time source.
     ros: ssh USER@HOST 'date +%s.%N; chronyc -n -c sources'
-    notes: --fix runs sudo -n date -u -s @EPOCH; sudo -n chronyc makestep on each robot host (every ssh host without the operator role) more than 0.5 s off, and says what it did. Chrony keeps a host right only while it reaches its source.
+    details: >-
+      Each registry host's offset, its chrony source and whether it reaches it. --fix runs sudo -n date -u -s
+      @EPOCH and chronyc makestep on each robot host (every ssh host without the operator role) more than 0.5 s off.
     params:
-      - {name: --fix, type: bool, description: 'Set the robot hosts'' clocks from this machine''s clock when off.'}
+      - {name: --fix, type: bool, description: 'Set the robot computers'' clocks from this one when they are off.'}
     examples:
       - astro clock
       - astro clock --fix
@@ -281,19 +328,19 @@ commands:
   - name: astro-ros-install
     run: astro-ros-install
     level: setup
-    summary: Install a ROS or apt package into this running container by distro-independent name.
-    notes: >-
-      ROS names resolve to ros-$ROS_DISTRO-* debs, else build from source into /opt/astro-extra.
-      The shell reloads after it. Installs last until the container is recreated; each is recorded
-      in .devcontainer/installed.local.txt: move the names to packages.txt (jetson-packages.txt on
-      Jetson, requirements.txt for pip) to keep them.
+    summary: Install an extra ROS or system (apt or pip) package into this container, to try something out.
+    notes: It lasts until the container is rebuilt; to keep it, add the name to the image's package list.
+    details: >-
+      ROS names resolve to ros-$ROS_DISTRO-* debs, else build from source into /opt/astro-extra; the shell
+      reloads after it. Each install is recorded in .devcontainer/installed.local.txt: move the names to
+      packages.txt (jetson-packages.txt on Jetson, requirements.txt for pip) to keep them.
     params:
       - name: --source
         type: bool
-        description: Build ROS packages from source even when a deb exists.
+        description: Build ROS packages from source even when a ready-made package exists.
       - name: names
         type: list
-        description: Package names, e.g. nav2_bringup, htop, or pip:SPEC for /workspace/venv.
+        description: Package names, e.g. nav2_bringup, htop, or pip:SPEC for a Python package.
     examples:
       - astro-ros-install nav2_bringup
       - astro-ros-install --source examples_rclcpp_minimal_publisher
@@ -301,51 +348,52 @@ commands:
   - name: ros_env
     run: ros_env
     level: setup
-    summary: Reload ROS, the image overlays and the workspace install/ in this shell.
+    summary: Reload ROS and the workspace in this terminal, after a build or an install.
+    details: Sources ROS, the image overlays and the workspace install/.
 
   - name: ros_net
     run: ros_net
     level: setup
-    summary: Re-detect this host's robot-subnet address and pin DDS to it (each new shell does this).
-    notes: Set ASTRO_DDS_ADDRESS to force an address; off the robot subnet DDS uses all interfaces.
+    summary: Make this terminal talk to the robot over the right network connection again (each new terminal does this by itself).
+    details: Re-detects this host's robot-subnet address and pins DDS to it; ASTRO_DDS_ADDRESS forces one; off the robot subnet DDS uses all interfaces.
     params:
       - name: -v
         type: bool
-        description: Print the choice.
+        description: Print the address it chose.
 
   - name: rviz2
     run: rviz2
     level: setup
-    summary: RViz with the workspace dark theme, pinned to the robot network interface.
+    summary: Open RViz, the 3D viewer for the robot's sensors and maps, set up for the robot network.
 
   - name: setup.linux.sh
     run: ./setup.linux.sh
     level: setup
-    summary: Prepare a Linux host for the containers, stage by stage (run on the host, not in a container).
-    notes: Each stage explains itself and asks first; reruns are safe.
+    summary: Prepare a Linux computer to run the robot's containers, step by step (run it on the computer itself, not in a container).
+    notes: Each step explains itself and asks first; running it again is safe.
     params:
       - name: --components
         default: clock,docker,gpu,devices,devtools,compose
-        description: Comma-separated stages (also deps, mdns, repos, gateway, boat, jetson, operator-key), e.g. clock,docker.
+        description: The steps to run, comma-separated (also deps, mdns, repos, gateway, boat, jetson, operator-key), e.g. clock,docker.
       - name: --dry-run
         type: bool
         description: Print the commands without running them.
       - name: --yes
         type: bool
-        description: Approve the plan and every stage.
+        description: Approve the plan and every step.
       - name: --non-interactive
         type: bool
         description: No prompts (needs --yes).
       - name: --vessel
         default: auto
-        description: The vessel profile; auto is this machine's, as hw.sh whoami finds it.
+        description: Which robot this computer belongs to; auto finds it.
       - name: --host
         default: auto
-        description: This machine's registry host (auto is as hw.sh whoami finds it), or any other name for a generic control station.
+        description: This computer's name in the robot's list of computers (auto finds it), or any other name for a spare control laptop.
       - name: --role
         type: list
         default: auto
-        description: Repos stage roles whose repositories to add to repos.all; auto is this host's roles.
+        description: The jobs this computer does, which decide the repositories it gets; auto is its own.
     examples:
       - ./setup.linux.sh --components clock --dry-run
       - ./setup.linux.sh --components repos --role operator
@@ -354,139 +402,152 @@ commands:
   # hw.sh verbs (machine, network and deploy): astro VERB runs $ROS_WS/hw.sh VERB; hw.sh stays usable directly.
   - name: profile
     run: $ROS_WS/hw.sh whoami
-    summary: This machine's host, vessel and station, and how they were found (profile show|sync|env|secrets below).
+    summary: Show which robot and which computer astro thinks this is, and how it decided.
+    notes: If it guessed wrong, set the robot with ASTRO_VESSEL or run astro profile sync.
     params:
-      - {name: --root, type: bool, description: 'Print only the profile root directory instead of the summary.'}
-      - {name: --registry, type: bool, description: 'Print only the host registry file path instead of the summary.'}
+      - {name: --root, type: bool, description: 'Print only the folder the robot settings come from.'}
+      - {name: --registry, type: bool, description: 'Print only the file listing the robot''s computers.'}
   - name: profile env
     run: $ROS_WS/hw.sh env
-    summary: The vessel's network env path, or one key or role address (<ROLE>_IP).
+    summary: Show the robot's network settings, or one of them such as a computer's address.
+    details: The vessel's network env path, or one key, or a role address as <ROLE>_IP.
     params:
-      - {name: key, required: false, description: 'One key of the network env or a role address to print, e.g. ROUTER_IP.', free: keys come from the profile env file}
+      - {name: key, required: false, description: 'One network setting or computer address to print, e.g. ROUTER_IP.', free: keys come from the profile env file}
   - name: profile show
     run: $ROS_WS/hw.sh profile show
-    summary: A merged vessel profile (no secrets).
+    summary: Show all of a robot's settings as astro sees them, without passwords.
+    details: The merged vessel profile (its extends chain), secrets left out.
     params:
-      - {name: name, default: auto, description: 'The vessel profile to show merged, e.g. sim; auto is this machine''s vessel.', free: profile names come from the profile set}
+      - {name: name, default: auto, description: 'Which robot''s settings to show, e.g. sim; auto is this computer''s robot.', free: profile names come from the profile set}
   - name: profile sync
     run: $ROS_WS/hw.sh profile sync
-    summary: Check out your profile set at its recorded ref (URL REF records new ones first).
+    summary: Update your team's robot settings to the version your team picked; run it when astro warns the settings are out of date.
+    details: Checks out the profile set at ASTRO_PROFILES_REF; profile sync URL REF records a new URL and ref first.
   - name: profile secrets
     run: $ROS_WS/hw.sh secrets check
-    summary: The secrets file and the missing key names (never values).
+    summary: Check that the passwords and keys the robot needs are filled in; it names what is missing and never shows a value.
+    details: Reads ~/.config/astro/secrets.env.
   - name: hot
     run: $ROS_WS/hw.sh hot
-    summary: Push src/REPO's working tree (uncommitted too) to the robot hosts that run it and build it there, LAN only.
+    summary: Try your code changes on the robot right now, without committing - copies a project to the robot's computers and builds it there.
+    notes: Use --dry-run first to see where it goes. Works only on the robot's own network.
+    details: Pushes src/REPO's working tree (uncommitted too) to every robot host that runs the repo and builds it there.
     params:
-      - {name: repo, choices_from: 'ls "$ROS_WS/src"', description: 'The repository under src/ whose working tree to push and build, e.g. ros_tcp_endpoint.'}
-      - {name: --host, default: auto, choices_from: 'astro _choices on', description: 'Push to only this registry host, e.g. a boat computer; auto is every robot host that runs the repo.'}
-      - {name: --dry-run, type: bool, description: 'Show the hosts, files and build plan, and send nothing.'}
+      - {name: repo, choices_from: 'ls "$ROS_WS/src"', description: 'The project in the workspace whose current code to send and build, e.g. ros_tcp_endpoint.'}
+      - {name: --host, default: auto, choices_from: 'astro _choices on', description: 'Send it to only this one computer of the robot; auto is every computer that runs the project.'}
+      - {name: --dry-run, type: bool, description: 'Show the computers, files and build plan, and send nothing.'}
     examples:
       - astro hot REPO --dry-run
   - name: station take
     run: $ROS_WS/hw.sh station take
     level: setup
-    summary: Make this computer the operator station (robot link, gateway and time roles, keys, station file).
+    summary: Make this laptop the one that operates the robot (its link, network gateway and time source).
+    details: Takes the operator station roles (robot link, gateway, time), keys and the station file.
     params:
       - {name: --dry-run, type: bool, description: Show the steps; change nothing.}
   - name: station release
     run: $ROS_WS/hw.sh station release
     level: setup
-    summary: Stop this computer's operator station services.
+    summary: Stop this laptop operating the robot, so another one can take over.
   - name: overlay
     run: $ROS_WS/hw.sh overlay
     level: setup
-    summary: Colcon-build a worktree's changed packages as an overlay on the workspace install; prints the source line.
+    summary: Build only what changed in a separate copy of the code, on top of the main build, to try it side by side.
+    details: Colcon-builds a worktree's changed packages as an overlay on the workspace install and prints the source line.
     params:
-      - {name: path, description: The worktree.}
-      - {name: --base, default: origin/main, description: Compare against this ref.}
+      - {name: path, description: The folder of that copy (a git worktree).}
+      - {name: --base, default: origin/main, description: Compare against this version.}
   - name: pyenv
     run: $ROS_WS/hw.sh pyenv
     level: setup
-    summary: The PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon.
+    summary: Run a separate copy's Python code straight from its folder, without building.
+    details: Prints the PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon.
     params:
-      - {name: path, description: The worktree.}
+      - {name: path, description: The folder of that copy (a git worktree).}
   - name: build
     run: $ROS_WS/hw.sh build
-    summary: The workspace's colcon build in its dev container (from clean when the image or colcon defaults changed).
+    summary: Build the workspace code so your changes take effect; it starts from scratch on its own when it has to.
+    details: The workspace's colcon build in its dev container, from clean when the image or colcon defaults changed.
   - name: image
     run: $ROS_WS/hw.sh image
     level: setup
-    summary: The dev image the Compose config names.
+    summary: Show which container image this computer uses, and update it if a newer one is out.
     params:
-      - {name: --pull, type: bool, description: Pull when the registry has a newer one.}
-      - {name: --local, type: bool, description: The local image built on it.}
+      - {name: --pull, type: bool, description: Download it when a newer one is available.}
+      - {name: --local, type: bool, description: Show the local image built on top of it.}
   - name: device status
     run: $ROS_WS/hw.sh device status
-    summary: One device kind as it is now (changes nothing).
-    notes: >-
-      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    summary: See how one piece of robot hardware (radio, router, computers) is set up right now, without changing it.
+    notes: astro device kinds lists the hardware you can pick.
+    details: >-
+      The kinds come from the vessel profile, each with its driver; hw.sh KIND VERB is the same. Profiles live
+      where ~/.config/astro/profiles.env says (ASTRO_PROFILES, or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF);
+      secrets in ~/.config/astro/secrets.env (mode 600).
     params:
-      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'A device kind of the vessel profile, e.g. radio; none opens a picker.'}
-      - {name: args, type: list, required: false, description: 'Extra options for the device driver''s verb, e.g. --verbose (astro device status KIND --help).'}
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'Which piece of hardware to look at, e.g. radio; leave empty to pick.'}
+      - {name: args, type: list, required: false, description: 'Extra options for that hardware, e.g. --verbose (astro device status KIND --help).'}
     examples:
       - astro device status hosts
 
   - name: device plan
     run: $ROS_WS/hw.sh device plan
     level: setup
-    summary: What apply would change on one device kind (changes nothing).
-    notes: >-
-      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    summary: Preview what device apply would change on one piece of hardware, without changing it.
+    details: The kinds come from the vessel profile, each with its driver; hw.sh KIND VERB is the same.
     params:
-      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'A device kind of the vessel profile, e.g. radio; none opens a picker.'}
-      - {name: args, type: list, required: false, description: 'Extra options for the device driver''s verb, e.g. --verbose (astro device plan KIND --help).'}
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'Which piece of hardware to look at, e.g. radio; leave empty to pick.'}
+      - {name: args, type: list, required: false, description: 'Extra options for that hardware, e.g. --verbose (astro device plan KIND --help).'}
     examples:
       - astro device plan radio
 
   - name: device apply
     run: $ROS_WS/hw.sh device apply
     level: setup
-    summary: Make one device kind match the vessel profile.
-    notes: >-
-      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    summary: Set up one piece of hardware the way the robot's settings say it should be.
+    notes: Run device plan first to see the changes; device rollback undoes them.
+    details: The kinds come from the vessel profile, each with its driver; hw.sh KIND VERB is the same.
     params:
-      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'A device kind of the vessel profile, e.g. radio; none opens a picker.'}
-      - {name: args, type: list, required: false, description: 'Extra options for the device driver''s verb, e.g. --verbose (astro device apply KIND --help).'}
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'Which piece of hardware to set up, e.g. radio; leave empty to pick.'}
+      - {name: args, type: list, required: false, description: 'Extra options for that hardware, e.g. --verbose (astro device apply KIND --help).'}
     examples:
       - astro device apply radio
 
   - name: device verify
     run: $ROS_WS/hw.sh device verify
-    summary: Check one device kind against the vessel profile.
-    notes: >-
-      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    summary: Check that one piece of hardware is set up the way the robot's settings say; it lists anything that differs.
+    details: The kinds come from the vessel profile, each with its driver; hw.sh KIND VERB is the same.
     params:
-      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'A device kind of the vessel profile, e.g. radio; none opens a picker.'}
-      - {name: args, type: list, required: false, description: 'Extra options for the device driver''s verb, e.g. --verbose (astro device verify KIND --help).'}
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'Which piece of hardware to check, e.g. radio; leave empty to pick.'}
+      - {name: args, type: list, required: false, description: 'Extra options for that hardware, e.g. --verbose (astro device verify KIND --help).'}
     examples:
       - astro device verify radio
 
   - name: device rollback
     run: $ROS_WS/hw.sh device rollback
     level: setup
-    summary: Undo the last apply on one device kind.
-    notes: >-
-      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    summary: Undo the last device apply on one piece of hardware.
+    details: The kinds come from the vessel profile, each with its driver; hw.sh KIND VERB is the same.
     params:
-      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'A device kind of the vessel profile, e.g. radio; none opens a picker.'}
-      - {name: args, type: list, required: false, description: 'Extra options for the device driver''s verb, e.g. --verbose (astro device rollback KIND --help).'}
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: 'Which piece of hardware to restore, e.g. radio; leave empty to pick.'}
+      - {name: args, type: list, required: false, description: 'Extra options for that hardware, e.g. --verbose (astro device rollback KIND --help).'}
     examples:
       - astro device rollback radio
 
   - name: device kinds
     run: $ROS_WS/hw.sh device kinds
     level: setup
-    summary: The device kinds of the vessel profile with their driver, one per line.
+    summary: List the pieces of hardware the device commands can manage on this robot.
+    details: The vessel profile's device kinds with their driver, one per line.
 
   - name: net/share.sh
     run: $ROS_WS/net/share.sh
     level: setup
-    summary: Create a Samba network folder (interactive; run on the host). Its HOST.local name comes from setup.linux.sh --components mdns.
-    notes: Asks for the share name, user and password; mounts it at /mnt/NAME and keeps the login in ~/.smbcredentials.
+    summary: Share a folder on the network so teammates can open it (run it on the computer, not in a container).
+    notes: It asks for the share name, user and password. Its .local name comes from setup.linux.sh --components mdns.
+    details: Creates a Samba share, mounts it at /mnt/NAME and keeps the login in ~/.smbcredentials.
 
   - name: net/mesh.sh
     run: $ROS_WS/net/mesh.sh
     level: setup
-    summary: Join a WARP mesh with the code its owner sent, leave it, or own one on your Cloudflare account (run on the host).
-    notes: join and leave need only curl and sh; setup, invite, devices, revoke and teardown run cx mesh, or cx's standalone util without cx.
+    summary: Join a private network that links your computers over the internet, with the code its owner sent you; leave it, or run your own.
+    details: A Cloudflare WARP mesh. join and leave need only curl and sh; setup, invite, devices, revoke and teardown run cx mesh, or cx's standalone util without cx.

@@ -232,6 +232,13 @@ class EntryQualityTest(unittest.TestCase):
                     if param['type'] == 'str' and not picked:
                         self.assertTrue(param.get('free'), f'{where}: give choices/choices_from, or free: why typed')
 
+    def test_details_close_the_full_entry_and_never_the_list(self):
+        cmd = command(name='x', summary='Plain words.', details='topics.effort and config/x.yaml')
+        package = {'package': 'p', 'summary': '', 'commands': [cmd], 'path': ''}
+        self.assertEqual(astro_help.details(cmd)[-1], '    topics.effort and config/x.yaml')
+        self.assertNotIn('topics.effort', astro_help.text([package]))
+        self.assertIn('topics.effort', astro_help.text([package], exact=('p', 'x')))
+
     def test_needs_and_conflicts_are_lists_shown_in_details(self):
         cmd = command(name='x', needs=['nav', 'drive+controller'], conflicts=[{'drive': 'it holds the pins'}])
         self.assertEqual(cmd['needs'], ['nav', 'drive+controller'])

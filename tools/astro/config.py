@@ -20,6 +20,8 @@ else this machine's registry host. Its `astro:` section points at team files and
       field: {repo: OWNER/NAME, url: GIT_URL, dir: PATH, auto: true}  # optional: check/issue/sync/show (field.py)
       help: [PATH]                      # optional: more help.yaml files (~, ${VAR:-default}), each its own group
       bundle_next: 'TEXT {bundle}'      # optional: printed after `astro bundle`, {bundle} = the file
+      test_needs: [NAME]                # optional: stacks `astro test` starts first when down; a test's own
+                                        # `needs` in the tests file replaces it for that test
 """
 import datetime
 import importlib.util

@@ -13,7 +13,7 @@ help.yaml schema (unknown keys are ignored):
     commands:
       - name: boat_trial check  # display name
         run: ros2 run pkg boat_trial check   # command prefix (default: name)
-        summary: one line
+        summary: one plain sentence: what it does for you and when to use it (no config keys, topics or paths)
         level: core             # core (default) | setup: setup commands show only with --all
         host: ROLE|HOST         # optional: where it runs; `astro NAME` from elsewhere forwards it there
                                 # (astro on HOST RUN ..., printing "(on HOST)"); --here runs it here
@@ -22,7 +22,10 @@ help.yaml schema (unknown keys are ignored):
                                 # down, their needs too; NAME+OPTION starts it with that `with` option
         conflicts: [drive]      # optional: stacks astro stops first when up; {drive: why} says why
                                 # (--here or ASTRO_NO_AUTOSTART=1 skips both)
-        notes: optional text (safety, which host)
+        notes: optional, at most two short plain sentences: what you see when it works, the common mistake
+                                # and its fix, what to run next
+        details: optional; the technical part (config keys, topics, files, exit codes), shown only when the
+                                # entry is opened in the browser and at the end of `astro NAME --help`
         params:
           - name: --window      # "-x": option ("--x value", a bare switch when type bool;
                                 # a switch defaulting to true turns off as --no-x);
@@ -33,7 +36,8 @@ help.yaml schema (unknown keys are ignored):
             choices_from: 'CMD' # shell command, run here: one choice per line, optionally VALUE<TAB>about;
                                 # a missing required one is picked from that list on a terminal
                                 # (with default: auto, its first line is what auto finds)
-            description: one line   # core entries: at least 8 words and, unless a bool or choice, e.g. VALUE
+            description: one line   # what the value means in real terms; core entries: at least 8 words
+                                # and, unless a bool or choice, e.g. VALUE
             free: why it is typed   # a str with no choices: why it cannot be picked (issue text, a label)
             required: false     # positional params default to required
             form: option        # positional | option | switch | launch, overrides the inference
@@ -115,6 +119,7 @@ def parse(path):
         commands.append(dict(command, name=str(command['name']), run=str(command.get('run') or command['name']),
                              level=level, host=str(command.get('host') or ''),
                              summary=str(command.get('summary', '')), notes=str(command.get('notes') or ''),
+                             details=str(command.get('details') or ''),
                              ros=str(command.get('ros') or ''),
                              needs=[str(n) for n in command.get('needs') or []],
                              conflicts=[c if isinstance(c, dict) else str(c) for c in command.get('conflicts') or []],
@@ -372,7 +377,8 @@ class Picker:
 # ---- plain text -------------------------------------------------------------------------
 
 def details(command, paint=lambda code, s: s):
-    """The full description of one command: its command line(s), ros equivalent, notes, params, examples."""
+    """The full description of one command: its command line(s), ros equivalent, notes, params, examples,
+    then its technical details."""
     out = [paint('2', f'    $ {build(command, {})}')]
     if not command['run'].startswith('astro '):
         out.append(paint('2', f'    $ astro {command["name"]}{build(command, {})[len(command["run"]):]}'))
@@ -391,6 +397,7 @@ def details(command, paint=lambda code, s: s):
         out.append(f'    {param["name"]:<22} {param["type"]:<6} '
                    f'{param.get("description", "")}{choices}{paint("2", default)}')
     out.extend(paint('2', f'    e.g. {example}') for example in command['examples'])
+    out.extend(paint('2', '    ' + line) for line in wrap(command.get('details') or '', 88))
     return out
 
 
@@ -426,10 +433,7 @@ def text(packages, word=None, color=False, exact=None, levels=('core',)):
         width = min(max(len(h) for h in heads.values()), 40)
         for command in ordered:
             head = heads[command['name']]
-            if len(head) > width:                                 # a long usage: the summary goes below it
-                out.extend([f'  {head}', f'  {"":<{width}}  {command["summary"]}'])
-            else:
-                out.append(f'  {head:<{width}}  {command["summary"]}')
+            out.append(f'  {head:<{width}}  {command["summary"]}')   # one line per entry, long usages too
             if word or exact:
                 out.extend(details(command, paint))
         out.append('')
@@ -480,6 +484,7 @@ class Browser:
         self.values, self.word, self.status, self.focus = {}, '', '', 'list'
         self.row = self.param = self.top = self.cmd_top = 0
         self.examples = False
+        self.opened = None                    # the entry Enter opened (its details show), when it has no params
         self.detected = {}                    # (package, command, param) -> what auto finds ('' none)
         self.g = UNICODE if utf8() else ASCII
         self.color = {}
@@ -628,14 +633,16 @@ class Browser:
         return text
 
     def draw_detail(self, package, command, x, width, height):
-        """Name and summary, the param form (scrolled to the focus), its notes."""
+        """Name and summary, the param form (scrolled to the focus), its notes; once opened, its details."""
         header = [([(command['name'], curses.A_BOLD)], None)] + \
             [([(s, 0)], None) for s in wrap(command['summary'], width)] + [([('', 0)], None)]
         notes = [([(s, self.style('note'))], None) for s in wrap(command['notes'], width)]
+        opened = self.focus == 'params' or self.opened is command
+        technical = ' '.join(filter(None, (command.get('details'), command['ros'] and 'ros: ' + command['ros'])))
+        if technical and opened:              # the technical part only once the entry is opened
+            notes += [([('', 0)], None)] + [([(s, self.style('dim'))], None) for s in wrap(technical, width)]
         if stacks_note(command):
             notes = [([(s, self.style('dim'))], None) for s in wrap(stacks_note(command), width)] + notes
-        if command['ros']:
-            notes = [([(s, self.style('dim'))], None) for s in wrap('ros: ' + command['ros'], width)] + notes
         if notes:
             notes = [([('', 0)], None)] + notes
         if self.examples or not command['params']:
@@ -784,7 +791,7 @@ class Browser:
                     self.focus, self.param, self.examples = 'params', 0, False
                     self.detect(package, command)
                 else:
-                    self.status = 'No parameters: r runs it.'
+                    self.opened, self.status = command, 'No parameters: r runs it.'
             elif self.focus == 'params' and key == '\t':
                 self.param = (self.param + 1) % len(params)
             elif self.focus == 'params' and key == curses.KEY_BTAB:
