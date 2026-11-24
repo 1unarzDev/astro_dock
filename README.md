@@ -1,168 +1,138 @@
 # astro_dock
 
-A project-agnostic ROS 2 Jazzy container workspace and host tooling for robotics development. Startup uses
-prebuilt images from [`lunarzdev/astro`](https://hub.docker.com/r/lunarzdev/astro); application code lives in
-the mounted workspace (`src/`, gitignored) and rebuilds independently. Everything specific to one team or
-robot (fleet, network, hosts, device settings) lives in a profile set the user supplies, never here.
+A ROS 2 Jazzy container workspace and the `astro` tool for driving robots. It is general: everything about
+one team or robot (fleet, network, hosts, devices, tests) lives in a profile set and the team's own repos,
+never here.
 
-### Layout
+```bash
+astro up                           # start the robot's stacks, each on its host; waits until they publish
+astro rec start lean lake          # record a bag of the "lean" preset, labelled "lake"
+astro test still                   # run one test in this terminal (Ctrl-C sends neutral)
+astro apply still                  # write its result into the state file
+astro mark "wind picked up"        # a line in the day's log, also in the bag
+astro rec stop && astro down       # close the bag, stop the stacks
+```
 
-| Path | Responsibility |
-| --- | --- |
-| [`.devcontainer/`](.devcontainer/) | Images, Compose adapters (Linux, NVIDIA, Jetson, Raspberry Pi, immutable hosts, Windows, macOS), shell setup, validation |
-| [`setup.linux.sh`](setup.linux.sh), `setup.mac.sh`, `setup.windows.bat` | Host setup in stages (clock, Docker, devices, Compose adapter, repos, ...) |
-| [`hw.sh`](hw.sh), [`devices/`](devices/) | Device drivers and fleet tooling driven by a profile set |
-| [`net/`](net/) | mDNS, shared folder and WARP mesh helpers |
-| [`.agents/`](.agents/) | Coding-agent hook dispatcher (see [`AGENTS.md`](AGENTS.md)) |
-| [`src/ros_tcp_endpoint`](https://github.com/MHSeals/ROS-TCP-Endpoint) | Submodule: ROS connection to the Unity simulator ([`crane_sim`](https://github.com/1unarzDev/crane_sim)) |
-| [`tests/`](tests/) | Unit tests and the fixture profile set (`tests/data/profiles`) |
+`astro help` browses every command (astro's and each package's), `astro help --list` prints them all, and
+`astro VERB --help` explains one, with the plain ROS 2 command it runs.
 
-| Image tag | Platform / stack | Purpose |
-| --- | --- | --- |
-| `core` | AMD64 / ARM64, Ubuntu 24.04 | General ROS development and MAVROS |
-| `cuda` | AMD64, Ubuntu 24.04, CUDA / ZED | NVIDIA desktop development and cameras |
-| `jetson-jp6-jazzy` | ARM64, JetPack 6 / L4T R36, Jazzy from source, ZED | Orin camera / GPU host |
-| `sitl` | AMD64, ArduPilot | Simulated flight controller (`sitl` Compose profile) |
-
-Only JetPack 6 is supported; JetPack 5 (Foxy) tooling lives on the `legacy/jp5-foxy` branch. The `dev` service
-runs as `roboboat` in `/home/roboboat/roboboat_ws` with the repository mounted as its workspace.
-
-### Setup
+## Setup
 
 ```bash
 git clone --recurse-submodules https://github.com/1unarzDev/astro_dock.git && cd astro_dock
-./setup.linux.sh --dry-run        # preview, then run without --dry-run
-```
-
-`setup.linux.sh` asks before each stage; `--components clock,docker,devices,compose` selects stages and
-`--non-interactive --yes` provisions unattended. An NVIDIA driver must already be installed when needed. On
-Windows or macOS use `setup.windows.bat` (`/y` for unattended) or `./setup.mac.sh` with Docker Desktop running.
-Then, with Node.js and the Dev Container CLI:
-
-```bash
+./setup.linux.sh --dry-run          # preview the stages, then run without --dry-run
 .devcontainer/prebuild.sh
 devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash
 ```
 
-`prebuild.sh` copies the host's adapter to the ignored `docker-compose.override.yml` and writes
-`.devcontainer/.env`. Container names default to generic values (`astro_dev`, alias `astro`, config directory
-`astro`) unless the profile's `hosts.yaml` sets `container:`; `ASTRO_CONTAINER`, `ASTRO_ALIAS` and
-`ASTRO_CONFIG_DIR` in the environment win. `~/.config/$ASTRO_CONFIG_DIR` is bind-mounted so operator config
-survives rebuilds. `config/run.yaml` (layered with the operator's `run.yaml` and `ASTRO_RUN_CONFIG`) sets the
-ROS domain, discovery range, data root and transport; `.devcontainer/run_env.py` loads it strictly.
+`setup.linux.sh` asks before each stage (`--components clock,docker,devices,compose` picks some,
+`--non-interactive --yes` runs unattended). On Windows or macOS use `setup.windows.bat` or `./setup.mac.sh`
+with Docker Desktop running. `prebuild.sh` picks this host's Compose adapter and writes `.devcontainer/.env`.
 
-### Usage
+The container's `dev` service runs as `roboboat` in `/home/roboboat/roboboat_ws`, with this repository
+mounted as the workspace. `~/.config/$ASTRO_CONFIG_DIR` (default `astro`; a profile's `container:` can
+rename it) is mounted too, so operator config survives a rebuild.
+On the host, put `tools/bin` on `PATH` to use `astro` outside the container.
 
-Add ROS packages under `src/` and build from the workspace root (`colcon_defaults.yaml` makes it a
-symlink-install). `astro help` (or `help`) in a container shell browses the commands that astro and each
-package describe in a `help.yaml`. `astro-ros-install <name>` installs a ROS, apt or `pip:` package into the running container;
-persist it in [`packages.txt`](.devcontainer/packages.txt),
-[`jetson-packages.txt`](.devcontainer/jetson-packages.txt) or [`requirements.txt`](.devcontainer/requirements.txt).
+Then point the machine at your team's profile set and check what it found:
 
 ```bash
-colcon build --symlink-install
-ASTRO_ROSDEP_INSTALL=1 .devcontainer/postcreate.sh   # after adding packages
+astro profile sync URL REF          # records the profile repo and ref in ~/.config/astro/profiles.env
+astro whoami                        # this machine's host, vessel and station, and how they were found
+astro secrets check                 # missing secret names (never values)
 ```
 
-**Simulation:** run `crane_sim` on the host and the endpoint in the container
-(`ros2 run ros_tcp_endpoint default_server_endpoint --ros-args -p ROS_IP:=0.0.0.0 -p ROS_TCP_PORT:=10000`), and
-enable `use_sim_time` for nodes that read the simulator's `/clock`. ArduPilot SITL runs as the `sitl` Compose
-profile (`docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.override.yml --profile sitl up -d sitl`).
+## astro
 
-**DDS:** the domain is the vessel's `ROS_DOMAIN_ID` (from its network env, via prebuild), else 0;
-`ASTRO_ROS_DOMAIN_ID` overrides. Shells load [`config/fastdds.xml`](config/fastdds.xml), and on a vessel's
-subnet `ros_net` adds unicast static peers.
+`astro` composes plain ROS 2 and holds no robot facts. The vessel profile's `astro:` section points at the
+team's files (tests, bag presets, state file, stacks, field repo).
 
-**Clock:** containers share the host clock. `./setup.linux.sh --components clock` configures chrony
-(`ASTRO_NTP_SERVER` / `ASTRO_NTP_ALLOW`; the value `lan` reads the vessel's network env and time-server role).
-
-### astro
-
-`astro` ([`tools/`](tools/), on `PATH` in every container shell; on the host add `tools/bin` to `PATH`) is the
-one high-level robot tool. It only composes plain ROS 2, and `astro help` shows the ROS equivalent of each verb.
-
-```bash
-astro up                           # every default stack on its host, in order; waits for their ready topics
-astro rec start lean lake          # bag (mcap, 300 s splits) of a preset's topics
-astro test status                  # what is applied, measured, stale, aborted or pending; and the next step
-astro test still                   # one test, in this terminal; Ctrl-C sends neutral
-astro apply still                  # write its result into the state file (backup, check, live parameters)
-astro mark "wind picked up"        # a log line, also published on the events topic (so it is in the bag)
-astro rec stop && astro rec ls     # each bag with the log lines inside it
-astro down                         # stop the stacks, reverse order (SIGINT first)
-```
-
-`astro up` prints one line per stack, from the operator laptop or any machine that reaches the hosts:
-
-```text
-sensors     up      boat-computer  /odom/local 50Hz /mavros/rc/in 10Hz
-perception  up      boat-camera    /points 10Hz /front/zed_node/rgb/color/rect/camera_info 15Hz
-drive       up      boat-computer  /command_mux/state 1Hz /thrusters/pwm 50Hz
-```
-
-A stack runs on its host in the dev container, in a private tmux server (`tmux -L astro`, never the default
-one) when the container has tmux, else under `setsid`; so an ssh drop never stops it. `astro ps` shows each
-stack's state, uptime, ready-topic rates and log; `astro logs NAME -f` follows its log
-(`DATA/DATE/stacks/NAME.log`). A test, by contrast, runs in your terminal (`astro on HOST astro test NAME`):
-if the link drops, the test stops and the drive's command timeout sends neutral.
-
-| Verb | Does |
+| Commands | What they do |
 | --- | --- |
-| `on HOST [cmd]` | ssh to a registry host (name or unique part of it), `docker exec` into its dev container; a vessel without ssh hosts (the sim) runs on this machine with its environment |
-| `up [NAMES] [--with OPT]`, `down [NAMES]`, `ps`, `logs NAME [-f]` | the vessel's stacks (`astro.stacks`): start each on its host and wait for its ready topics, stop (SIGINT, then SIGTERM), list, tail |
-| `status [--watch]` | nodes, the last message on each topic of the tests file, recording, last log lines, next test |
-| `rec start [preset] [label]`, `rec stop`, `rec ls` | `ros2 bag record` into `DATA/DATE/bags/HHMMSS-label/` |
-| `mark TEXT`, `log [-n N]` | the day's log, `DATA/DATE/log.txt`: `HH:MM:SS  kind    message` |
-| `test list`, `test status`, `test NAME [--space S] [--amp A]` | run a test or group; each prints its control layer, old -> new and the exact apply command; results in `DATA/DATE/results/` |
-| `apply RESULT`, `undo` | write a result (a test name means its latest) into the state file with a timestamped backup, run the profile's check (rolled back on refusal), set the live ROS parameters; undo restores the newest backup |
-| `bundle [--bags]` | state, tests file, today's results and log (and bags) in one tgz; then prints `astro.bundle_next` |
-| `sim up\|down\|status\|check [args]` | the sim profile's world backend |
-| `check NAME [--list]` | a field checklist (`checklists/NAME.md`): runs each item's `` check: `CMD` ``, asks y/n for the rest on a terminal; ticks in the session's `checks.yaml` |
-| `issue TEXT [--label L]` | a GitHub issue on the field repo with the time, vessel, bag and last log lines; queued offline |
-| `sync`, `show [DATE]` | copy the day's log, results (no raw samples) and bag index into the field repo's session folder, commit, push, file queued issues; print a session |
-| `help [WORD]`, `VERB --help` | the help.yaml browser and details |
-| `NAME [args]` | any package's help.yaml command (longest name match), e.g. `astro mix 0.5 0 0` |
+| `up [NAMES] [--with OPT]`, `down`, `ps`, `logs NAME [-f]` | Start, stop, list and tail the vessel's stacks. Each runs on its host in the dev container (private `tmux -L astro`, else `setsid`), so an ssh drop never stops it |
+| `on HOST [cmd]` | A shell or one command in a host's dev container (ssh + `docker exec`) |
+| `status [--watch]` | Nodes, the latest message on each test topic, recording, last log lines, next test |
+| `rec start [PRESET] [LABEL]`, `rec stop`, `rec ls` | Record a bag (mcap, 300 s splits); list today's bags with the log lines inside each |
+| `mark TEXT`, `log [-n N]` | Add to, or print, the day's log |
+| `test list`, `test status`, `test NAME [--space S]` | Run a test or group in this terminal. Each prints its control layer, old -> new and the exact apply command |
+| `apply RESULT`, `undo` | Write a result into the state file (backup first, checked, rolled back on refusal), then set the live parameters; `undo` restores the newest backup |
+| `bundle [--bags]` | The state file, today's results and log (and bags) in one tgz, for the sim |
+| `sim up\|down\|status\|check` | The sim vessel's world; then `astro on sim` works like a boat |
+| `check NAME`, `issue TEXT`, `sync`, `show [DATE]` | The field log: checklists, issues, and the day's log and results pushed to the field repo |
+| `NAME [args]` | Any package command from a `help.yaml`, e.g. `astro mix 0.5 0 0` |
 
-astro holds no robot facts. The vessel profile (resolved like `./hw.sh whoami`; `ASTRO_VESSEL` overrides) has an
-`astro:` section that points at the team's files:
+A **stack** runs in the background on its host. A **test** runs in your terminal: if the link drops, the
+test stops and the drive's command timeout brings neutral.
+
+### Where things are
+
+| What | Where |
+| --- | --- |
+| Day's log (`HH:MM:SS  kind  message`) | `DATA/DATE/log.txt` |
+| Bags | `DATA/DATE/bags/HHMMSS-LABEL/` |
+| Test results (small YAML) | `DATA/DATE/results/` |
+| Stack logs | `DATA/DATE/stacks/NAME.log` |
+| Bundles | `DATA/DATE/bundle-HHMMSS.tgz` |
+| The one file `apply` writes | the profile's `astro.state` |
+
+`DATA` is `$ASTRO_DATA`, else the profile's `astro.data`, else `bags/` in the workspace.
+
+### The profile's astro section
 
 ```yaml
 astro:
-  tests: PKG/config/tests.yaml      # procedures: topics, axes, spaces, tests, groups (package-relative)
-  bags: PKG/config/bags.yaml        # rec presets: presets: {NAME: [topics] | all}, exclude: REGEX
+  tests: PKG/config/tests.yaml      # test procedures: topics, axes, spaces, tests, groups
+  bags: PKG/config/bags.yaml        # rec presets: {NAME: [topics] | all}
   state: ~/.config/TEAM/state.yaml  # the one file apply writes
-  check: ros2 run PKG config_check  # validates the state (its path appended); exit 0 = ok
-  events: /events                   # every log line is published here (std_msgs/String)
-  data: null                        # data root (workspace-relative); else $ASTRO_DATA
-  state_env: null                   # on/sim also export the state path under this name (always ASTRO_STATE)
-  sim: null                         # the sim profile's world backend command
-  help: [PATH]                      # more help.yaml files, each its own group (~, ${VAR:-default})
+  check: ros2 run PKG config_check  # validates the state (path appended); exit 0 = ok
+  events: /events                   # every log line is also published here
+  data: null                        # data root; else $ASTRO_DATA
+  sim: null                         # the sim backend command (sim profile)
+  help: [PATH]                      # more help.yaml files, each its own group
   bundle_next: 'TEXT {bundle}'      # printed after astro bundle
-  field: {repo: OWNER/NAME, url: GIT_URL, dir: ~/.local/share/astro/field, auto: true}   # the field log
-  stacks:                           # what `astro up` starts, in this order
+  field: {repo: OWNER/NAME, url: GIT_URL, dir: ~/.local/share/astro/field, auto: true}
+  stacks:                           # what astro up starts, in order
     drive: {host: ROLE|HOST, run: 'ros2 launch PKG drive.launch.py', ready: [/topic], needs: [sensors],
-            default: true, with: {controller: 'controller:=true'}}   # run: null = started elsewhere (waited for)
+            default: true, with: {controller: 'controller:=true'}}   # run: null = started elsewhere
 ```
 
-Test types are generic (`still`, `couple`, `speed`, `steps`, `nav2`); the tests file names the topics, axes, keys
-and live parameters. A result records the upstream keys it ran on, so `astro test status` marks it stale once
-one of them changes. **Sim backend contract:** `astro sim VERB` runs the sim profile's `astro.sim` command
-(`~` and `${VAR:-default}` expanded) as `CMD up|down|status|check [args]` with the profile's `ROS_DOMAIN_ID`,
-`ASTRO_DATA` and `ASTRO_STATE` exported and the terminal passed through. Any script that implements those three
-verbs (and `check`, its readiness check) and starts the world plus its ROS bridge on that `ROS_DOMAIN_ID` works; then `astro on sim` is used
-exactly like a boat.
+**Tests.** The test types are generic (`still`, `couple`, `speed`, `steps`, `nav2`); the tests file names the
+topics, axes, state keys and live parameters. A result records the keys it ran on, so `astro test status`
+marks it stale when one of them changes.
 
-**Field log:** `astro.field` names a git repo of `checklists/` and `sessions/DATE-LABEL/` folders (the label is an
-existing folder's, else the day's first `rec start` label, else `session`); its issues are the to-do list.
-astro files an `auto` issue only when a test aborts with an error, an `astro up` stack fails or the check
-refuses an apply. A repeat of an open one (same kind, name and first error line, numbers ignored) adds at most
-one comment an hour instead, and at most 5 are filed a day. `auto: false` turns them off for a vessel;
-`ASTRO_FIELD=off` turns off all of the field log's network calls (the tests set it).
+**Sim.** `astro sim VERB` runs the profile's `astro.sim` command as `CMD up|down|status|check [args]`, with
+the sim profile's `ROS_DOMAIN_ID`, `ASTRO_DATA` and `ASTRO_STATE` exported. Any script with those verbs that
+starts a world and its ROS bridge works.
 
-### Device tooling and profiles
+**Field log.** `astro.field` names a git repo with `checklists/` and `sessions/DATE-LABEL/`. `astro sync`
+copies the day's log, results and a bag index there. astro files an `auto` issue when a test aborts with an
+error, a stack fails to come up or the check refuses an apply; a repeat adds at most one comment an hour,
+and at most 5 issues are filed a day. `auto: false` turns this off for a vessel, `ASTRO_FIELD=off` turns off
+all its network calls.
 
-`./hw.sh` drives a robot's network devices and computers from a profile set:
+## Profiles, devices and hosts
+
+astro_dock ships no profiles. A profile set is a directory of profiles: a fleet, its vessels and stations,
+each child's YAML merged over its parent's (strict: unknown or duplicate keys fail with file and line).
+[`tests/data/profiles`](tests/data/profiles) is a complete example. Without one, this is a plain ROS
+workspace.
+
+| Command | Does |
+| --- | --- |
+| `astro whoami`, `astro env [KEY]`, `astro profile show` | Which host and vessel this is; the network env or one of its values; the merged profile |
+| `astro device KIND VERB` | A device kind's `status`, `plan`, `verify` (read only), `apply` (typed confirmation; network changes roll back unless verified) or `rollback` |
+| `astro station take`, `astro station release` | Make this computer the operator station, or stop that |
+| `astro hot REPO [--dry-run]` | Push a repo's working tree to the hosts that run it and build there (LAN only) |
+| `astro build`, `astro overlay PATH`, `astro pyenv PATH` | Build the workspace, or a worktree as an overlay, or run a worktree's Python from source |
+
+Secrets live in `~/.config/astro/secrets.env` (mode 600, outside any git tree); environment beats secrets
+beats profile.
+
+<details><summary>The low layer: hw.sh</summary>
+
+These commands run [`hw.sh`](hw.sh), the device and fleet script underneath astro. You rarely need it
+directly; `./hw.sh KIND --help` shows a device kind's details. Its usage:
 
 ```text
 hw.sh [--vessel V] [--host H] KIND VERB [ARGS]   (KIND VERB --help for details)
@@ -180,48 +150,40 @@ hw.sh build [--ws DIR] [--container NAME] [-- ARGS] the workspace's colcon build
 hw.sh image [--pull] [--local]   the dev image the Compose config names (--pull: when the registry has a newer one; --local: the local image built on it)
 ```
 
-Each device kind (`hosts/fleet`, `jetson/l4t`, `lidar/vlp16`, `radio/airmax`, `router/ddwrt` under
-[`devices/`](devices/)) has `status`, `plan` and `verify` (read only), `apply` (typed confirmation; network
-changes roll back on a timer unless verified) and `rollback`. `./hw.sh KIND --help` lists a kind's verbs.
+</details>
 
-- **Profile set:** `ASTRO_PROFILES=DIR`, or `./hw.sh profile sync URL REF` to check a git repository out at
-  `profiles/` (gitignored); `~/.config/astro/profiles.env` records it. With no profile set, astro_dock is a
-  generic ROS workspace and `hw.sh` lists no kinds.
-- **Layout:** one directory per profile; the fleet has no `extends:`, vessels and stations extend it, and a
-  child's YAML merges over its parent's (strict: unknown or duplicate keys fail with file and line). Each
-  `<kind>.yaml` names a driver. [`tests/data/profiles`](tests/data/profiles) is a complete example.
-- **Resolution:** the machine finds its registry host by hostname or MAC; `--host` and `--vessel` override.
-  Station membership is the `operator` role.
-- **Secrets:** `~/.config/astro/secrets.env` (`ASTRO_SECRETS` overrides), mode 600 and outside any git tree;
-  `./hw.sh secrets check` lists missing key names. Precedence: environment > secrets > profile.
+## Containers and images
 
-### Images and deployment
+| Image tag | Platform | For |
+| --- | --- | --- |
+| `core` | AMD64 / ARM64, Ubuntu 24.04 | General ROS development and MAVROS |
+| `cuda` | AMD64, CUDA / ZED | NVIDIA desktops and cameras |
+| `jetson-jp6-jazzy` | ARM64, JetPack 6 | Orin camera and GPU host |
+| `sitl` | AMD64, ArduPilot | Simulated flight controller (`sitl` Compose profile) |
 
-[`images.yml`](.github/workflows/images.yml) builds and publishes the images on native runners;
-[`container-checks.yml`](.github/workflows/container-checks.yml) validates adapters, scripts and policy on
-every PR. Runtime tags rotate with `-prev` / `-old` rollback generations. `./hw.sh jetson apply user@host`
-validates the latest Jetson candidate on a JetPack 6 host and promotes it. For a standalone Jetson:
+Images come from [`lunarzdev/astro`](https://hub.docker.com/r/lunarzdev/astro), built by
+[`images.yml`](.github/workflows/images.yml); tags keep `-prev` and `-old` rollbacks. Build with
+`colcon build` (symlink install); `astro-ros-install NAME` adds a ROS, apt or `pip:` package to the running
+container, and [`packages.txt`](.devcontainer/packages.txt) or
+[`requirements.txt`](.devcontainer/requirements.txt) keeps it. `config/run.yaml` sets the ROS domain,
+discovery range, data root and DDS transport. `./setup.linux.sh --components clock` sets up chrony.
 
-```bash
-.devcontainer/prebuild.sh
-docker compose -p "$(basename "$PWD")_devcontainer" -f .devcontainer/docker-compose.yml \
-  -f .devcontainer/docker-compose.override.yml up -d --pull always dev
-```
+| Path | Holds |
+| --- | --- |
+| [`.devcontainer/`](.devcontainer/) | Images, Compose adapters per platform, shell setup |
+| [`tools/`](tools/) | `astro` |
+| [`hw.sh`](hw.sh), [`devices/`](devices/) | Device drivers and fleet tooling, driven by a profile set |
+| [`net/`](net/) | mDNS, shared folder and WARP mesh helpers |
+| [`.agents/`](.agents/) | Coding-agent hooks ([`AGENTS.md`](AGENTS.md)) |
+| [`src/ros_tcp_endpoint`](https://github.com/MHSeals/ROS-TCP-Endpoint) | Submodule: the ROS bridge to a Unity simulator |
+| [`tests/`](tests/) | Unit tests and the example profile set |
 
-A local `core` build adds `-f .devcontainer/docker-compose.build.yml` and runs `build dev`.
-
-### Coding agents
-
-Claude Code and Codex run [`.agents/hook.py`](.agents/hook.py), which passes each session, prompt, command and
-edit event to every workspace package's `agent_hook.py`. See [`AGENTS.md`](AGENTS.md).
-
-### Development
-
-Keep changes scoped and update this README when setup, usage or architecture changes. Tests:
+## Development
 
 ```bash
 python3 -m unittest discover -s tests
-tests/smoke.sh                 # contacts nothing; gates landing
+tests/smoke.sh                 # contacts nothing; must pass before landing
 ```
 
-Run ROS probes in an isolated container or domain without attached actuators.
+Run ROS probes in an isolated container or domain with no actuators attached. Update this README when
+setup or usage changes.
