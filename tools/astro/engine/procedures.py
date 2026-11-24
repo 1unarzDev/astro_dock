@@ -175,7 +175,8 @@ def finish(ctx, name, test, base, outcome, state, defaults):
     if result.get('changes'):
         _, diffs = applying.changed(state, defaults, result['changes'], ctx.spec.axes)
         for key, old, new in diffs:
-            ctx.out(f'  {key}  {fmt(old)} -> {fmt(new)}')
+            if old != new:
+                ctx.out(f'  {key}  {fmt(old)} -> {fmt(new)}')
         ctx.out(f'  apply: astro apply {name}    (result {path})')
     else:
         ctx.out(f'  result {path} (nothing to apply)')
@@ -460,10 +461,16 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
                     + (f' t95={rise:.2f}s' if rise is not None else ''))
     runner.hold(neutral(n), coast_s)
     prefix = target.get('key', 'characterization')
-    curves, parts = {}, []
+    curves, parts, unclean = {}, [], []
     for sign in (1, -1):
         name = f'{axis}{"+" if sign > 0 else "-"}'
-        curve = fit.speed_curve(points[sign])
+        kept, dropped = monotone(points[sign])
+        for v, level in dropped:
+            ctx.out(f'  warning: {name} e={level:g} moved {v:.3f} m/s, slower than a lower level: left out of the fit '
+                    f'(blocked, grounded or taken over? check the bag; run it again for a clean curve)')
+        if dropped:
+            unclean.extend(f'{name}@{level:g}' for _, level in dropped)
+        curve = fit.speed_curve(kept)
         if not curve:
             raise Abort(f'{name}: no level moved the boat forward along the axis ({points[sign]})')
         curves[name] = curve
@@ -481,12 +488,26 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
         changes.append(dict(key=f'{prefix}.version', value=target['version']))
     for name, c in curves.items():
         parts.append(f'{name} d1={c["d1"]:.3g} d2={c["d2"]:.3g}')
-    summary = (' | '.join(parts) + (f' t95={rise:.2f}s' if rise else '') +
+    summary = (' | '.join(parts) + (f' dropped {",".join(unclean)}' if unclean else '') +
+               (f' t95={rise:.2f}s' if rise else '') +
                f' vmax={velocity:.3g} (measured at e={max(levels):g}; curve at e=1: {extrapolated:.3g})')
     return dict(summary=summary, changes=changes, live=list(target.get('live') or []),
                 measured=dict(points={k: [list(p) for p in v] for k, v in
                                       (('+', points[1]), ('-', points[-1]))}, t95=rises,
-                              extrapolated_velocity=extrapolated))
+                              extrapolated_velocity=extrapolated, dropped=unclean))
+
+
+def monotone(points):
+    """(kept, dropped) of (speed, level) points: a level slower than a lower level's speed is dropped (the boat
+    was blocked or taken over); faster levels must not go slower."""
+    kept, dropped, fastest = [], [], -math.inf
+    for v, level in sorted(points, key=lambda p: p[1]):
+        if v < fastest:
+            dropped.append((v, level))
+        else:
+            kept.append((v, level))
+            fastest = v
+    return kept, dropped
 
 
 def steps(ctx, runner, test, state, defaults, room, amplitude):
