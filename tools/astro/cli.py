@@ -114,9 +114,29 @@ def cmd_test(s, args):
     from .engine.runner import Runner
     ctx = procedures.Context(spec, s.vessel.state(), s.root, s.events, s.vessel.sim_time(), Runner)
     ctx.software = s.software()
+    group = args.name not in spec.tests
+    waiting = []                          # (test, its changes): measured here or before, not yet applied
     for name in names:
+        if group:
+            state, defaults = s.state(), spec.defaults()
+            result = results.latest(s.root, name)
+            status_now = results.classify(result, state, defaults)
+            if status_now == 'measured' and result.get('changes'):
+                waiting.append((name, result['changes']))
+            if status_now in ('measured', 'applied'):
+                continue                  # already measured on the current state
+            blocking = [w for w, changes in waiting if any(results.touches(c['key'], spec.tests[name].get('upstream'))
+                                                           for c in changes)]
+            if blocking:
+                print(f'apply {" and ".join(blocking)} first ({name} depends on them): '
+                      + '; '.join(f'astro apply {w}' for w in blocking)
+                      + f', then run astro test {args.name} again (it resumes at {name})')
+                return 0
         try:
-            procedures.run(ctx, name, args.space, args.amp)
+            path = procedures.run(ctx, name, args.space, args.amp)
+            done = config.load_yaml(path) or {}
+            if done.get('changes'):
+                waiting.append((name, done['changes']))
         except procedures.Abort as error:
             print(f'{name}: aborted: {error}', file=sys.stderr)
             return 1

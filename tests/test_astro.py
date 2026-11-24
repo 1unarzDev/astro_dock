@@ -92,14 +92,6 @@ class Response(unittest.TestCase):
         self.assertTrue(coasted(steady))
         self.assertFalse(coasted(slowing))
 
-    def test_effective_column_uses_the_signed_matrix(self):
-        plus, minus = list(IDENTITY), list(IDENTITY)
-        plus[3 * 1 + 2], minus[3 * 0 + 2] = 0.5, 0.3       # C[sway, yaw] and C-[surge, yaw]
-        command = fit.command_for(0, 1, 0.5, (0.1, -0.2))   # surge+ with sway +0.05, yaw -0.1
-        self.assertEqual(command, [0.5, 0.05, -0.1])
-        column = fit.effective_column(plus, minus, command, 0, 1, 0.5)
-        numpy.testing.assert_allclose(column, [1 - 0.3 * 0.2, 0.1, -0.2])
-
 
 class Apply(unittest.TestCase):
     def setUp(self):
@@ -260,6 +252,72 @@ class Results(unittest.TestCase):
         self.assertEqual(len(lengths), 1)
         self.assertEqual(set(hold['samples']), {'t', 'vx', 'vy', 'wz', 'yaw', 't_sensor'})
         self.assertAlmostEqual(len(hold['samples']['t']) / (hold['end'] - hold['settle']), 30, delta=6)
+
+
+def mixed_wrench(command, plus, minus):
+    """The body wrench a command makes through a thruster stack's law: each axis decoupled alone through its
+    signed column, mixed per thruster, thrust e|e| summed per thruster, desaturated; wrench = M^T T / 4."""
+    mixer = ((-1.0, 1.0, 1.0), (-1.0, -1.0, -1.0), (1.0, -1.0, 1.0), (1.0, 1.0, -1.0))
+    thrust = [0.0] * 4
+    for k, value in enumerate(command):
+        matrix = plus if value >= 0 else minus
+        part = [matrix[3 * row + k] * value for row in range(3)]
+        for i, row in enumerate(mixer):
+            e = sum(g * p for g, p in zip(row, part))
+            thrust[i] += e * abs(e)
+    peak = max(1.0, *(math.sqrt(abs(f)) for f in thrust))      # uniform desaturation of the efforts
+    efforts = [math.copysign(math.sqrt(abs(f)), f) / peak for f in thrust]
+    thrust = [e * abs(e) for e in efforts]
+    return [sum(mixer[i][k] * thrust[i] for i in range(4)) / 4 for k in range(3)]
+
+
+class PlantRunner(FakeRunner):
+    """FakeRunner whose steady velocity is a hull's response to the mixed wrench of the live matrices."""
+    HULL = numpy.array([[1.0, 0.0, 0.0], [0.15, 1.0, 0.0], [-0.12, 0.0, 1.0]])   # cross coupling to fix
+
+    def __init__(self, *args):
+        super().__init__()
+        self.live, self.calls = {'decoupling': list(IDENTITY), 'decoupling_negative': list(IDENTITY)}, []
+
+    def set_params(self, node, values):
+        self.calls.append(dict(values))
+        self.live.update({k: list(v) for k, v in values.items()})
+
+    def hold(self, command, seconds):
+        wrench = mixed_wrench(command, self.live['decoupling'], self.live['decoupling_negative'])
+        return super().hold(list(self.HULL @ numpy.array(wrench)), seconds)
+
+
+class Couple(unittest.TestCase):
+    def test_the_measured_column_applied_zeroes_the_cross_response(self):
+        from astro.engine import procedures
+        live = [{'node': '/driver', 'param': 'decoupling', 'key': 'decoupling'},
+                {'node': '/driver', 'param': 'decoupling_negative', 'key': 'decoupling_negative'}]
+        with tempfile.TemporaryDirectory() as tmp:
+            tests = Path(tmp, 'tests.yaml')
+            tests.write_text(yaml.safe_dump({
+                'topics': {'effort': '/e', 'odom': '/o'}, 'axes': AXES, 'spaces': {'large': {'amp': 0.5}},
+                'tests': {'couple-surge': {'type': 'couple', 'axis': 'surge', 'holds': 8, 'tolerance': [0.01, 0.01],
+                                           'baseline_s': 1, 'settle_s': 4, 'measure_s': 2, 'min_response': 0.01,
+                                           'apply': {'key': 'decoupling', 'signed': 'decoupling_negative',
+                                                     'live': live}}}}))
+            state = Path(tmp, 'state.yaml')
+            state.write_text(yaml.safe_dump({'decoupling': IDENTITY, 'decoupling_negative': IDENTITY}))
+            runner = PlantRunner()
+            ctx = procedures.Context(procedures.Spec(tests), state, tmp, make_runner=lambda *a: runner,
+                                     out=lambda *a: None)
+            data = yaml.safe_load(procedures.run(ctx, 'couple-surge').read_text())
+        self.assertEqual(runner.live, {'decoupling': IDENTITY, 'decoupling_negative': IDENTITY})   # restored
+        self.assertEqual(set(runner.calls[0]), {'decoupling', 'decoupling_negative'})               # one request
+        plus, minus = list(IDENTITY), list(IDENTITY)
+        for change in data['changes']:
+            matrix = plus if change['key'] == 'decoupling' else minus
+            for row, value in enumerate(change['value']):
+                matrix[3 * row] = value
+        for sign in (1, -1):
+            v = PlantRunner.HULL @ numpy.array(mixed_wrench([0.5 * sign, 0, 0], plus, minus))
+            self.assertLess(abs(v[1] / v[0]), 0.012)
+            self.assertLess(abs(v[2] / v[0]), 0.012)
 
 
 class Lane(unittest.TestCase):

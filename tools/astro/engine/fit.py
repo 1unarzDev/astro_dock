@@ -138,17 +138,6 @@ class Search:
                     converged=bool(worst(best[1], self.tolerance) <= 1.0))
 
 
-def effective_column(plus, minus, command, axis, sign, amplitude):
-    """The decoupling column one command actually drives (flat row-major n x n matrices, the plus one
-    for a component >= 0, the minus one below), per unit of the main effort."""
-    n = len(command)
-    out = numpy.zeros(n)
-    for k, value in enumerate(command):
-        matrix = plus if value >= 0 else minus
-        out += numpy.array([matrix[n * row + k] for row in range(n)]) * value
-    return [float(v) for v in out / (sign * amplitude)]
-
-
 def command_for(axis, sign, amplitude, column, n=3):
     """Efforts: the main axis at sign*amplitude plus the column's cross efforts (e_k = c * e_main)."""
     command = [0.0] * n

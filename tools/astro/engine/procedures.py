@@ -284,53 +284,76 @@ def still(ctx, runner, test, state, defaults, room, amplitude):
 
 
 def couple(ctx, runner, test, state, defaults, room, amplitude):
+    """The decoupling column of one axis, measured as applied: each hold sets the candidate column live on
+    the driver (both signed matrices in one request) and commands the main axis alone, so the search's root
+    is the column to write. The original live matrices come back at the end, on abort and on Ctrl-C."""
     axes, target = ctx.spec.axes, test.get('apply') or {}
     j, n = axes.index(test['axis']), len(axes)
     key, signed = target.get('key'), target.get('signed')
     plus = applying.current(state, defaults, key)
-    minus = applying.current(state, defaults, signed, key) if signed else plus
+    minus = applying.current(state, defaults, signed, key) if signed else None
     if not isinstance(plus, list) or len(plus) != n * n:
         raise Abort(f'{key}: no {n}x{n} matrix in the state or the defaults')
+    live = {item.get('key') or item['param']: item for item in target.get('live') or []}
+    if key not in live or (signed and signed not in live):
+        raise Abort(f'apply.live must name the driver parameters of {key}' + (f' and {signed}' if signed else ''))
+    node = live[key]['node']
+    params = {1: live[key]['param'], -1: live[signed]['param'] if signed else None}
+    matrices = {1: [float(v) for v in plus], -1: [float(v) for v in minus] if signed else None}
+    cross = fit.cross_axes(j, n)
+    signs = (1, -1) if signed else (1,)
     tolerance = test.get('tolerance', [0.05, 0.05])
-    limit = max(0.0, float(test.get('headroom', 0.98)) / amplitude - 1.0)
     holds = int(test.get('holds', 4))
-    searches = {s: fit.Search(tolerance, float(test.get('probe', 0.15)), limit, holds) for s in (1, -1)}
+    searches = {s: fit.Search(tolerance, float(test.get('probe', 0.15)), float(test.get('limit', 1.0)), holds,
+                              start=tuple(matrices[s][n * k + j] for k in cross)) for s in signs}
     min_response = float(test.get('min_response', 0.03))
-    measured, count, total = [], 0, 2 * holds
-    while not all(search.done for search in searches.values()):
-        for sign in (1, -1):
-            search = searches[sign]
-            if search.done:
-                continue
-            count += 1
-            ctx.progress = f'hold {count}/{total}'
-            command = fit.command_for(j, sign, amplitude, search.column, n)
-            before, during, _, _, _ = _hold(ctx, runner, n, command, float(test.get('baseline_s', 2)),
-                                            float(test.get('settle_s', 4)), float(test.get('measure_s', 3)),
-                                            (axes[j], sign, amplitude))
-            delta = fit.response(before, during)
-            main, ratios = fit.cross_response(delta, j, sign)
-            if sign * delta[j] < min_response:
-                raise Abort(f'{axes[j]}{"+" if sign > 0 else "-"} moved {sign * delta[j]:.3f} '
-                            f'(under min_response {min_response:g}): too small to measure coupling')
-            measured.append(dict(sign=sign, column=[round(c + 0.0, 4) for c in search.column],
-                                 response=[round(v, 4) for v in delta], cross=[round(r, 4) for r in ratios]))
-            ctx.out(f'  {ctx.progress} {axes[j]}{"+" if sign > 0 else "-"} c={fmt([round(c, 4) for c in search.column])} '
-                    f'main={main:.3f} cross={fmt(list(ratios))}')
-            search.add(ratios)
-    runner.neutral()
+
+    def candidate(sign):
+        matrix = list(matrices[sign])
+        for k, value in zip(cross, searches[sign].column):
+            matrix[n * k + j] = float(value)
+        return matrix
+    original = {params[s]: matrices[s] for s in signs}
+    measured, count, total = [], 0, len(signs) * holds
+    try:
+        while not all(search.done for search in searches.values()):
+            for sign in signs:
+                search = searches[sign]
+                if search.done:
+                    continue
+                count += 1
+                ctx.progress = f'hold {count}/{total}'
+                runner.set_params(node, {params[s]: candidate(s) for s in signs})
+                command = fit.command_for(j, sign, amplitude, (0.0,) * len(cross), n)
+                before, during, _, _, _ = _hold(ctx, runner, n, command, float(test.get('baseline_s', 2)),
+                                                float(test.get('settle_s', 4)), float(test.get('measure_s', 3)),
+                                                (axes[j], sign, amplitude))
+                delta = fit.response(before, during)
+                main, ratios = fit.cross_response(delta, j, sign)
+                if sign * delta[j] < min_response:
+                    raise Abort(f'{axes[j]}{"+" if sign > 0 else "-"} moved {sign * delta[j]:.3f} '
+                                f'(under min_response {min_response:g}): too small to measure coupling')
+                measured.append(dict(sign=sign, column=[round(c + 0.0, 4) for c in search.column],
+                                     response=[round(v, 4) for v in delta], cross=[round(r, 4) for r in ratios]))
+                ctx.out(f'  {ctx.progress} {axes[j]}{"+" if sign > 0 else "-"} '
+                        f'c={fmt([round(c, 4) for c in search.column])} main={main:.3f} cross={fmt(list(ratios))}')
+                search.add(ratios)
+    finally:
+        runner.neutral()
+        try:
+            runner.set_params(node, original)
+        except Exception as error:      # noqa: BLE001 - say it, never hide the abort that brought us here
+            ctx.out(f'  WARNING: could not restore {node} {", ".join(original)} ({error}): restart the driver')
     changes, parts = [], []
-    for sign in (1, -1):
+    for sign in signs:
         best = searches[sign].result()
-        command = fit.command_for(j, sign, amplitude, best['column'], n)
-        column = [round(v + 0.0, 4) + 0.0 for v in fit.effective_column(plus, minus, command, j, sign, amplitude)]
+        searches[sign].column = best['column']
+        column = [round(v + 0.0, 4) + 0.0 for v in applying.column_of(candidate(sign), j)]
         name = f'{axes[j]}{"+" if sign > 0 else "-"}'
         parts.append(f'{name} cross={fmt(list(best["response"]))} '
                      f'{"converged" if best["converged"] else "best of " + str(best["holds"])}')
-        if sign > 0:
-            changes.append(dict(key=key, column=j, value=column))
-        elif signed:
-            changes.append(dict(key=signed, column=j, value=column, fallback=key))
+        changes.append(dict(key=key, column=j, value=column) if sign > 0 else
+                       dict(key=signed, column=j, value=column, fallback=key))
     return dict(summary=' | '.join(parts), measured=dict(holds=measured), changes=changes,
                 live=list(target.get('live') or []))
 

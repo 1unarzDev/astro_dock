@@ -96,6 +96,11 @@ def statuses(tests, data_root, state, defaults):
     return out
 
 
+def touches(key, upstream):
+    """Whether a changed key is (inside, or holds) one of the upstream keys."""
+    return any(key == u or key.startswith(u + '.') or u.startswith(key + '.') for u in upstream or ())
+
+
 def next_step(rows):
     """The next command: apply a waiting result, else run the first test not done."""
     for test, status, result in rows:

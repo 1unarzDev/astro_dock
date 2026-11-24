@@ -5,6 +5,7 @@ import math
 import time
 
 RATE_HZ = 20.0
+STALE_S = 0.5          # a hold stops when the newest odometry is older than this
 
 
 class Runner:
@@ -101,6 +102,29 @@ class Runner:
                 self.lane_log.append((self.now(), data.get(lane.get('field', 'input')), data.get(lane.get('cause', 'cause'))))
         self.node.create_subscription(String, lane['state'], state, qos)
 
+    def set_params(self, node, values, timeout=3.0):
+        """Set {name: list of floats} on ``node`` in one SetParameters request; raises when refused."""
+        from rcl_interfaces.srv import SetParameters
+        from rclpy.parameter import Parameter
+        clients = self.__dict__.setdefault('_param_clients', {})
+        if node not in clients:
+            clients[node] = self.node.create_client(SetParameters, f'{node.rstrip("/")}/set_parameters')
+        client = clients[node]
+        if not client.wait_for_service(timeout_sec=timeout):
+            raise RuntimeError(f'{node} has no set_parameters service (is the driver up?)')
+        request = SetParameters.Request(parameters=[
+            Parameter(name, Parameter.Type.DOUBLE_ARRAY, [float(v) for v in value]).to_parameter_msg()
+            for name, value in values.items()])
+        future = client.call_async(request)
+        end = time.monotonic() + timeout
+        while not future.done() and time.monotonic() < end:
+            self.rclpy.spin_once(self.node, timeout_sec=0.05)
+        if not future.done():
+            raise RuntimeError(f'{node} did not answer set_parameters')
+        refused = [r.reason for r in future.result().results if not r.successful]
+        if refused:
+            raise RuntimeError(f'{node} refused {", ".join(values)}: {"; ".join(refused)}')
+
     def wait_ready(self, timeout=10.0):
         """Until the clock runs and odometry arrives; False after ``timeout`` wall seconds."""
         end = time.monotonic() + timeout
@@ -119,6 +143,9 @@ class Runner:
             now = self.now()
             if now - t0 >= seconds:
                 return t0, now
+            if now - t0 > STALE_S and (not self.rows or now - self.rows[-1][0] > STALE_S):
+                self.neutral()
+                raise ValueError(f'odometry stopped (newest sample {now - self.rows[-1][0] if self.rows else now - t0:.1f} s old)')
             if now >= next_send:
                 self._send(self.command)
                 next_send = max(next_send + period, now)
