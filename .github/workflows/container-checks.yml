@@ -39,7 +39,11 @@ jobs:
       - name: Validate local Jetson promotion
         run: python3 .github/scripts/test-jetson-promotion.py
       - name: Validate the clock stage
-        run: .github/scripts/test-clock-stage.sh
+        # The runner image ships chrony in /usr/sbin, which setup.linux.sh finds outside PATH: remove it so the
+        # stubbed install path is exercised.
+        run: |
+          sudo apt-get purge -y -qq chrony >/dev/null 2>&1 || true
+          .github/scripts/test-clock-stage.sh
       - name: Validate the linger setup
         run: .github/scripts/test-linger-stage.sh
       - name: Validate the DDS address choice
