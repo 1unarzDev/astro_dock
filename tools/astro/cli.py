@@ -323,6 +323,9 @@ def cmd_test(s, args):
         finally:
             if recording:
                 rec.stop(s.vessel)
+    if waiting:                           # what this run measured comes first: apply it before anything else
+        print(f'next: astro apply {waiting[-1][0]}')
+        return 0
     rows = s.rows()
     print(f'next: {results.next_step(rows)}')
     return 0
