@@ -21,7 +21,7 @@ class Runner:
         self.node = rclpy.create_node('astro_test', parameter_overrides=[
             Parameter('use_sim_time', Parameter.Type.BOOL, bool(sim_time))])
         self.pub = self.node.create_publisher(Twist, command_topic, 10)
-        self.rows = []                    # (t, vx, vy, wz, yaw, x, y)
+        self.rows = []                    # (t, vx, vy, wz, yaw, x, y, header stamp)
         self.battery = None
         self.node.create_subscription(Odometry, odom_topic, self._odom, 20)
         if battery_topic:
@@ -37,8 +37,9 @@ class Runner:
         norm = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) if norm > 0.5 else None
         t = msg.twist.twist
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         self.rows.append((self.now(), t.linear.x, t.linear.y, t.angular.z, yaw,
-                          msg.pose.pose.position.x, msg.pose.pose.position.y))
+                          msg.pose.pose.position.x, msg.pose.pose.position.y, stamp))
 
     def _battery(self, msg):
         self.battery = msg.voltage

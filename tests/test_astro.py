@@ -202,6 +202,66 @@ class Status(unittest.TestCase):
             self.assertEqual(results.next_step(rows[4:]), 'astro apply speed-sway')
 
 
+class FakeRunner:
+    """A first-order boat on a fake clock: speed = level (per axis), tau 0.5 s, odometry at 50 Hz."""
+    battery = None
+
+    def __init__(self, *args):
+        self.t, self.v, self.rows, self.command = 0.0, [0.0, 0.0, 0.0], [], [0.0, 0.0, 0.0]
+
+    def now(self):
+        return self.t
+
+    def wait_ready(self):
+        return True
+
+    def gate_state(self, gate):
+        return True, None
+
+    def hold(self, command, seconds):
+        t0 = self.t
+        while self.t - t0 < seconds:
+            self.t = round(self.t + 0.02, 6)
+            self.v = [v + (c - v) * 0.02 / 0.5 for v, c in zip(self.v, command)]
+            self.rows.append((self.t, *self.v, 0.0, 0.0, 0.0, 1000 + self.t))
+        return t0, self.t
+
+    def window(self, t0, t1):
+        return [r for r in self.rows if t0 <= r[0] <= t1]
+
+    def neutral(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class Results(unittest.TestCase):
+    def test_speed_result_has_software_and_holds(self):
+        from astro.engine import procedures
+        with tempfile.TemporaryDirectory() as tmp:
+            tests = Path(tmp, 'tests.yaml')
+            tests.write_text(yaml.safe_dump({
+                'topics': {'effort': '/e', 'odom': '/o'}, 'axes': AXES,
+                'spaces': {'large': {'amp': 0.5, 'levels': [0.3, 0.6]}},
+                'tests': {'speed-surge': {'type': 'speed', 'axis': 'surge', 'baseline_s': 1, 'settle_s': 2,
+                                          'measure_s': 1, 'coast_s': 1, 'apply': {'key': 'c'}}}}))
+            ctx = procedures.Context(procedures.Spec(tests), Path(tmp, 'state.yaml'), tmp, make_runner=FakeRunner,
+                                     out=lambda *a: None)
+            ctx.software = {'repo': 'abc123', 'workspace': 'def456'}
+            data = yaml.safe_load(procedures.run(ctx, 'speed-surge').read_text())
+        self.assertEqual(data['software'], {'repo': 'abc123', 'workspace': 'def456'})
+        self.assertEqual([data[k] is not None for k in ('test', 'date', 'time')], [True] * 3)
+        self.assertEqual(list(data)[-1], 'holds')
+        self.assertEqual(len(data['holds']), 4)
+        hold = data['holds'][0]
+        self.assertEqual(hold['command'], {'axis': 'surge', 'sign': 1, 'level': 0.3, 'efforts': [0.3, 0.0, 0.0]})
+        lengths = {len(v) for v in hold['samples'].values()}
+        self.assertEqual(len(lengths), 1)
+        self.assertEqual(set(hold['samples']), {'t', 'vx', 'vy', 'wz', 'yaw', 't_sensor'})
+        self.assertAlmostEqual(len(hold['samples']['t']) / (hold['end'] - hold['settle']), 30, delta=6)
+
+
 class Verbs(unittest.TestCase):
     def test_help_on_a_dispatched_command_never_runs_it(self):
         import contextlib, io

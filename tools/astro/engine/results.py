@@ -30,7 +30,9 @@ def save(day_dir, result, now=None):
     directory = Path(day_dir) / 'results'
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f'{result["test"]}-{now:%H%M%S}.yaml'
-    result = dict(result, date=now.date().isoformat(), time=f'{now:%H:%M:%S}')
+    result = dict(result, date=result.get('date') or now.date().isoformat(), time=result.get('time') or f'{now:%H:%M:%S}')
+    if 'holds' in result:                 # raw samples last, so the file reads top-down
+        result['holds'] = result.pop('holds')
     path.write_text(yaml.safe_dump(json.loads(json.dumps(result)), sort_keys=False, width=110))
     return path
 

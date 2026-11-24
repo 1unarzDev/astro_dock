@@ -182,7 +182,7 @@ def neutral(n):
     return [0.0] * n
 
 
-def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s):
+def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s, main=None):
     """Neutral baseline, then the command for settle + measure; (baseline rows, measure rows, all, t_on, t_cut).
     The neutral lasts until the boat stops coasting: its velocity no longer changes (a steady current is
     allowed, so this works in a current where "below the noise" never comes), at most coast_max_s."""
@@ -193,7 +193,7 @@ def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s):
     b0 = b1 - baseline_s
     t_on, _ = runner.hold(command, settle_s)
     m0, t_cut = runner.hold(command, measure_s)
-    record(ctx, command, t_on, t_cut, runner.window(b0, t_cut))
+    record(ctx, main, command, t_on, t_cut, runner.window(t_on, t_cut))
     return runner.window(b0, b1), runner.window(m0, t_cut), runner.window(b0, t_cut), t_on, t_cut
 
 
@@ -212,11 +212,27 @@ def coasted(rows):
                for k in (1, 2, 3))
 
 
-def record(ctx, command, start, end, rows):
-    """The raw samples of one hold (from its baseline), for the result file."""
-    ctx.holds.append(dict(command=[round(float(v), 4) for v in command], start=round(start, 3), end=round(end, 3),
-                          samples={name: [round(float(r[k]), 4) for r in rows]
-                                   for k, name in enumerate(('t', 'vx', 'vy', 'wz'))}))
+HOLD_HZ = 30.0       # result samples are decimated to about this rate
+
+
+def record(ctx, main, command, settle, end, rows):
+    """One hold for the result file: its command (axis, sign, level; the efforts sent), the settle start and
+    hold end on the node clock, and body-frame odometry from settle to end (t on that clock, t_sensor the
+    message stamps), decimated to about HOLD_HZ."""
+    kept, last = [], None
+    for r in rows:
+        if last is None or r[0] - last >= 1.0 / HOLD_HZ - 1e-6:
+            kept.append(r)
+            last = r[0]
+
+    def column(k):
+        return [None if len(r) <= k or r[k] is None else round(float(r[k]), 4) for r in kept]
+    axis, sign, level = main or (None, None, None)
+    ctx.holds.append(dict(command=dict(axis=axis, sign=sign, level=level,
+                                       efforts=[round(float(v) + 0.0, 4) for v in command]),
+                          start=round(settle, 3), end=round(end, 3), settle=round(settle, 3),
+                          samples=dict(t=column(0), vx=column(1), vy=column(2), wz=column(3), yaw=column(4),
+                                       t_sensor=[None if len(r) < 8 else round(float(r[7]), 4) for r in kept])))
 
 
 def still(ctx, runner, test, state, defaults, room, amplitude):
@@ -258,7 +274,8 @@ def couple(ctx, runner, test, state, defaults, room, amplitude):
             ctx.progress = f'hold {count}/{total}'
             command = fit.command_for(j, sign, amplitude, search.column, n)
             before, during, _, _, _ = _hold(ctx, runner, n, command, float(test.get('baseline_s', 2)),
-                                            float(test.get('settle_s', 4)), float(test.get('measure_s', 3)))
+                                            float(test.get('settle_s', 4)), float(test.get('measure_s', 3)),
+                                            (axes[j], sign, amplitude))
             delta = fit.response(before, during)
             main, ratios = fit.cross_response(delta, j, sign)
             if sign * delta[j] < min_response:
@@ -308,7 +325,8 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
             runner.hold(neutral(n), max(0.0, coast_s - baseline_s))
             command = neutral(n)
             command[j] = sign * level
-            before, during, rows, t_on, t_cut = _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s)
+            before, during, rows, t_on, t_cut = _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s,
+                                                      (axis, sign, level))
             delta = fit.response(before, during)
             points[sign].append((sign * delta[j], level))
             rise = fit.t95([r[0] for r in rows], [sign * r[1 + j] for r in rows], t_on, t_cut)
@@ -362,7 +380,7 @@ def steps(ctx, runner, test, state, defaults, room, amplitude):
         command[j] = sign * target_v
         t_on, t_off = runner.hold(command, step_s)
         runner.hold(neutral(n), coast_s)
-        record(ctx, command, t_on, t_off, runner.window(t_on - baseline_s, t_off))
+        record(ctx, (axis, sign, target_v), command, t_on, t_off, runner.window(t_on, t_off))
         samples = [(r[0], r[1 + j]) for r in runner.window(t_on, t_off)]
         m = fit.step_metrics(samples, sign * target_v, t_on, t_off)
         name = f'{axis}{"+" if sign > 0 else "-"}'
