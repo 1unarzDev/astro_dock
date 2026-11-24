@@ -1,6 +1,7 @@
 """astro's engine: the pure building blocks (fit, response, apply, log, status) and its verb/help coverage."""
 import datetime
 import math
+import os
 from pathlib import Path
 import re
 import sys
@@ -12,6 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
+os.environ['ASTRO_FIELD'] = 'off'          # never file field issues from tests
 
 from astro import cli  # noqa: E402
 from astro.engine import apply, fit, log, results  # noqa: E402
@@ -250,8 +252,29 @@ class Results(unittest.TestCase):
         self.assertEqual(hold['command'], {'axis': 'surge', 'sign': 1, 'level': 0.3, 'efforts': [0.3, 0.0, 0.0]})
         lengths = {len(v) for v in hold['samples'].values()}
         self.assertEqual(len(lengths), 1)
-        self.assertEqual(set(hold['samples']), {'t', 'vx', 'vy', 'wz', 'yaw', 't_sensor'})
-        self.assertAlmostEqual(len(hold['samples']['t']) / (hold['end'] - hold['settle']), 30, delta=6)
+        self.assertNotIn('settle', hold)
+        # the samples start with the neutral baseline; the fake stamps are 1000 s off the node clock: no t_sensor
+        self.assertEqual(set(hold['samples']), {'t', 'vx', 'vy', 'wz', 'yaw'})
+        self.assertAlmostEqual(hold['samples']['t'][0], hold['baseline'][0], delta=0.05)
+        self.assertEqual((hold['baseline'][1] <= hold['start'] <= hold['measure'][0], hold['measure'][1]),
+                         (True, hold['end']))
+        self.assertAlmostEqual(len(hold['samples']['t']) / (hold['end'] - hold['baseline'][0]), 30, delta=6)
+
+    def test_t_sensor_only_on_the_node_clock(self):
+        from astro.engine import procedures
+        ctx = type('C', (), {'holds': []})()
+        rows = [(t / 30, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, t / 30 + 0.01) for t in range(30)]
+        procedures.record(ctx, None, [0.1, 0, 0], 0.0, 1.0, rows)
+        self.assertIn('t_sensor', ctx.holds[0]['samples'])
+
+    def test_still_conditions(self):
+        from astro.engine import procedures
+        calm = [(t * 0.05, 0.1, 0.0, 0.001 * (-1) ** t, 0.0) for t in range(400)]   # a steady 0.1 m/s current
+        found = procedures.conditions(calm, [0.004, 0.003, 0.001], fit.drift(calm), {}, 'abc123')
+        self.assertEqual(found, {'verdict': 'ok', 'ceiling': 'L7', 'drift_trust': True, 'state': 'abc123'})
+        gusty = [(t * 0.05, 0.05 if t < 200 else 0.25, 0.0, 0.0, 0.0) for t in range(400)]   # current picks up
+        found = procedures.conditions(gusty, [0.1, 0.01, 0.01], fit.drift(gusty), {}, 'abc123')
+        self.assertEqual((found['verdict'], found['ceiling'], found['drift_trust']), ('rough', 'L4', False))
 
 
 def mixed_wrench(command, plus, minus):

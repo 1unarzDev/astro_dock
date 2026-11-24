@@ -2,6 +2,7 @@
 file (its changes, the upstream keys it ran on, a one-line summary), logs `test start/done/abort` and prints
 its layer, old -> new and the exact `astro apply` command. Nothing here names a robot: topics, axes, keys,
 spaces and parameters all come from the tests file."""
+import math
 import statistics
 
 import yaml
@@ -196,7 +197,7 @@ def _hold(ctx, runner, n, command, baseline_s, settle_s, measure_s, main=None):
     b0 = b1 - baseline_s
     t_on, _ = runner.hold(command, settle_s)
     m0, t_cut = runner.hold(command, measure_s)
-    record(ctx, main, command, t_on, t_cut, runner.window(t_on, t_cut))
+    record(ctx, main, command, t_on, t_cut, runner.window(b0, t_cut), (b0, b1), (m0, t_cut))
     check_lane(ctx, runner, m0, t_cut)
     return runner.window(b0, b1), runner.window(m0, t_cut), runner.window(b0, t_cut), t_on, t_cut
 
@@ -245,12 +246,14 @@ def check_lane(ctx, runner, t0, t1):
 
 
 HOLD_HZ = 30.0       # result samples are decimated to about this rate
+CLOCKS_APART_S = 1.0  # t_sensor is left out when the message stamps are this far from the node clock
 
 
-def record(ctx, main, command, settle, end, rows):
-    """One hold for the result file: its command (axis, sign, level; the efforts sent), the settle start and
-    hold end on the node clock, and body-frame odometry from settle to end (t on that clock, t_sensor the
-    message stamps), decimated to about HOLD_HZ."""
+def record(ctx, main, command, start, end, rows, baseline=None, measure=None):
+    """One hold for the result file: its command (axis, sign, level; the efforts sent), start (command on) and
+    end on the node clock, the neutral baseline [b0, b1] and measure window [m0, end] before and in it, and
+    body-frame odometry from the baseline's start to end (t on the node clock; t_sensor, the message stamps,
+    only when they are on the same clock), decimated to about HOLD_HZ."""
     kept, last = [], None
     for r in rows:
         if last is None or r[0] - last >= 1.0 / HOLD_HZ - 1e-6:
@@ -260,11 +263,17 @@ def record(ctx, main, command, settle, end, rows):
     def column(k):
         return [None if len(r) <= k or r[k] is None else round(float(r[k]), 4) for r in kept]
     axis, sign, level = main or (None, None, None)
-    ctx.holds.append(dict(command=dict(axis=axis, sign=sign, level=level,
-                                       efforts=[round(float(v) + 0.0, 4) for v in command]),
-                          start=round(settle, 3), end=round(end, 3), settle=round(settle, 3),
-                          samples=dict(t=column(0), vx=column(1), vy=column(2), wz=column(3), yaw=column(4),
-                                       t_sensor=[None if len(r) < 8 else round(float(r[7]), 4) for r in kept])))
+    samples = dict(t=column(0), vx=column(1), vy=column(2), wz=column(3), yaw=column(4))
+    offsets = sorted(abs(r[0] - r[7]) for r in kept if len(r) >= 8 and r[7] is not None)
+    if offsets and offsets[len(offsets) // 2] <= CLOCKS_APART_S:
+        samples['t_sensor'] = [None if len(r) < 8 or r[7] is None else round(float(r[7]), 4) for r in kept]
+    hold = dict(command=dict(axis=axis, sign=sign, level=level, efforts=[round(float(v) + 0.0, 4) for v in command]),
+                start=round(start, 3), end=round(end, 3))
+    if baseline:
+        hold['baseline'] = [round(t, 3) for t in baseline]
+    if measure:
+        hold['measure'] = [round(t, 3) for t in measure]
+    ctx.holds.append(dict(hold, samples=samples))
 
 
 def still(ctx, runner, test, state, defaults, room, amplitude):
@@ -280,8 +289,32 @@ def still(ctx, runner, test, state, defaults, room, amplitude):
     summary = f'noise sigma={fmt(sigma)}'
     if drift:
         summary = f'drift={drift["speed"]:.2f}m/s@{drift["heading_deg"]:.0f}deg ' + summary
+    found = conditions(rows, sigma, drift, test, results.state_hash(ctx.state_path))
+    summary += f' {found["verdict"]} (trust up to {found["ceiling"]})'
     return dict(summary=summary, measured=dict(drift=drift, sigma=dict(zip(ctx.spec.axes, sigma)),
-                                               samples=len(rows)))
+                                               samples=len(rows), conditions=found))
+
+
+# still's thresholds, each overridable in its tests.yaml entry
+ROUGH = {'rough_sigma': 0.05, 'rough_drift': 0.3, 'steady_drift': 0.05}    # m/s (rad/s), m/s, m/s
+
+
+def conditions(rows, sigma, drift, test, state):
+    """What the water allows, from a still run:
+    verdict: ok, or rough when a noise sigma is over rough_sigma or the drift speed over rough_drift;
+    drift_trust: the drift is steady (the two halves' world-frame means differ by under steady_drift), so a
+      hold's baseline removes it;
+    ceiling: the highest layer worth trusting: L7 (all) when ok and steady, else L4 (the large-signal speed
+      curves; small coupling and step metrics drown);
+    state: the state hash the still ran on."""
+    from . import fit
+    limits = {k: float(test.get(k, v)) for k, v in ROUGH.items()}
+    rough = max(sigma) > limits['rough_sigma'] or bool(drift and drift['speed'] > limits['rough_drift'])
+    halves = [fit.drift(rows[:len(rows) // 2]), fit.drift(rows[len(rows) // 2:])]
+    steady = all(halves) and math.hypot(halves[0]['east'] - halves[1]['east'],
+                                        halves[0]['north'] - halves[1]['north']) < limits['steady_drift']
+    return dict(verdict='rough' if rough else 'ok', ceiling='L7' if not rough and steady else 'L4',
+                drift_trust=bool(steady), state=state)
 
 
 def couple(ctx, runner, test, state, defaults, room, amplitude):
@@ -434,12 +467,12 @@ def steps(ctx, runner, test, state, defaults, room, amplitude):
     metrics, parts = {}, []
     for count, sign in enumerate((1, -1), 1):
         ctx.progress = f'step {count}/2'
-        runner.hold(neutral(n), baseline_s)
+        b0, b1 = runner.hold(neutral(n), baseline_s)
         command = neutral(n)
         command[j] = sign * target_v
         t_on, t_off = runner.hold(command, step_s)
         runner.hold(neutral(n), coast_s)
-        record(ctx, (axis, sign, target_v), command, t_on, t_off, runner.window(t_on, t_off))
+        record(ctx, (axis, sign, target_v), command, t_on, t_off, runner.window(b0, t_off), (b0, b1), (t_on, t_off))
         check_lane(ctx, runner, t_on, t_off)
         samples = [(r[0], r[1 + j]) for r in runner.window(t_on, t_off)]
         m = fit.step_metrics(samples, sign * target_v, t_on, t_off)

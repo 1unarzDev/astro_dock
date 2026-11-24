@@ -116,8 +116,11 @@ if the link drops, the test stops and the drive's command timeout sends neutral.
 | `mark TEXT`, `log [-n N]` | the day's log, `DATA/DATE/log.txt`: `HH:MM:SS  kind    message` |
 | `test list`, `test status`, `test NAME [--space S] [--amp A]` | run a test or group; each prints its control layer, old -> new and the exact apply command; results in `DATA/DATE/results/` |
 | `apply RESULT`, `undo` | write a result (a test name means its latest) into the state file with a timestamped backup, run the profile's check (rolled back on refusal), set the live ROS parameters; undo restores the newest backup |
-| `bundle [--bags]` | state, tests file, today's results and log (and bags) in one tgz |
-| `sim up\|down\|status [args]` | the sim profile's world backend |
+| `bundle [--bags]` | state, tests file, today's results and log (and bags) in one tgz; then prints `astro.bundle_next` |
+| `sim up\|down\|status\|check [args]` | the sim profile's world backend |
+| `check NAME [--list]` | a field checklist (`checklists/NAME.md`): runs each item's `` check: `CMD` ``, asks y/n for the rest on a terminal; ticks in the session's `checks.yaml` |
+| `issue TEXT [--label L]` | a GitHub issue on the field repo with the time, vessel, bag and last log lines; queued offline |
+| `sync`, `show [DATE]` | copy the day's log, results (no raw samples) and bag index into the field repo's session folder, commit, push, file queued issues; print a session |
 | `help [WORD]`, `VERB --help` | the help.yaml browser and details |
 | `NAME [args]` | any package's help.yaml command (longest name match), e.g. `astro mix 0.5 0 0` |
 
@@ -134,6 +137,9 @@ astro:
   data: null                        # data root (workspace-relative); else $ASTRO_DATA
   state_env: null                   # on/sim also export the state path under this name (always ASTRO_STATE)
   sim: null                         # the sim profile's world backend command
+  help: [PATH]                      # more help.yaml files, each its own group (~, ${VAR:-default})
+  bundle_next: 'TEXT {bundle}'      # printed after astro bundle
+  field: {repo: OWNER/NAME, url: GIT_URL, dir: ~/.local/share/astro/field, auto: true}   # the field log
   stacks:                           # what `astro up` starts, in this order
     drive: {host: ROLE|HOST, run: 'ros2 launch PKG drive.launch.py', ready: [/topic], needs: [sensors],
             default: true, with: {controller: 'controller:=true'}}   # run: null = started elsewhere (waited for)
@@ -142,10 +148,17 @@ astro:
 Test types are generic (`still`, `couple`, `speed`, `steps`, `nav2`); the tests file names the topics, axes, keys
 and live parameters. A result records the upstream keys it ran on, so `astro test status` marks it stale once
 one of them changes. **Sim backend contract:** `astro sim VERB` runs the sim profile's `astro.sim` command
-(`~` and `${VAR:-default}` expanded) as `CMD up|down|status [args]` with the profile's `ROS_DOMAIN_ID`,
+(`~` and `${VAR:-default}` expanded) as `CMD up|down|status|check [args]` with the profile's `ROS_DOMAIN_ID`,
 `ASTRO_DATA` and `ASTRO_STATE` exported and the terminal passed through. Any script that implements those three
-verbs and starts the world plus its ROS bridge on that `ROS_DOMAIN_ID` works; then `astro on sim` is used
+verbs (and `check`, its readiness check) and starts the world plus its ROS bridge on that `ROS_DOMAIN_ID` works; then `astro on sim` is used
 exactly like a boat.
+
+**Field log:** `astro.field` names a git repo of `checklists/` and `sessions/DATE-LABEL/` folders (the label is an
+existing folder's, else the day's first `rec start` label, else `session`); its issues are the to-do list.
+astro files an `auto` issue only when a test aborts with an error, an `astro up` stack fails or the check
+refuses an apply. A repeat of an open one (same kind, name and first error line, numbers ignored) adds at most
+one comment an hour instead, and at most 5 are filed a day. `auto: false` turns them off for a vessel;
+`ASTRO_FIELD=off` turns off all of the field log's network calls (the tests set it).
 
 ### Device tooling and profiles
 

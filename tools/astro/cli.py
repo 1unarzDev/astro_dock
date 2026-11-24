@@ -11,19 +11,25 @@ import sys
 import tarfile
 import time
 
-from . import config, rec, remote, stacks, status
+from . import config, field, rec, remote, stacks, status
 from .engine import apply as applying
 from .engine import log, procedures, results
 
 VERBS = ('on', 'up', 'down', 'ps', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
-         'help')
+         'check', 'issue', 'sync', 'show', 'help')
 HELP = config.WS / '.devcontainer' / 'astro-help.py'
 
 
 def help_module():
+    """astro-help.py, with the vessel profile's astro.help files (~ and ${VAR:-default} expanded) as extra groups."""
+    try:
+        extra = config.Vessel().astro.get('help') or []
+    except config.Error:
+        extra = []
     spec = importlib.util.spec_from_file_location('astro_help', HELP)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.EXTRA = [remote.expand(p) for p in extra]
     return module
 
 
@@ -141,6 +147,7 @@ def cmd_test(s, args):
                 waiting.append((name, done['changes']))
         except procedures.Abort as error:
             print(f'{name}: aborted: {error}', file=sys.stderr)
+            field.auto(s.vessel, 'test', name, str(error))
             return 1
         except KeyboardInterrupt:
             print(f'\n{name}: stopped, neutral sent', file=sys.stderr)
@@ -183,6 +190,7 @@ def cmd_apply(s, args):
                                        spec.axes, live)
     except applying.Refused as error:
         log.write(s.root, 'apply', f'{name}  refused by the check, state unchanged', s.events)
+        field.auto(s.vessel, 'apply', name, str(error))
         raise config.Error(str(error)) from None
     layer = result.get('layer') or ''
     if backup is None:
@@ -235,6 +243,9 @@ def cmd_bundle(s, args):
         if args.bags and (day / 'bags').exists():
             tar.add(day / 'bags', arcname=f'{day.name}/bags')
     print(out)
+    nxt = s.vessel.astro.get('bundle_next')
+    if nxt:
+        print(str(nxt).replace('{bundle}', str(out)))
     return 0
 
 
@@ -320,8 +331,16 @@ def parser():
     sub.add_parser('undo', add_help=False)
     sub.add_parser('bundle', add_help=False).add_argument('--bags', action='store_true')
     sim = sub.add_parser('sim', add_help=False)
-    sim.add_argument('action', choices=('up', 'down', 'status'))
+    sim.add_argument('action', choices=('up', 'down', 'status', 'check'))
     sim.add_argument('args', nargs=argparse.REMAINDER)
+    c = sub.add_parser('check', add_help=False)
+    c.add_argument('name')
+    c.add_argument('--list', dest='listing', action='store_true')
+    i = sub.add_parser('issue', add_help=False)
+    i.add_argument('text', nargs='+')
+    i.add_argument('--label', dest='labels', action='append', default=[])
+    sub.add_parser('sync', add_help=False)
+    sub.add_parser('show', add_help=False).add_argument('date', nargs='?')
     return p
 
 
@@ -352,6 +371,14 @@ def main(argv=None):
             return stacks.ps(s.vessel)
         if verb == 'logs':
             return stacks.logs(s.vessel, args.name, args.follow)
+        if verb == 'check':
+            return field.check(s.vessel, args.name, args.listing)
+        if verb == 'issue':
+            return field.issue(s.vessel, ' '.join(args.text), args.labels)
+        if verb == 'sync':
+            return field.sync(s.vessel)
+        if verb == 'show':
+            return field.show(s.vessel, args.date)
         if verb == 'mark':
             log.write(s.root, 'mark', ' '.join(args.text), s.events)
             return 0

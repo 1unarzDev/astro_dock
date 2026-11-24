@@ -30,7 +30,8 @@ help.yaml schema (unknown keys are ignored):
 Every command also runs as `astro NAME [args]` (its run line plus the args); the details show both.
 
 Discovery order: astro_dock's own astro-help.yaml beside this script (astro's verbs first), then the workspace
-sources ($ROS_WS/src/*/help.yaml and src/*/*/help.yaml), then share/*/help.yaml under each
+sources ($ROS_WS/src/*/help.yaml and src/*/*/help.yaml), then the EXTRA files (astro sets them from the
+vessel profile's astro.help), then share/*/help.yaml under each
 AMENT_PREFIX_PATH entry. A confirmed command runs in bash, or, when ASTRO_HELP_OUT names a
 file, is written there for the calling shell to run (so it keeps the shell's functions).
 """
@@ -48,6 +49,7 @@ import yaml
 OWN = Path(__file__).resolve().with_name('astro-help.yaml')
 FORMS = ('positional', 'option', 'switch', 'launch')
 TRUE = ('true', 'on', 'yes', '1')
+EXTRA = []                 # more help.yaml paths, set by the caller (astro: the profile's astro.help)
 
 
 # ---- data -------------------------------------------------------------------------------
@@ -63,6 +65,9 @@ def candidates(ws=None, prefixes=None):
     src = Path(ws or workspace()) / 'src'
     for pattern in ('*/help.yaml', '*/*/help.yaml'):
         yield from sorted(src.glob(pattern))
+    for extra in EXTRA:                   # absent ones are skipped (an optional checkout)
+        if Path(extra).is_file():
+            yield Path(extra)
     if prefixes is None:
         prefixes = os.environ.get('AMENT_PREFIX_PATH', '').split(os.pathsep)
     for prefix in filter(None, prefixes):

@@ -20,6 +20,7 @@ import sys
 import time
 
 from . import config, remote
+from . import field as fieldlog
 from .engine import log
 
 PROBE = Path(__file__).with_name('probe.py')
@@ -254,6 +255,7 @@ def up(vessel, root, names, options):
                 print(f'    {line}')
             log.write(root, 'stack', f'fail  {stack.name}  {host}  {why}  {text}', vessel.astro.get('events'),
                       echo=False)
+            fieldlog.auto(vessel, 'stack', stack.name, why, '\n'.join([f'{host}: {command(stack, options)}'] + tail))
             later = [s.name for s in chosen if stack.name in s.needs]
             if later:
                 print(f'stopping here: {", ".join(later)} need {stack.name} (astro logs {stack.name})')

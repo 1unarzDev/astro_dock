@@ -15,6 +15,9 @@ else this machine's registry host. Its `astro:` section points at team files and
       sim: CMD                          # optional (sim profiles): the world backend, `CMD up|down|status`
       sim_time: false                   # optional: test runs follow /clock (use_sim_time)
       stacks: {NAME: {host, run, ready, needs, default, with}}   # optional: astro up/down/ps (stacks.py)
+      field: {repo: OWNER/NAME, url: GIT_URL, dir: PATH, auto: true}  # optional: check/issue/sync/show (field.py)
+      help: [PATH]                      # optional: more help.yaml files (~, ${VAR:-default}), each its own group
+      bundle_next: 'TEXT {bundle}'      # optional: printed after `astro bundle`, {bundle} = the file
 """
 import datetime
 import importlib.util
