@@ -38,7 +38,7 @@ PENDING = {
     '.devcontainer/devcontainer.json': (IMAGE,),
     '.devcontainer/docker-compose.build.yml': (IMAGE,),
     '.devcontainer/docker-compose.override.immutable.yml': (IMAGE,),
-    '.devcontainer/docker-compose.override.windows.yml': (IMAGE, CONFIG),
+    '.devcontainer/docker-compose.override.windows.yml': (IMAGE,),
     '.devcontainer/docker-compose.yml': (IMAGE,),
     '.devcontainer/image-smoke.sh': (IMAGE,),
     '.devcontainer/image-user.sh': (IMAGE,),
@@ -46,7 +46,6 @@ PENDING = {
     '.gitmodules': (GITMODULES,),
     'README.md': (IMAGE, GITMODULES),
     'conftest.py': (AGENT_TOOLS,),
-    'setup.windows.bat': (CONFIG,),
     'tests/test_agents_hook.py': (HOOK_TABLE, DATA, CONTAINER),
     'tests/smoke.sh': (AGENT_TOOLS,),
 }

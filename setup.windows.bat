@@ -105,8 +105,9 @@ if not defined GIT_USER_EMAIL if not defined ASTRO_YES (
     echo Git user.email already set to "%GIT_USER_EMAIL%"
 )
 
-:: Operator config, bind-mounted into the container (the Windows adapter mounts %USERPROFILE%/.config/mhseals)
-if not exist "%USERPROFILE%/.config/mhseals" mkdir "%USERPROFILE%/.config/mhseals"
+:: Operator config, bind-mounted into the container (the Windows adapter mounts %USERPROFILE%/.config/%ASTRO_CONFIG_DIR%)
+if not defined ASTRO_CONFIG_DIR set ASTRO_CONFIG_DIR=astro
+if not exist "%USERPROFILE%/.config/%ASTRO_CONFIG_DIR%" mkdir "%USERPROFILE%/.config/%ASTRO_CONFIG_DIR%"
 
 :: Copy docker-compose.override.windows.yml to docker-compose.override.yml
 IF EXIST ".\.devcontainer\docker-compose.override.windows.yml" (
