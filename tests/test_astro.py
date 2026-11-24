@@ -1,0 +1,193 @@
+"""astro's engine: the pure building blocks (fit, response, apply, log, status) and its verb/help coverage."""
+import datetime
+import math
+from pathlib import Path
+import re
+import sys
+import tempfile
+import unittest
+
+import numpy
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+
+from astro import cli  # noqa: E402
+from astro.engine import apply, fit, log, results  # noqa: E402
+
+AXES = ['surge', 'sway', 'yaw']
+IDENTITY = [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0]
+
+
+class Fit(unittest.TestCase):
+    def test_speed_curve_recovers_d1_d2(self):
+        d1, d2 = 0.4, 0.25
+        points = [(v, math.sqrt(d1 * v + d2 * v * v)) for v in (0.3, 0.7, 1.1)]
+        curve = fit.speed_curve(points)
+        self.assertAlmostEqual(curve['d1'], d1, places=6)
+        self.assertAlmostEqual(curve['d2'], d2, places=6)
+        self.assertAlmostEqual(fit.speed_at(curve['d1'], curve['d2'], points[1][1]), 0.7, places=6)
+
+    def test_negative_term_is_dropped_and_the_other_refit(self):
+        # Pure quadratic drag plus a concave bend: lstsq gives d1 < 0, so d1 drops and d2 alone is refit.
+        points = [(v, math.sqrt(0.5 * v * v - 0.05 * v)) for v in (0.5, 1.0, 1.5)]
+        curve = fit.speed_curve(points)
+        self.assertEqual(curve['d1'], 0.0)
+        self.assertGreater(curve['d2'], 0.0)
+        single = fit.speed_curve([(0.8, 0.6)])            # one level: linear only
+        self.assertEqual(single['d2'], 0.0)
+        self.assertAlmostEqual(single['d1'], 0.36 / 0.8)
+
+    def test_refine_converges_on_linear_coupling(self):
+        y0, jac = numpy.array([0.12, -0.08]), numpy.array([[0.9, 0.2], [-0.1, 1.1]])
+        measure = lambda c: tuple(y0 + jac @ numpy.array(c))       # noqa: E731
+        out = fit.refine(measure, (0.0, 0.0), (0.01, 0.01), max_holds=5)
+        self.assertTrue(out['converged'])
+        numpy.testing.assert_allclose(out['column'], -numpy.linalg.solve(jac, y0), atol=1e-6)
+        search = fit.Search((0.01, 0.01), max_holds=5)              # the stepwise form agrees
+        while not search.done:
+            search.add(measure(search.column))
+        numpy.testing.assert_allclose(search.result()['column'], out['column'], atol=1e-9)
+
+    def test_t95_of_a_first_order_rise(self):
+        tau, t_on = 0.6, 2.0
+        t = numpy.arange(0, 12, 0.01)
+        y = numpy.where(t < t_on, 0.0, 1.3 * (1 - numpy.exp(-(t - t_on) / tau)))
+        self.assertAlmostEqual(fit.t95(t, y, t_on, 12.0), 3 * tau, delta=0.02)
+
+    def test_nav2_caps(self):
+        rules = {'delay_s': 0.15, 'stop_distance_m': 1.0, 'ramp_lags': 3.0, 'yaw_tolerance': 0.25}
+        t95 = {'surge': 1.5, 'sway': 1.8, 'yaw': 0.45}
+        out = fit.nav2_limits({'surge': 9, 'sway': 0.1, 'yaw': 9}, {'surge': 9, 'sway': 9, 'yaw': 0.05},
+                              t95, rules, AXES, 'yaw')
+        lag = 0.5 + 0.15
+        self.assertAlmostEqual(out['velocity'][0], round(1.0 / (lag * 2.5), 4))
+        self.assertEqual(out['velocity'][1], 0.1)                             # measured is lower
+        self.assertAlmostEqual(out['velocity'][2], round(0.25 / (2 * 0.3), 4))
+        self.assertAlmostEqual(out['acceleration'][0], round(1.0 / (lag * 2.5) / (3 * lag), 4))
+        self.assertEqual(out['acceleration'][2], 0.05)
+
+
+class Response(unittest.TestCase):
+    def test_drift_removed_at_each_heading(self):
+        current = (0.2, -0.1)                       # world-frame drift
+        def rows(body, yaw, t0):
+            c, s = math.cos(yaw), math.sin(yaw)
+            # body velocity seen = boat's own + the current rotated into the body
+            vx = body[0] + c * current[0] + s * current[1]
+            vy = body[1] - s * current[0] + c * current[1]
+            return [(t0 + i * 0.1, vx, vy, 0.0, yaw) for i in range(20)]
+        baseline = rows((0.0, 0.0), 0.3, 0)
+        hold = rows((0.5, 0.02), 1.4, 5)            # the boat turned between baseline and hold
+        out = fit.response(baseline, hold)
+        numpy.testing.assert_allclose(out, [0.5, 0.02, 0.0], atol=1e-9)
+        main, cross = fit.cross_response(out, 0, 1)
+        self.assertAlmostEqual(cross[0], 0.04)
+
+    def test_effective_column_uses_the_signed_matrix(self):
+        plus, minus = list(IDENTITY), list(IDENTITY)
+        plus[3 * 1 + 2], minus[3 * 0 + 2] = 0.5, 0.3       # C[sway, yaw] and C-[surge, yaw]
+        command = fit.command_for(0, 1, 0.5, (0.1, -0.2))   # surge+ with sway +0.05, yaw -0.1
+        self.assertEqual(command, [0.5, 0.05, -0.1])
+        column = fit.effective_column(plus, minus, command, 0, 1, 0.5)
+        numpy.testing.assert_allclose(column, [1 - 0.3 * 0.2, 0.1, -0.2])
+
+
+class Apply(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.state = self.dir / 'state.yaml'
+        self.state.write_text(yaml.safe_dump({'other': 1}))
+        self.defaults = {'decoupling': IDENTITY, 'decoupling_negative': None}
+        self.check = f'{sys.executable} -c "import sys,yaml; d=yaml.safe_load(open(sys.argv[1])); ' \
+                     f'sys.exit(abs(d[\'decoupling\'][3]) > 1)"'
+
+    def test_column_and_key_write_backup_check_undo(self):
+        changes = [dict(key='decoupling', column=0, value=[1.0, 0.04, -0.07]),
+                   dict(key='decoupling_negative', column=0, value=[1.0, 0.1, 0.0], fallback='decoupling'),
+                   dict(key='characterization.speed_curves.surge+', value={'d1': 0.4, 'd2': 0.2})]
+        backup, diffs = apply.apply(self.state, changes, self.defaults, self.check, AXES,
+                                    live=[{'node': '/n', 'param': 'decoupling'}])
+        self.assertEqual(diffs[0], ('decoupling[:,surge]', [1.0, 0, 0], [1.0, 0.04, -0.07]))
+        data = yaml.safe_load(self.state.read_text())
+        self.assertEqual(data['decoupling'], [1.0, 0, 0, 0.04, 1.0, 0, -0.07, 0, 1.0])
+        self.assertEqual(data['decoupling_negative'][3], 0.1)          # from decoupling, the fallback
+        self.assertEqual(data['characterization']['speed_curves']['surge+'], {'d1': 0.4, 'd2': 0.2})
+        self.assertEqual(data['other'], 1)
+        self.assertTrue(backup.exists())
+        name, live = apply.undo(self.state, self.check)
+        self.assertEqual(name, backup.name)
+        self.assertEqual(live, [{'node': '/n', 'param': 'decoupling'}])
+        self.assertEqual(yaml.safe_load(self.state.read_text()), {'other': 1})
+        with self.assertRaises(apply.Refused):
+            apply.undo(self.state)
+
+    def test_refused_check_rolls_back(self):
+        before = self.state.read_text()
+        with self.assertRaisesRegex(apply.Refused, 'check refused'):
+            apply.apply(self.state, [dict(key='decoupling', column=0, value=[1.0, 1.5, 0.0])],
+                        self.defaults, self.check, AXES)
+        self.assertEqual(self.state.read_text(), before)
+        self.assertEqual([p for p in self.dir.iterdir() if p.name != 'state.yaml'], [])
+
+    def test_first_apply_without_a_state_file_undoes_to_none(self):
+        self.state.unlink()
+        apply.apply(self.state, [dict(key='a.b', value=2)], {}, None)
+        self.assertEqual(yaml.safe_load(self.state.read_text()), {'a': {'b': 2}})
+        apply.undo(self.state)
+        self.assertFalse(self.state.exists())
+
+
+class Log(unittest.TestCase):
+    def test_line_round_trip(self):
+        when = datetime.datetime(2026, 11, 24, 13, 7, 2)
+        line = log.format_line('apply', 'couple-surge  decoupling[:,surge] [1, 0, 0] -> [1, 0.04, -0.07]', when)
+        self.assertTrue(line.startswith('13:07:02  apply   couple-surge'))
+        self.assertEqual(log.parse_line(line),
+                         ('13:07:02', 'apply', 'couple-surge  decoupling[:,surge] [1, 0, 0] -> [1, 0.04, -0.07]'))
+        self.assertEqual(log.parse_line(log.format_line('mark', 'wind', when))[1:], ('mark', 'wind'))
+        self.assertIsNone(log.parse_line('not a log line'))
+        with tempfile.TemporaryDirectory() as tmp:
+            log.write(tmp, 'mark', 'x', topic=None, echo=False)
+            self.assertEqual(log.parse_line(log.read(tmp)[0])[1:], ('mark', 'x'))
+
+
+class Status(unittest.TestCase):
+    def test_classification_and_next(self):
+        defaults = {'decoupling': IDENTITY}
+        state = {'decoupling': [1.0, 0, 0, 0.04, 1.0, 0, 0, 0, 1.0]}
+        with tempfile.TemporaryDirectory() as tmp:
+            day = Path(tmp, '2026-11-24')
+            def save(test, at, **fields):
+                results.save(day, dict(test=test, **fields), datetime.datetime(2026, 11, 24, *at))
+            save('still', (13, 0, 0), status='done', summary='')
+            save('couple-surge', (13, 2, 0), status='done', changes=[{'key': 'decoupling'}], applied='x')
+            save('couple-sway', (13, 4, 0), status='done', changes=[{'key': 'decoupling'}])
+            save('couple-sway', (13, 5, 0), status='aborted')
+            save('speed-surge', (13, 6, 0), status='done', changes=[{'key': 'c'}],
+                 upstream={'decoupling': IDENTITY})                    # ran before couple-surge's apply
+            save('speed-sway', (13, 8, 0), status='done', changes=[{'key': 'c'}],
+                 upstream={'decoupling': state['decoupling']})
+            order = ['still', 'couple-surge', 'couple-sway', 'speed-surge', 'speed-sway', 'nav2']
+            rows = results.statuses(order, tmp, state, defaults)
+            self.assertEqual([r[1] for r in rows],
+                             ['measured', 'applied', 'aborted', 'stale', 'measured', 'pending'])
+            self.assertEqual(results.next_step(rows), 'astro test couple-sway')
+            self.assertEqual(results.next_step(rows[3:]), 'astro test speed-surge')
+            self.assertEqual(results.next_step(rows[4:]), 'astro apply speed-sway')
+
+
+class Verbs(unittest.TestCase):
+    def test_every_verb_has_a_help_entry_and_every_astro_entry_is_a_verb(self):
+        packages, errors = cli.help_module().discover([cli.HELP.with_name('astro-help.yaml')])
+        self.assertEqual(errors, [])
+        runs = [c['run'] for c in packages[0]['commands'] if c['run'].startswith('astro ')]
+        named = {re.match(r'astro (\S+)', run).group(1) for run in runs}
+        self.assertEqual(named, set(cli.VERBS))
+        rec = {run.split()[2] for run in runs if run.startswith('astro rec ')}
+        self.assertEqual(rec, {'start', 'stop', 'ls'})
+
+
+if __name__ == '__main__':
+    unittest.main()
