@@ -103,7 +103,7 @@ def new_backup(path, text, now=None):
 
 def backups(path):
     path = Path(path)
-    return sorted(path.parent.glob(path.name + '.bak-*'))
+    return sorted(path.parent.glob(path.name + '.bak-*'), key=lambda p: (p.stat().st_mtime_ns, p.name))
 
 
 def write_text(path, text):
