@@ -537,8 +537,14 @@ def steps(ctx, runner, test, state, defaults, room, amplitude):
         m = fit.step_metrics(samples, sign * target_v, t_on, t_off)
         name = f'{axis}{"+" if sign > 0 else "-"}'
         metrics[name] = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
-        parts.append(f'{name} rise={fmt(m.get("rise_time"))} over={fmt(m.get("overshoot"))} '
-                     f'settle={fmt(m.get("settling_time"))} sse={fmt(m.get("steady_state_error"))}')
+        unit = 'rad/s' if axis == ctx.spec.rotational else 'm/s'
+
+        def sec(v):
+            return 'none' if v is None else f'{v:.2f}s'
+        over, sse = m.get('overshoot'), m.get('steady_state_error')
+        parts.append(f'{name} to {target_v:.3g}{unit}: rise={sec(m.get("rise_time"))} '
+                     f'over={"none" if over is None else f"{100 * over:.0f}%"} settle={sec(m.get("settling_time"))} '
+                     f'sse={"none" if sse is None else f"{sse:.3f}{unit}"}')
     gains = test.get('gains')
     hint = f' (tune live: ros2 param set {gains})' if gains else ''
     return dict(summary=' | '.join(parts) + hint, measured=metrics)
