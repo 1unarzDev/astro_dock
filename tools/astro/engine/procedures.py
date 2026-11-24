@@ -103,8 +103,8 @@ class Context:
         data = applying.yaml.safe_load(open(self.state_path)) if self.state_path.exists() else {}
         return data or {}
 
-    def log(self, kind, message):
-        return log.write(self.data_root, kind, message, self.events)
+    def log(self, kind, message, echo=True):
+        return log.write(self.data_root, kind, message, self.events, echo=echo)
 
 
 # ---- one test --------------------------------------------------------------------------------------
@@ -587,9 +587,11 @@ def nav2(ctx, test, state, defaults):
 
 # ---- watch: someone else drives (RC, keyboard), the test only listens ----------------------------------------
 
-WATCH = {'levels': 3, 'level_gap': 0.08, 'min_effort': 0.08, 'steady_tol': 0.04, 'cross_max': 0.3,
+WATCH = {'levels': 3, 'level_gap': 0.08, 'min_effort': 0.12, 'steady_tol': 0.04, 'cross_max': 0.1,
+         'max_turn': 0.1, 'battery_spread': 0.5,
          'baseline_s': 1.0, 'settle_s': 2.5, 'measure_s': 1.5, 'drift_s': 10.0, 'max_s': 900.0}
-EFFORT_GAP_S = 0.5        # a pause this long in the applied command ends a run
+EFFORT_GAP_S = 0.5
+REST = 0.06               # m/s (rad/s): the most a baseline may still move for its hold to start from rest        # a pause this long in the applied command ends a run
 NEUTRAL_E = 0.02          # every effort under this is neutral
 STATUS_S = 2.0
 
@@ -652,14 +654,16 @@ def clusters(levels, gap):
 class Coverage:
     """What the driving has covered so far: holds per axis and sign, onsets from rest, calm neutral time."""
 
-    def __init__(self, axes, o):
+    def __init__(self, axes, o, rotational=None):
         self.axes, self.o = axes, o
+        self.rotational = axes.index(rotational) if rotational in axes else None
+        self.rejected = []        # (pair, level, reason) of holds that did not count
         self.holds = []           # dicts: j, sign, level, t0, t1, baseline (b0, b1) or None
         self.neutral_s = 0.0
         self.calm = []            # (t0, t1) neutral windows the boat had stopped coasting in
         self.seen = set()
 
-    def add(self, run, previous, window):
+    def add(self, run, previous, window, battery=None):
         kind, j, sign, level, t0, t1, mean = run
         if (t0, kind) in self.seen:
             return None
@@ -671,19 +675,58 @@ class Coverage:
                     self.calm.append((max(t0, t1 - 4 * self.o['baseline_s']), t1))
                     self.neutral_s += t1 - t0
             return None
-        if t1 - t0 < self.o['settle_s'] + self.o['measure_s']:
-            return None
         self.seen.add((t0, kind))
+        if t1 - t0 < self.o['settle_s'] + self.o['measure_s']:
+            if t1 - t0 < 1.0:             # a tap or a stick passing through: not worth a line
+                return None
+            self.rejected.append((j, sign, level, 'too short'))
+            return dict(j=j, sign=sign, level=level, t0=t0, t1=t1, rejected='too short')
         baseline = None
         if previous and previous[0] == 'neutral' and t0 - previous[5] <= EFFORT_GAP_S and \
                 previous[5] - previous[4] >= self.o['baseline_s']:
             b1 = previous[5]
             b0 = b1 - self.o['baseline_s']
-            if coasted(window(b0, b1)):
+            rows = window(b0, b1)
+            # at rest: stopped coasting and nearly stopped (a slow glide after a tap would read as a response)
+            if rows and coasted(rows) and max(abs(sum(r[k] for r in rows) / len(rows)) for k in (1, 2, 3)) < REST:
                 baseline = (b0, b1)
-        hold = dict(j=j, sign=sign, level=level, t0=t0, t1=t1, baseline=baseline, efforts=mean)
+        hold = dict(j=j, sign=sign, level=level, t0=t0, t1=t1, baseline=baseline, efforts=mean, battery=battery)
+        reason = self.judge(hold, window)
+        if reason:
+            hold['rejected'] = reason
+            self.rejected.append((j, sign, level, reason))
+            return hold
         self.holds.append(hold)
         return hold
+
+    def judge(self, hold, window):
+        """Why a hold cannot be used, or None. From rest, a first-order rise fitted to it gives its steady
+        speed and t95 even when it is short (it needs the hold to last two time constants); otherwise the
+        speed must be steady over the measure window. A linear hold must not turn; frozen odometry fails."""
+        from . import fit
+        j, sign, o = hold['j'], hold['sign'], self.o
+        m0 = hold['t1'] - o['measure_s']
+        rows = window(m0, hold['t1'])
+        if len(rows) < 4:
+            return 'no odometry'
+        main = [r[1 + j] for r in rows]
+        if max(main) - min(main) == 0:
+            return 'odometry frozen'
+        if j != self.rotational and abs(sum(r[3] for r in rows) / len(rows)) > o['max_turn']:
+            return 'turning'
+        if hold['baseline']:
+            before = window(*hold['baseline'])
+            base = sum(r[1 + j] for r in before) / len(before) if before else 0.0
+            span = window(hold['t0'], hold['t1'])
+            found = fit.first_order([r[0] for r in span], [sign * (r[1 + j] - base) for r in span], hold['t0'])
+            if found and found[0] > 0 and found[2] + 2 * found[1] <= hold['t1'] - hold['t0']:
+                hold['v_ss'], hold['tau'], hold['delay'] = round(found[0], 4), round(found[1], 3), found[2]
+                return None
+        half = len(main) // 2
+        a, b = sum(main[:half]) / half, sum(main[half:]) / (len(main) - half)
+        if abs(b - a) > max(0.03, 0.04 * abs(b)):
+            return 'not steady (hold longer)'
+        return None
 
     def pair(self, j, sign):
         groups = clusters([h['level'] for h in self.holds if h['j'] == j and h['sign'] == sign], self.o['level_gap'])
@@ -732,21 +775,6 @@ class Coverage:
         return text
 
 
-def _status(ctx, text):
-    import sys
-    if ctx.out is print and sys.stdout.isatty():
-        sys.stdout.write('\r\033[K' + text)
-        sys.stdout.flush()
-        return True
-    return False
-
-
-def _clear(ctx):
-    import sys
-    if ctx.out is print and sys.stdout.isatty():
-        sys.stdout.write('\r\033[K')
-
-
 def lane_at(runner, t):
     log = getattr(runner, 'lane_log', None) or []
     value = None
@@ -764,12 +792,10 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
     (which fits what there is). Writes the speed-curve keys of each axis with enough holds."""
     o = watch_options(test)
     axes, target = ctx.spec.axes, test.get('apply') or {}
-    cover = Coverage(axes, o)
+    cover = Coverage(axes, o, ctx.spec.rotational)
+    show = Display(ctx, cover, axes, ctx.spec.rotational, test.get('max'))
     start = runner.now()
-    tty = _status(ctx, 'listening: drive (RC or keyboard); Ctrl-C to stop and fit what is there')
-    if not tty:
-        ctx.out('listening: drive (RC or keyboard); Ctrl-C to stop and fit what is there')
-    last_status, ended, finished = start, 'complete', set()
+    ended, finished = 'complete', set()
     try:
         while True:
             runner.hold(None, 0.5)
@@ -777,38 +803,38 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
             done, current = runs(runner.efforts, o)
             previous = None
             for run in done:
-                hold = cover.add(run, previous, runner.window)
+                hold = cover.add(run, previous, runner.window, getattr(runner, 'battery', None))
                 previous = run
-                if hold:
-                    ctx.progress = f'{100 * cover.fraction():.0f}%'
-                    _clear(ctx)
-                    hold['lane'] = lane_at(runner, hold['t0'])
-                    m0 = hold['t1'] - o['measure_s']
-                    during = runner.window(m0, hold['t1'])
-                    v = during and sum(r[1 + hold['j']] for r in during) / len(during)
-                    unit = 'rad/s' if axes[hold['j']] == ctx.spec.rotational else 'm/s'
-                    pair = f'{axes[hold["j"]]}{"+" if hold["sign"] > 0 else "-"}'
-                    # a mark line (log.txt and the events topic, so in the bag too) for each hold that counts
-                    ctx.log('mark', f'watch {pair} e={hold["level"]:g} v~{v or 0:.2f}{unit}'
-                            + (' from rest' if hold['baseline'] else '') + (f' ({hold["lane"]})' if hold['lane'] else '')
-                            + f' t={hold["t0"]:.1f}..{hold["t1"]:.1f}')
-                    if cover.pair(hold['j'], hold['sign']) == int(o['levels']) and pair not in finished:
-                        finished.add(pair)
-                        ctx.log('mark', f'watch {pair} done ({int(o["levels"])} levels)')
+                if not hold:
+                    continue
+                j, sign = hold['j'], hold['sign']
+                if hold.get('rejected'):
+                    show.refused(j, sign, hold['level'], hold['t1'] - hold['t0'], hold['rejected'], now)
+                    continue
+                ctx.progress = f'{100 * cover.fraction():.0f}%'
+                hold['lane'] = lane_at(runner, hold['t0'])
+                during = runner.window(hold['t1'] - o['measure_s'], hold['t1'])
+                v = sign * hold['v_ss'] if hold.get('v_ss') else \
+                    (sum(r[1 + j] for r in during) / len(during) if during else 0.0)
+                show.counted(hold, v, 'rad/s' if axes[j] == ctx.spec.rotational else 'm/s', now)
+                pair = f'{axes[j]}{"+" if sign > 0 else "-"}'
+                if cover.pair(j, sign) == int(o['levels']) and pair not in finished:
+                    finished.add(pair)
+                    show.emit(f'{show.name(j, sign)} done ({int(o["levels"])} levels)')
+            last = done[-1] if done else None
+            from_rest = bool(current and current['kind'] == 'hold' and last and last[0] == 'neutral'
+                             and current['t0'] - last[5] <= EFFORT_GAP_S and last[5] - last[4] >= o['baseline_s'])
+            still_now = now - current['t0'] if current and current['kind'] == 'neutral' else None
+            show.update(current, from_rest, still_now, now, start)
             if cover.fraction() >= 1.0 - 1e-9:
                 break
             if now - start > o['max_s']:
                 ended = f'max_s {o["max_s"]:g} s'
                 break
-            if now - last_status >= STATUS_S:
-                last_status = now
-                if not _status(ctx, cover.line(current, now)) and int(now - start) % 20 < STATUS_S:
-                    ctx.out(cover.line(current, now) + '  need: ' + '; '.join(cover.missing()[:3]))
     except KeyboardInterrupt:
         ended = 'ctrl-c'
-    _clear(ctx)
-    ctx.out(f'  watch ended ({ended}) at {100 * cover.fraction():.0f}%'
-            + (': still missing ' + '; '.join(cover.missing()) if cover.fraction() < 1 else ''))
+    show.close(f'  watch ended ({ended}) at {100 * cover.fraction():.0f}%'
+               + (': still missing ' + '; '.join(cover.missing()) if cover.fraction() < 1 else ''))
     return watch_fit(ctx, runner, cover, o, target, ended)
 
 
@@ -838,14 +864,17 @@ def watch_fit(ctx, runner, cover, o, target, ended):
                 if not during or not before:
                     continue
                 delta = fit.response(before, during)
-                raw.append((sign * delta[j], h['level']))
+                # from rest: the fitted rise's asymptote (a short hold reads low), else the measure window's mean
+                raw.append((h['v_ss'] if h.get('v_ss') else sign * delta[j], h['level']))
                 cross.setdefault(axis, []).append([round(delta[k] / delta[j], 4) if abs(delta[j]) > 1e-3 else None
                                                    for k in range(n)])
                 b0 = h['baseline'][0] if h['baseline'] else h['t0']
                 record(ctx, (axis, sign, h['level']), h['efforts'], h['t0'], h['t1'], runner.window(b0, h['t1']),
                        h['baseline'], (m0, h['t1']), bool(h['baseline']))
-                ctx.holds[-1]['lane'] = h.get('lane')
-                if h['baseline']:
+                ctx.holds[-1].update(lane=h.get('lane'), battery=h.get('battery'), tau=h.get('tau'))
+                if h.get('tau') is not None:
+                    rises.append(h['delay'] + 3 * h['tau'])
+                elif h['baseline']:
                     rows = runner.window(b0, h['t1'])
                     rise = fit.t95([r[0] for r in rows], [sign * r[1 + j] for r in rows], h['t0'], h['t1'])
                     if rise is not None:
@@ -881,9 +910,191 @@ def watch_fit(ctx, runner, cover, o, target, ended):
         columns = list(zip(*ratios))
         cross_median[axis] = [round(statistics.median([v for v in c if v is not None]), 3)
                               if any(v is not None for v in c) else None for c in columns]
+    volts = [h['battery'] for h in cover.holds if h.get('battery')]
+    if volts and max(volts) - min(volts) > o['battery_spread']:
+        parts.append(f'battery sagged {max(volts):.1f}->{min(volts):.1f}V (speeds mixed across it)')
     summary = (' | '.join(parts) or 'no axis had two levels') + \
         (f' | not fitted: {", ".join(skipped)}' if skipped else '') + f' ({ended}, {len(cover.holds)} holds)'
     return dict(summary=summary, changes=changes, live=list(target.get('live') or []),
                 measured=dict(points=points, t95=rises_all, drift=drift, still_s=round(cover.neutral_s, 1),
                               cross=cross_median, coverage=round(cover.fraction(), 3), ended=ended,
-                              missing=cover.missing()))
+                              missing=cover.missing(), rejected=[[axes[j], s, lv, why] for j, s, lv, why in
+                                                                  cover.rejected],
+                              battery=[min(volts), max(volts)] if volts else None))
+
+
+# ---- watch's display: event lines scroll above a small block redrawn in place ---------------------------------
+
+WORDS = {(0, 1): 'straight forward', (0, -1): 'straight back', (1, 1): 'straight sideways left (no turning)',
+         (1, -1): 'straight sideways right (no turning)', (2, 1): 'spin in place left', (2, -1): 'spin in place right'}
+SHORT = {(0, 1): 'fwd', (0, -1): 'back', (1, 1): 'left', (1, -1): 'right', (2, 1): 'left', (2, -1): 'right'}
+TARGETS = ((0.15, 'small'), (0.3, 'medium'), (0.5, 'full'))
+HINT = {'too short': 'hold {s:g} s', 'not steady (hold longer)': 'keep the stick still, hold longer',
+        'turning': 'keep the heading, no spin', 'odometry frozen': 'check odometry (not your driving)',
+        'no odometry': 'check odometry (not your driving)'}
+BLOCK = 6
+
+
+class Display:
+    """A tty gets a 6-line block (header, one row per axis, the live line, Next) redrawn in place with event
+    lines scrolling above it; anything else gets plain event lines and a status line every 20 s."""
+
+    def __init__(self, ctx, cover, axes, rotational, caps=None):
+        import os
+        import sys
+        self.ctx, self.cover, self.axes = ctx, cover, axes
+        self.rot = axes.index(rotational) if rotational in axes else None
+        self.tty = ctx.out is print and sys.stdout.isatty()
+        self.color = self.tty and 'NO_COLOR' not in os.environ
+        utf = (sys.stdout.encoding or '').lower().replace('-', '') == 'utf8' and os.environ.get('ASTRO_ASCII') != '1'
+        self.ch = dict(full='●', empty='○', ok='✓', bad='✗', bar='█', gap='░', live='▶', dot='·') if utf else \
+            dict(full='#', empty='.', ok='*', bad='x', bar='#', gap='-', live='>', dot='-')
+        self.caps = caps or {}
+        self.drawn, self.last_plain, self.flash, self.last = False, None, None, None   # last: (j, sign, level)
+
+    def paint(self, text, code):
+        return f'\033[{code}m{text}\033[0m' if self.color else text
+
+    def emit(self, text, kind='mark'):
+        """A permanent line (also in log.txt and the events topic, so in the bag)."""
+        import sys
+        line = self.ctx.log(kind, text, echo=not self.tty)
+        if self.tty:
+            if self.drawn:
+                sys.stdout.write(f'\033[{BLOCK}F\033[J')
+            sys.stdout.write(line + '\n')
+            self.drawn = False
+
+    def name(self, j, sign):
+        return f'{self.axes[j]} {SHORT.get((j, sign), "+" if sign > 0 else "-")}'
+
+    def level_word(self, j, level):
+        cap = self.caps.get(self.axes[j], 0.5)
+        word = min(TARGETS, key=lambda t: abs(t[0] * cap / 0.5 - level))[1]
+        return word
+
+    def next_move(self, current_moving):
+        cover, o = self.cover, self.cover.o
+        need = int(o['levels'])
+        pairs = [(j, s) for j in range(len(self.axes)) for s in (1, -1) if cover.pair(j, s) < need]
+        if not pairs:
+            if cover.neutral_s < o['drift_s']:
+                return f'let go fully, sticks centred, {o["drift_s"] - cover.neutral_s:.0f} s more'
+            return None
+        last = self.last
+        flip = [(j, s) for j, s in pairs if last and j == last[0] and s == -last[1]]
+        j, s = flip[0] if flip else min(pairs, key=lambda p: (cover.pair(*p), p[0] == (last or (None,))[0]))
+        cap = self.caps.get(self.axes[j], 0.5)
+        have = [h['level'] for h in cover.holds if h['j'] == j and h['sign'] == s]
+        options = [(round(t * cap / 0.5, 2), w) for t, w in TARGETS]
+        options = [(e, w) for e, w in options if e >= o['min_effort'] and all(abs(e - h) >= o['level_gap'] for h in have)]
+        if options:
+            e, word = max(options, key=lambda x: abs(x[0] - (last[2] if last else 0)))
+            text = f'{WORDS.get((j, s), self.name(j, s))}, {word} stick (~{e:g}), {o["settle_s"] + o["measure_s"]:g} s'
+        else:
+            text = f'{WORDS.get((j, s), self.name(j, s))}, a stick level not yet done, ' \
+                   f'{o["settle_s"] + o["measure_s"]:g} s'
+        if not cover.onset(j):
+            text += ', from rest' + (' (let go 1 s first)' if current_moving else '')
+        return text
+
+    def block(self, current, from_rest, still_now, now, start):
+        cover, o, ch = self.cover, self.cover.o, self.ch
+        need, f = int(o['levels']), cover.fraction()
+        cells = int(round(f * 20))
+        elapsed = int(now - start)
+        lines = [f'astro watch  {100 * f:3.0f}%  {self.paint(ch["bar"] * cells, 32)}{ch["gap"] * (20 - cells)}  '
+                 f'{elapsed // 60}:{elapsed % 60:02d}   still {min(cover.neutral_s, o["drift_s"]):.0f}/'
+                 f'{o["drift_s"]:g} s   ^C fit']
+        for j, axis in enumerate(self.axes):
+            parts = []
+            for s in (1, -1):
+                got = cover.pair(j, s)
+                dots = self.paint(ch['full'] * got, 32) + ch['empty'] * (need - got)
+                parts.append(f'{SHORT.get((j, s), "+" if s > 0 else "-"):<5} {dots}')
+            rest = self.paint(ch['ok'], 32) if cover.onset(j) else ch['dot']
+            row = f' {axis:<6} {parts[0]}   {parts[1]}   rest {rest}'
+            done = all(cover.pair(j, s) >= need for s in (1, -1)) and cover.onset(j)
+            lines.append(self.paint(row, 2) if done else row)
+        total = o['settle_s'] + o['measure_s']
+        if self.flash and now - self.flash[0] < 3:
+            live = self.flash[1]
+        elif current and current['kind'] == 'hold':
+            j, s = current['j'], current['sign']
+            e = abs(current['sum'][j] / current['n'])
+            held = now - current['t0']
+            filled = min(10, int(10 * held / total))
+            tail = f' {held:.1f} s {ch["ok"]} long enough, let go' if held >= total else f' {held:.1f} / {total:g} s'
+            live = self.paint(f' {ch["live"]} {self.name(j, s)}  {e:.2f} {self.level_word(j, e)}  '
+                              f'{"from rest" if from_rest else "moving start"}  '
+                              f'{ch["bar"] * filled}{ch["gap"] * (10 - filled)}{tail}', 33)
+        elif still_now is not None:
+            ready = still_now >= o['baseline_s']
+            live = f' {ch["dot"]} still {still_now:.1f} s' + (', ready: the next hold counts as from rest' if ready else '')
+        else:
+            live = f' {ch["dot"]} listening: drive one stick at a time'
+        move = self.next_move(bool(current and current['kind'] == 'hold'))
+        lines.append(live)
+        lines.append(self.paint(' Next: ', 1) + move if move else '')
+        return lines
+
+    def update(self, current, from_rest, still_now, now, start):
+        import shutil
+        import sys
+        if not self.tty:
+            if self.last_plain is None or now - self.last_plain >= 20:
+                self.last_plain = now
+                c = self.cover
+                parts = ' '.join(f'{self.axes[j]}{"+" if s > 0 else "-"} {c.pair(j, s)}/{int(c.o["levels"])}'
+                                 + ('r' if c.onset(j) else '') for j in range(len(self.axes)) for s in (1, -1))
+                move = self.next_move(bool(current and current['kind'] == 'hold'))
+                self.ctx.out(f'status {100 * c.fraction():.0f}% {parts} still {c.neutral_s:.0f}/{c.o["drift_s"]:g}s'
+                             + (f' | next: {move}' if move else ''))
+            return
+        cols = max(40, shutil.get_terminal_size().columns)
+        out = f'\033[{BLOCK}F' if self.drawn else ''
+        for line in self.block(current, from_rest, still_now, now, start):
+            out += _clip(line, cols - 1) + '\033[K\n'
+        sys.stdout.write(out)
+        sys.stdout.flush()
+        self.drawn = True
+
+    def counted(self, hold, v, unit, now):
+        j, s, ch = hold['j'], hold['sign'], self.ch
+        self.last = (j, s, hold['level'])
+        got = self.cover.pair(j, s)
+        text = (f'{self.paint(ch["ok"], 32)} {self.name(j, s):<11} {hold["level"]:.2f} {self.level_word(j, hold["level"]):<6} '
+                f'{"from rest " if hold["baseline"] else ""}v {v:.2f} {unit}   {got}/{int(self.cover.o["levels"])}'
+                + (f'  ({hold["lane"]})' if hold.get('lane') else ''))
+        self.emit(text)
+        self.flash = (now, f' {self.paint(ch["ok"], 32)} counted: {self.name(j, s)} {got}/{int(self.cover.o["levels"])}')
+
+    def refused(self, j, s, level, length, reason, now):
+        ch, o = self.ch, self.cover.o
+        hint = HINT.get(reason, '').format(s=o['settle_s'] + o['measure_s'])
+        text = f'{self.paint(ch["bad"], 31)} {self.name(j, s):<11} {level:.2f}   {length:.1f} s   ' \
+               f'{self.paint(reason, 31)}' + (f': {hint}' if hint else '')
+        self.emit(text)
+        self.flash = (now, f' {self.paint(ch["bad"], 31)} {self.name(j, s)}: {reason}' + (f', {hint}' if hint else ''))
+
+    def close(self, text):
+        import sys
+        if self.tty and self.drawn:
+            sys.stdout.write(f'\033[{BLOCK}F\033[J')
+            self.drawn = False
+        self.ctx.out(text)
+
+
+def _clip(line, width):
+    """Cut a line with ANSI colour codes to ``width`` visible characters."""
+    out, seen, i = '', 0, 0
+    while i < len(line) and seen < width:
+        if line[i] == '\033':
+            end = line.find('m', i)
+            out += line[i:end + 1]
+            i = end + 1
+            continue
+        out += line[i]
+        seen += 1
+        i += 1
+    return out + ('\033[0m' if '\033[' in out else '')

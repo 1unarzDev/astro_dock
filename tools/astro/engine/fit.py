@@ -216,6 +216,34 @@ def t95(t, y, t_on, t_cut, hold_s=0.5):
     return None
 
 
+def first_order(t, y, t_on, delays=(0.0, 0.1, 0.2, 0.3)):
+    """Fit y = y0 + (v - y0)(1 - exp(-(t - t_on - d) / tau)) after t_on (y0 near 0 from rest): (v, tau, d, rms) of the best
+    fit over a tau grid (0.1 to 8 s) and the dead times ``delays``, or None. A short hold that has not reached
+    its steady speed still gives v (its asymptote) and t95 = d + 3 tau."""
+    t, y = numpy.asarray(t, float) - t_on, numpy.asarray(y, float)
+    keep = t >= 0
+    t, y = t[keep], y[keep]
+    if t.size < 8:
+        return None
+    best = None
+    for d in delays:
+        for tau in numpy.geomspace(0.1, 8.0, 80):
+            phi = numpy.where(t > d, 1 - numpy.exp(-(t - d) / tau), 0.0)
+            if float(phi @ phi) <= 0:
+                continue
+            # y0 + (v - y0) phi: a start not quite at rest moves y0, not the asymptote
+            basis = numpy.column_stack((1 - phi, phi))
+            (y0, v), *_ = numpy.linalg.lstsq(basis, y, rcond=None)
+            v = float(v)
+            sse = float(((y - basis @ (y0, v)) ** 2).sum())
+            if best is None or sse < best[3]:
+                best = (v, float(tau), d, sse)
+    if best is None:
+        return None
+    v, tau, d, sse = best
+    return v, tau, d, math.sqrt(sse / t.size)
+
+
 RISE_LOW, RISE_HIGH = 0.1, 0.9
 SETTLING_BAND, SETTLING_FLOOR, TAIL_FRACTION = 0.05, 0.02, 0.2
 
