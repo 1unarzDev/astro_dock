@@ -23,7 +23,7 @@ verify    Read-only: every repository is at its origin/main, profiles/ at this c
           commit, and the container runs.
 rollback  Recreate the container on IMAGE (an astro-rollback:STAMP that apply printed), then build.
 keys      Create the operator key (XDG_CONFIG_HOME/$(cfg operator_key)/id_ed25519) if missing, install
-          it where the TUI is refused (your own ssh may ask once) and record each host key. Idempotent.
+          it on each host (your own ssh may ask once) and record each host key. Idempotent.
 repos     Read-only, local: "NAME URL BRANCH" per repository of this computer (from sources): repos.all
           and those of its roles (--role ROLE, else this host's registry roles, operator for a
           generic control station, else none);

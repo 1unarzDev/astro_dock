@@ -143,8 +143,8 @@ hw.sh profile show [NAME]        a merged profile (no secrets)
 hw.sh profile sync [URL [REF]]   check out your profile set at its ref (URL REF: record them first)
 hw.sh secrets check              the secrets file and the missing key names (never values)
 hw.sh hot REPO [--host NAME] [--dry-run] push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)
-hw.sh station take [--dry-run]   make this computer the operator station (boat link, gateway and time roles, keys, station file, heartbeat service)
-hw.sh station release            stop this computer's operator heartbeat service
+hw.sh station take [--dry-run]   make this computer the operator station (boat link, gateway and time roles, keys, station file, and a heartbeat service if the profile names one)
+hw.sh station release            stop this computer's operator heartbeat service, if any
 hw.sh overlay PATH [--base REF] [--all] [--dry-run] colcon-build a worktree's packages touched against REF (origin/main) as an overlay on the workspace install, in the dev container; prints the source line
 hw.sh pyenv PATH                 the PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon
 hw.sh build [--ws DIR] [--container NAME] [-- ARGS] the workspace's colcon build of DIR (in NAME, default its ROS_WS), from clean when its image or colcon defaults changed
