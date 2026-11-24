@@ -55,8 +55,8 @@ ROS domain, discovery range, data root and transport; `.devcontainer/run_env.py`
 ### Usage
 
 Add ROS packages under `src/` and build from the workspace root (`colcon_defaults.yaml` makes it a
-symlink-install). `help` in a container shell browses the commands that astro_dock and each package describe
-in a `help.yaml`. `astro-ros-install <name>` installs a ROS, apt or `pip:` package into the running container;
+symlink-install). `astro help` (or `help`) in a container shell browses the commands that astro and each
+package describe in a `help.yaml`. `astro-ros-install <name>` installs a ROS, apt or `pip:` package into the running container;
 persist it in [`packages.txt`](.devcontainer/packages.txt),
 [`jetson-packages.txt`](.devcontainer/jetson-packages.txt) or [`requirements.txt`](.devcontainer/requirements.txt).
 
@@ -76,6 +76,58 @@ subnet `ros_net` adds unicast static peers.
 
 **Clock:** containers share the host clock. `./setup.linux.sh --components clock` configures chrony
 (`ASTRO_NTP_SERVER` / `ASTRO_NTP_ALLOW`; the value `lan` reads the vessel's network env and time-server role).
+
+### astro
+
+`astro` ([`tools/`](tools/), on `PATH` in every container shell; on the host add `tools/bin` to `PATH`) is the
+one high-level robot tool. It only composes plain ROS 2, and `astro help` shows the ROS equivalent of each verb.
+
+```bash
+astro on boat                      # a shell in a registry host's dev container (ssh + docker exec)
+ros2 launch PKG drive.launch.py    # the long-running stack, plain ROS
+astro rec start lean lake          # bag (mcap, 300 s splits) of a preset's topics
+astro test status                  # what is applied, measured, stale, aborted or pending; and the next step
+astro test still                   # one test, in this terminal; Ctrl-C sends neutral
+astro apply still                  # write its result into the state file (backup, check, live parameters)
+astro mark "wind picked up"        # a log line, also published on the events topic (so it is in the bag)
+astro rec stop && astro rec ls     # each bag with the log lines inside it
+```
+
+| Verb | Does |
+| --- | --- |
+| `on HOST [cmd]` | ssh to a registry host (name or unique part of it), `docker exec` into its dev container; a vessel without ssh hosts (the sim) runs on this machine with its environment |
+| `status [--watch]` | nodes, the last message on each topic of the tests file, recording, last log lines, next test |
+| `rec start [preset] [label]`, `rec stop`, `rec ls` | `ros2 bag record` into `DATA/DATE/bags/HHMMSS-label/` |
+| `mark TEXT`, `log [-n N]` | the day's log, `DATA/DATE/log.txt`: `HH:MM:SS  kind    message` |
+| `test list`, `test status`, `test NAME [--space S] [--amp A]` | run a test or group; each prints its control layer, old -> new and the exact apply command; results in `DATA/DATE/results/` |
+| `apply RESULT`, `undo` | write a result (a test name means its latest) into the state file with a timestamped backup, run the profile's check (rolled back on refusal), set the live ROS parameters; undo restores the newest backup |
+| `bundle [--bags]` | state, tests file, today's results and log (and bags) in one tgz |
+| `sim up\|down\|status [args]` | the sim profile's world backend |
+| `help [WORD]`, `VERB --help` | the help.yaml browser and details |
+| `NAME [args]` | any package's help.yaml command (longest name match), e.g. `astro mix 0.5 0 0` |
+
+astro holds no robot facts. The vessel profile (resolved like `./hw.sh whoami`; `ASTRO_VESSEL` overrides) has an
+`astro:` section that points at the team's files:
+
+```yaml
+astro:
+  tests: PKG/config/tests.yaml      # procedures: topics, axes, spaces, tests, groups (package-relative)
+  bags: PKG/config/bags.yaml        # rec presets: presets: {NAME: [topics] | all}, exclude: REGEX
+  state: ~/.config/TEAM/state.yaml  # the one file apply writes
+  check: ros2 run PKG config_check  # validates the state (its path appended); exit 0 = ok
+  events: /events                   # every log line is published here (std_msgs/String)
+  data: null                        # data root (workspace-relative); else $ASTRO_DATA
+  state_env: null                   # on/sim also export the state path under this name (always ASTRO_STATE)
+  sim: null                         # the sim profile's world backend command
+```
+
+Test types are generic (`still`, `couple`, `speed`, `steps`, `nav2`); the tests file names the topics, axes, keys
+and live parameters. A result records the upstream keys it ran on, so `astro test status` marks it stale once
+one of them changes. **Sim backend contract:** `astro sim VERB` runs the sim profile's `astro.sim` command
+(`~` and `${VAR:-default}` expanded) as `CMD up|down|status [args]` with the profile's `ROS_DOMAIN_ID`,
+`ASTRO_DATA` and `ASTRO_STATE` exported and the terminal passed through. Any script that implements those three
+verbs and starts the world plus its ROS bridge on that `ROS_DOMAIN_ID` works; then `astro on sim` is used
+exactly like a boat.
 
 ### Device tooling and profiles
 
