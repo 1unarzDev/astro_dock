@@ -7,12 +7,12 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: "*"
-    # Windows has no HOME (Compose would mount /.config/mhseals, /worktrees and /.cache/wt), and a host path such as
+    # Windows has no HOME (Compose would mount /.config/${ASTRO_CONFIG_DIR:-astro}, /worktrees and /.cache/wt), and a host path such as
     # C:\Users\me\worktrees is not a valid container path, so the Linux worktree mounts do not apply here. The
-    # workspace and the operator config (USERPROFILE/.config/mhseals, created by setup.windows.bat) replace the list.
+    # workspace and the operator config (USERPROFILE/.config/${ASTRO_CONFIG_DIR:-astro}, created by setup.windows.bat) replace the list.
     volumes: !override
       - ..:/home/roboboat/roboboat_ws
-      - ${USERPROFILE}/.config/mhseals:/home/roboboat/.config/mhseals
+      - ${USERPROFILE}/.config/${ASTRO_CONFIG_DIR:-astro}:/home/roboboat/.config/${ASTRO_CONFIG_DIR:-astro}
   sitl:
     environment:
       DISPLAY: host.docker.internal:0
