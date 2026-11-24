@@ -77,8 +77,17 @@ def _within(column, limit):
     return tuple(float(value * scale) for value in column)
 
 
-def _next(points, probe, limit):
-    """The next column to try, or None when the holds so far cannot determine one."""
+def force(response):
+    """A cross response in the force domain, sgn(y) y^2: with quadratic drag a steady velocity goes as the
+    square root of the force, so this (not y) is linear in the column (and zero where y is)."""
+    return tuple(math.copysign(y * y, y) for y in response)
+
+
+def _next(points, probe, limit, square=False):
+    """The next column to try, or None when the holds so far cannot determine one. ``square`` fits the
+    responses in the force domain (``force``), the root unchanged."""
+    if square:
+        points = [(column, force(y)) for column, y in points]
     first = numpy.array(points[0][0], dtype=float)
     if len(points) == 1:
         return _within((first[0] + probe, first[1]), limit)
@@ -120,8 +129,9 @@ def refine(measure, start, tolerance, probe=0.15, limit=1.0, max_holds=4, points
 class Search:
     """``refine`` one hold at a time, so two signs can alternate (out and back)."""
 
-    def __init__(self, tolerance, probe=0.15, limit=1.0, max_holds=4, start=(0.0, 0.0)):
+    def __init__(self, tolerance, probe=0.15, limit=1.0, max_holds=4, start=(0.0, 0.0), square=False):
         self.tolerance, self.probe, self.limit, self.max_holds = tolerance, probe, limit, max_holds
+        self.square = square
         self.points, self.column, self.done = [], tuple(start), False
 
     def add(self, response):
@@ -129,7 +139,7 @@ class Search:
         if worst(response, self.tolerance) <= 1.0 or len(self.points) >= self.max_holds:
             self.done = True
             return
-        self.column = _next(self.points, self.probe, self.limit)
+        self.column = _next(self.points, self.probe, self.limit, self.square)
         self.done = self.column is None
 
     def result(self):

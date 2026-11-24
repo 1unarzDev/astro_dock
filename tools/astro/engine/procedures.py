@@ -368,8 +368,9 @@ def couple(ctx, runner, test, state, defaults, room, amplitude):
     signs = (1, -1) if signed else (1,)
     tolerance = test.get('tolerance', [0.05, 0.05])
     holds = int(test.get('holds', 4))
+    square = test.get('drag', 'quadratic') == 'quadratic'     # cross velocity ~ sqrt(cross force)
     searches = {s: fit.Search(tolerance, float(test.get('probe', 0.15)), float(test.get('limit', 1.0)), holds,
-                              start=tuple(matrices[s][n * k + j] for k in cross)) for s in signs}
+                              start=tuple(matrices[s][n * k + j] for k in cross), square=square) for s in signs}
     min_response = float(test.get('min_response', 0.03))
 
     def candidate(sign):
@@ -416,6 +417,9 @@ def couple(ctx, runner, test, state, defaults, room, amplitude):
         name = f'{axes[j]}{"+" if sign > 0 else "-"}'
         parts.append(f'{name} cross={fmt(list(best["response"]))} '
                      f'{"converged" if best["converged"] else "best of " + str(best["holds"])}')
+        if column == [round(v + 0.0, 4) + 0.0 for v in applying.column_of(matrices[sign], j)]:
+            parts[-1] += ' (the current column is the best measured: nothing to apply)'
+            continue
         changes.append(dict(key=key, column=j, value=column) if sign > 0 else
                        dict(key=signed, column=j, value=column, fallback=key))
     return dict(summary=' | '.join(parts), measured=dict(holds=measured), changes=changes,

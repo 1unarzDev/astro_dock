@@ -41,6 +41,16 @@ class Fit(unittest.TestCase):
         self.assertEqual(single['d2'], 0.0)
         self.assertAlmostEqual(single['d1'], 0.36 / 0.8)
 
+    def test_search_converges_when_cross_velocity_goes_as_sqrt_force(self):
+        # quadratic drag: the cross velocity is sgn(F) sqrt|F| of a force linear in the column (sim couple-surge)
+        f0, jac = numpy.array([0.0035, -0.0074]), numpy.array([[0.96, -0.70], [-0.25, 1.09]])
+        measure = lambda c: tuple(math.copysign(math.sqrt(abs(f)), f) for f in f0 + jac @ numpy.array(c))  # noqa
+        search = fit.Search((0.05, 0.05), max_holds=4, square=True)
+        while not search.done:
+            search.add(measure(search.column))
+        self.assertTrue(search.result()['converged'])
+        self.assertLessEqual(search.result()['holds'], 4)
+
     def test_refine_converges_on_linear_coupling(self):
         y0, jac = numpy.array([0.12, -0.08]), numpy.array([[0.9, 0.2], [-0.1, 1.1]])
         measure = lambda c: tuple(y0 + jac @ numpy.array(c))       # noqa: E731
@@ -332,7 +342,7 @@ class Couple(unittest.TestCase):
             tests.write_text(yaml.safe_dump({
                 'topics': {'effort': '/e', 'odom': '/o'}, 'axes': AXES, 'spaces': {'large': {'amp': 0.5}},
                 'tests': {'couple-surge': {'type': 'couple', 'axis': 'surge', 'holds': 8, 'tolerance': [0.01, 0.01],
-                                           'baseline_s': 1, 'settle_s': 4, 'measure_s': 2, 'min_response': 0.01,
+                                           'baseline_s': 1, 'settle_s': 4, 'measure_s': 2, 'min_response': 0.01, 'drag': 'linear',
                                            'apply': {'key': 'decoupling', 'signed': 'decoupling_negative',
                                                      'live': live}}}}))
             state = Path(tmp, 'state.yaml')
