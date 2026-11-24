@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 
 KINDS = ('mark', 'rec', 'test', 'apply', 'stack', 'rtk', 'trial', 'note')
 WIDTH = 7                      # the kind column: 'HH:MM:SS  apply   ...'
@@ -48,6 +49,8 @@ def write(root, kind, message, topic=None, echo=True, wait=False):
     line = format_line(kind, message)
     directory = day_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
+    if not (directory / '.tz').exists():          # the clock of the HH:MM:SS lines (see epoch)
+        (directory / '.tz').write_text(time.strftime('%z') + '\n')
     with open(directory / 'log.txt', 'a') as out:
         out.write(line + '\n')
     process = publish(topic, line)
@@ -69,3 +72,27 @@ def pid_alive(pid):
         return True
     except (OSError, ValueError):
         return False
+
+
+def epoch(root, day, stamp):
+    """Epoch seconds of a log line's HH:MM:SS on that day, in the clock the day's log was written in
+    (its .tz offset; else this machine's)."""
+    try:
+        offset = (Path(day_dir(root, day)) / '.tz').read_text().strip()
+        zone = datetime.datetime.strptime(offset, '%z').tzinfo
+    except (OSError, ValueError):
+        zone = None
+    when = datetime.datetime.combine(day or datetime.date.today(), datetime.time(*map(int, stamp.split(':'))))
+    return (when.replace(tzinfo=zone) if zone else when).timestamp()
+
+
+def posix_tz(path='/etc/localtime'):
+    """This machine's zone as a POSIX TZ string (the TZif footer), so a container without tzdata keeps
+    the host's clock; '' when unknown."""
+    if os.environ.get('TZ'):
+        return os.environ['TZ']
+    try:
+        lines = Path(path).read_bytes().rstrip(b'\n').split(b'\n')
+        return lines[-1].decode() if len(lines) > 1 else ''
+    except (OSError, UnicodeDecodeError):
+        return ''

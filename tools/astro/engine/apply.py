@@ -113,10 +113,14 @@ def run_check(check, path):
 
 
 def apply(path, changes, defaults=None, check=None, axes=None, live=(), now=None):
-    """Back up, write, check (rolled back on refusal). Returns (backup path, diffs)."""
+    """Back up, write, check (rolled back on refusal). Returns (backup path, changed diffs); (None, [])
+    when nothing would change (no write, no backup)."""
     path = Path(path)
     state = yaml.safe_load(path.read_text()) if path.exists() else {}
     new, diffs = changed(state or {}, defaults, changes, axes)
+    diffs = [d for d in diffs if d[1] != d[2]]
+    if not diffs:
+        return None, []
     backup = path.with_name(f'{path.name}.bak-{stamp(now)}')
     backup.write_text(path.read_text() if path.exists() else ABSENT)
     Path(str(backup) + '.json').write_text(json.dumps({'live': list(live)}))

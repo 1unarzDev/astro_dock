@@ -93,36 +93,36 @@ def stop(vessel):
 
 
 def span(directory):
-    """(start, end) datetimes from a bag's metadata.yaml, or None while it records."""
+    """(start, end) epoch seconds from a bag's metadata.yaml, or None while it records."""
     meta = config.load_yaml(Path(directory) / 'metadata.yaml')
     info = (meta or {}).get('rosbag2_bagfile_information') if isinstance(meta, dict) else None
     if not info:
         return None
     start = info['starting_time']['nanoseconds_since_epoch'] / 1e9
-    end = start + info['duration']['nanoseconds'] / 1e9
-    return datetime.datetime.fromtimestamp(start), datetime.datetime.fromtimestamp(end)
+    return start, start + info['duration']['nanoseconds'] / 1e9
 
 
 def ls(vessel, day=None):
+    """Each bag with the log lines inside it, compared on epoch seconds (the log's clock is its .tz)."""
     root = vessel.data_root()
-    lines = [log.parse_line(line) for line in log.read(root, day)]
-    lines = [line for line in lines if line]
+    day = day or datetime.date.today()
+    lines = [line for line in map(log.parse_line, log.read(root, day)) if line]
+    stamped = [(log.epoch(root, day, stamp), stamp, kind, message) for stamp, kind, message in lines]
     bags = sorted(p for p in (log.day_dir(root, day) / 'bags').glob('*') if p.is_dir())
     if not bags:
         print(f'no bags in {log.day_dir(root, day) / "bags"}')
-    now = datetime.datetime.now()
     for bag in bags:
         found = span(bag)
         if found:
-            begin, end = found
-            head = f'{begin:%H:%M:%S}-{end:%H:%M:%S}'
+            low, high = found
+            head = (f'{datetime.datetime.fromtimestamp(low):%H:%M:%S}-'
+                    f'{datetime.datetime.fromtimestamp(high):%H:%M:%S}')
         else:
-            begin = datetime.datetime.combine(now.date(), datetime.datetime.strptime(bag.name[:6], '%H%M%S').time()) \
-                if bag.name[:6].isdigit() else now
-            end, head = now, f'{begin:%H:%M:%S}-(recording)'
+            starts = [e for e, _, kind, message in stamped if kind == 'rec' and bag.name in message]
+            low, high = (starts[-1] if starts else 0.0), time.time()
+            head = f'{datetime.datetime.fromtimestamp(low):%H:%M:%S}-(recording)' if starts else '(recording)'
         print(f'{head}  {bag.relative_to(root)}')
-        low, high = log.seconds(f'{begin:%H:%M:%S}'), log.seconds(f'{end:%H:%M:%S}')
-        for stamp, kind, message in lines:
-            if low <= log.seconds(stamp) <= high:
+        for when, stamp, kind, message in stamped:
+            if low - 1 <= when <= high + 1:
                 print(f'    {stamp}  {kind:<{log.WIDTH}} {message}')
     return 0

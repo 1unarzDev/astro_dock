@@ -163,14 +163,20 @@ def cmd_apply(s, args):
         log.write(s.root, 'apply', f'{name}  refused by the check, state unchanged', s.events)
         raise config.Error(str(error)) from None
     layer = result.get('layer') or ''
-    for key, old, new in diffs:
-        log.write(s.root, 'apply', f'{name}  {key} {procedures.fmt(old)} -> {procedures.fmt(new)}  '
-                                   f'backup {backup.name}', s.events)
+    if backup is None:
+        print(f'  {layer}: unchanged ({state_path} already holds these values)')
+        results.mark_applied(result['path'], '')
+        print(f'next: {results.next_step(s.rows())}')
+        return 0
+    keys = '; '.join(f'{key} {procedures.fmt(old)} -> {procedures.fmt(new)}' for key, old, new in diffs)
+    log.write(s.root, 'apply', f'{name}  {keys}  backup {backup.name}', s.events)
     print(f'  {layer}: written to {state_path} (astro undo restores {backup.name})')
     results.mark_applied(result['path'], backup.name)
     for line in applying.set_live(live, state_path, defaults) if config.have_ros() else (
             ['not live: no ROS here; applies at the next launch'] if live else []):
         print('  ' + line)
+    if result.get('restart'):
+        print(f'  restart {result["restart"]} to use this')
     print(f'next: {results.next_step(s.rows())}')
     return 0
 
@@ -247,6 +253,10 @@ def dispatch(argv):
         print(f'astro: no verb or help.yaml command {argv[0]!r} (astro help)', file=sys.stderr)
         return 2
     words, command = best
+    if any(a in ('-h', '--help') for a in argv[len(words):]):     # help asked: never run the command
+        package = next(p['package'] for p in packages if command in p['commands'])
+        sys.stdout.write(module.text(packages, exact=(package, command['name'])))
+        return 0
     if command['run'].startswith('astro '):
         print(f'astro: {command["name"]} is an astro verb', file=sys.stderr)
         return 2

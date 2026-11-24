@@ -230,7 +230,7 @@ commands:
       - {name: --host, required: false, description: Only this host.}
       - {name: --dry-run, type: bool, description: Show hosts, files and build plan; send nothing.}
     examples:
-      - astro hot mhseals_hardware --dry-run
+      - astro hot REPO --dry-run
   - name: station take
     run: $ROS_WS/hw.sh station take
     summary: Make this computer the operator station (robot link, gateway and time roles, keys, station file).

@@ -130,6 +130,12 @@ class Apply(unittest.TestCase):
         with self.assertRaises(apply.Refused):
             apply.undo(self.state)
 
+    def test_unchanged_writes_nothing(self):
+        before = self.state.read_text()
+        self.assertEqual(apply.apply(self.state, [dict(key='other', value=1)], {}, self.check), (None, []))
+        self.assertEqual(self.state.read_text(), before)
+        self.assertEqual(apply.backups(self.state), [])
+
     def test_refused_check_rolls_back(self):
         before = self.state.read_text()
         with self.assertRaisesRegex(apply.Refused, 'check refused'):
@@ -160,6 +166,17 @@ class Log(unittest.TestCase):
             self.assertEqual(log.parse_line(log.read(tmp)[0])[1:], ('mark', 'x'))
 
 
+    def test_epoch_follows_the_log_clock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            day = datetime.date(2026, 11, 24)
+            log.day_dir(tmp, day).mkdir(parents=True)
+            (log.day_dir(tmp, day) / '.tz').write_text('+0000\n')
+            utc = datetime.datetime(2026, 11, 24, 17, 12, 0, tzinfo=datetime.timezone.utc).timestamp()
+            self.assertEqual(log.epoch(tmp, day, '17:12:00'), utc)
+            (log.day_dir(tmp, day) / '.tz').write_text('-0600\n')
+            self.assertEqual(log.epoch(tmp, day, '11:12:00'), utc)
+
+
 class Status(unittest.TestCase):
     def test_classification_and_next(self):
         defaults = {'decoupling': IDENTITY}
@@ -186,6 +203,14 @@ class Status(unittest.TestCase):
 
 
 class Verbs(unittest.TestCase):
+    def test_help_on_a_dispatched_command_never_runs_it(self):
+        import contextlib, io
+        from unittest import mock
+        with mock.patch('subprocess.call') as call, contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(['hot', 'REPO', '--help']), 0)
+        call.assert_not_called()
+        self.assertIn('hw.sh hot', out.getvalue())
+
     def test_every_verb_has_a_help_entry_and_every_astro_entry_is_a_verb(self):
         packages, errors = cli.help_module().discover([cli.HELP.with_name('astro-help.yaml')])
         self.assertEqual(errors, [])

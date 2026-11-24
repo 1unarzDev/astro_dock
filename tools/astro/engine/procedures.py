@@ -161,6 +161,8 @@ def run(ctx, name, space='large', amp=None):
 
 def finish(ctx, name, test, base, outcome, state, defaults):
     result = dict(base, status='done', **outcome)
+    if (test.get('apply') or {}).get('restart'):
+        result['restart'] = test['apply']['restart']
     if ctx.holds:
         result['holds'] = ctx.holds
     path = results.save(log.day_dir(ctx.data_root), result)

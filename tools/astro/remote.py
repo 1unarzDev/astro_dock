@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 from . import config
+from .engine import log
 
 
 def _tty():
@@ -86,7 +87,8 @@ def ssh_command(vessel, host, spec, cmd, tty):
                 f'--filter label=com.docker.compose.service=dev | head -n1); ')
     container = f'"${{c:-{name}}}"' if find else shlex.quote(name)
     words += ['-t'] if tty else []
-    remote = f'{find}docker exec {"-it" if tty else "-i"} {container} bash'
+    tz = '-e TZ="$(tail -n1 /etc/localtime 2>/dev/null)" '   # one clock: the container keeps its host's
+    remote = f'{find}docker exec {"-it" if tty else "-i"} {tz}{container} bash'
     if cmd:
         remote += ' -c ' + shlex.quote(' '.join(cmd))
     return words + [target, remote]
@@ -125,6 +127,8 @@ def on(name, cmd):
                 raise config.Error('no running dev container for this checkout (start it, or name one with '
                                    f'container: on the {name} registry host)')
         words = ['docker', 'exec', '-it' if tty else '-i']
+        if log.posix_tz():
+            words += ['-e', f'TZ={log.posix_tz()}']      # one clock: the container keeps the host's
         for key, value in local_env(vessel, False).items():
             words += ['-e', f'{key}={value}']
         words += [container, 'bash'] + (['-c', ' '.join(cmd)] if cmd else [])
