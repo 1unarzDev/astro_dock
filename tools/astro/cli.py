@@ -6,7 +6,6 @@ import importlib.util
 import os
 from pathlib import Path
 import shlex
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -22,7 +21,10 @@ HEADER = ('up', 'down', 'ps', 'status', 'rec', 'test', 'apply', 'undo', 'bundle'
 # Verbs that need ROS or the vessel's data dir and state: run outside ROS, they forward to the profile's
 # astro.home (a registry host or role) unless --here or ASTRO_HERE=1. Every other verb runs where it is typed.
 HOME_VERBS = ('status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle')
-MARK_TIMEOUT = 20      # seconds a forwarded mark's ssh may take in the background
+MARK_TIMEOUT = remote.MARK_TIMEOUT      # seconds a forwarded mark's ssh may take in the background
+# The background half of a forwarded mark (remote.deliver_mark), run detached by this Python.
+DELIVER = ('import sys; sys.path.insert(0, sys.argv[1]); from astro import config, remote; '
+           'sys.exit(remote.deliver_mark(config.Vessel(), sys.argv[2], sys.argv[3], sys.argv[4:]))')
 HELP = config.WS / '.devcontainer' / 'astro-help.py'
 
 
@@ -59,24 +61,42 @@ def forwards(verb, here, ros, home):
 
 
 def forward(vessel, home, args, tty=None):
-    """Run `astro ARGS` on HOME; a mark goes in the background (its ssh killed after MARK_TIMEOUT s)."""
+    """Run `astro ARGS` on HOME, then send any pending marks. A mark goes in the background with its time
+    (ssh killed after MARK_TIMEOUT s; when it fails the mark is kept pending, see remote.deliver_mark)."""
     tty = remote._tty() if tty is None else tty
     verb = args[0]
-    host, argv, env = remote.home_words(vessel, home, args, tty and verb != 'mark')
     dim = sys.stderr.isatty() and 'NO_COLOR' not in os.environ
-    print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
     if verb == 'mark':
-        if shutil.which('timeout'):
-            argv = ['timeout', str(MARK_TIMEOUT)] + argv
-        subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+        host, _ = remote.place(vessel, home)
+        print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
+        at = datetime.datetime.now().astimezone().isoformat(timespec='seconds')
+        subprocess.Popen([sys.executable, '-c', DELIVER, str(config.WS / 'tools'), home, at, *args[1:]],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, start_new_session=True)
         return 0
+    host, argv, env = remote.home_words(vessel, home, args, tty)
+    print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
     if verb == 'test' and args[1:2] not in (['list'], ['status']):
         print(f'running on {host}; if the link drops the test continues \u2014 RC is the stop')
     try:
-        return subprocess.call(argv, env=env)
+        code = subprocess.call(argv, env=env)
     except KeyboardInterrupt:
         return 130
+    if code == 0:
+        remote.replay_marks(vessel, home)
+    return code
+
+
+def field_home(vessel, here):
+    """The profile's astro.home when sync/show must read the day's data there: set, reached over ssh (not this
+    machine's own container), and not --here, ASTRO_HERE=1 or inside ROS."""
+    home = vessel.astro.get('home')
+    if here or not home or config.have_ros():
+        return None
+    try:
+        _, spec = remote.place(vessel, str(home))
+    except config.Error:
+        return None
+    return str(home) if spec['ssh'] else None
 
 
 class Session:
@@ -359,7 +379,9 @@ def parser():
     r = sub.add_parser('rec', add_help=False)
     r.add_argument('action', choices=('start', 'stop', 'ls'))
     r.add_argument('words', nargs='*')
-    sub.add_parser('mark', add_help=False).add_argument('text', nargs='+')
+    m = sub.add_parser('mark', add_help=False)
+    m.add_argument('text', nargs='+')
+    m.add_argument('--at')                       # a forwarded or pending mark's original time (ISO)
     sub.add_parser('log', add_help=False).add_argument('-n', type=int, default=0)
     t = sub.add_parser('test', add_help=False)
     t.add_argument('name')
@@ -377,7 +399,7 @@ def parser():
     i = sub.add_parser('issue', add_help=False)
     i.add_argument('text', nargs='+')
     i.add_argument('--label', dest='labels', action='append', default=[])
-    sub.add_parser('sync', add_help=False)
+    sub.add_parser('sync', add_help=False).add_argument('--pack')   # DATE: the day's tar for a remote sync
     sub.add_parser('show', add_help=False).add_argument('date', nargs='?')
     sub.add_parser('docs', add_help=False)
     return p
@@ -424,14 +446,17 @@ def main(argv=None):
         if verb == 'issue':
             return field.issue(s.vessel, ' '.join(args.text), args.labels)
         if verb == 'sync':
-            return field.sync(s.vessel)
+            if args.pack:
+                return field.pack(s.vessel, args.pack, sys.stdout.buffer)
+            return field.sync(s.vessel, field_home(s.vessel, here))
         if verb == 'show':
-            return field.show(s.vessel, args.date)
+            return field.show(s.vessel, args.date, field_home(s.vessel, here))
         if verb == 'docs':
             from . import docs
             return docs.main(s.vessel)
         if verb == 'mark':
-            log.write(s.root, 'mark', ' '.join(args.text), s.events)
+            log.write(s.root, 'mark', ' '.join(args.text), s.events,
+                      when=remote.mark_time(args.at) if args.at else None)
             return 0
         if verb == 'rec':
             if args.action == 'ls':

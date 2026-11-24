@@ -116,7 +116,9 @@ the sim profile's `ROS_DOMAIN_ID`, `ASTRO_DATA` and `ASTRO_STATE` exported. Any 
 starts a world and its ROS bridge works.
 
 **Field log.** `astro.field` names a git repo with `checklists/` and `sessions/DATE-LABEL/`. `astro sync`
-copies the day's log, results and a bag index there. astro files an `auto` issue when a test aborts with an
+copies the day's log, results and a bag index there; on the operator laptop it fetches them from
+`astro.home` first (never the bag data), and `show` reads that copy. A forwarded `mark` that cannot reach home
+is kept pending locally and sent with its original time by the next forwarded command or `sync`. astro files an `auto` issue when a test aborts with an
 error, a stack fails to come up or the check refuses an apply; a repeat adds at most one comment an hour,
 and at most 5 issues are filed a day. `auto: false` turns this off for a vessel, `ASTRO_FIELD=off` turns off
 all its network calls.

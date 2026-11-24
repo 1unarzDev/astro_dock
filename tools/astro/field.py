@@ -13,11 +13,18 @@ Automatic issues (auto) are filed only for a test aborted by an error, an `astro
 the check refused. A failure's signature is kind + name + its first error line, normalised (numbers and
 hashes dropped), kept in a hidden marker in the body: an open `auto` issue with it gets a short comment
 instead (at most one per signature per hour), and at most 5 new auto issues are filed per day.
+When the profile's astro.home is reached over ssh (the operator laptop: the day's data lives on the vessel),
+sync first fetches the home host's day folder as a tar (`astro on HOME astro sync --pack DATE`: log.txt, its
+.tz, results/*.yaml and a bags.txt index of names, spans and sizes, never the bag data) and sends the marks
+kept pending there; show reads the synced copy, else today's `astro log` on home. ASTRO_FIELD_DIR overrides
+field.dir (a test clone).
+
 ASTRO_FIELD=off: no gh or git network calls and no auto issues (the unit tests set it); auto: false in the
 profile turns off auto issues only.
 """
 import datetime
 import hashlib
+import io
 import os
 from pathlib import Path
 import re
@@ -25,6 +32,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 
 import yaml
@@ -125,7 +134,8 @@ class Field:
         self.vessel, self.root = vessel, vessel.data_root()
         self.repo = str(spec['repo'])
         self.url = str(spec.get('url') or f'https://github.com/{self.repo}.git')
-        self.dir = Path(remote.expand(spec.get('dir') or '~/.local/share/astro/field'))
+        self.dir = Path(remote.expand(os.environ.get('ASTRO_FIELD_DIR') or spec.get('dir')
+                                      or '~/.local/share/astro/field'))
         self.auto_on = spec.get('auto', True) is not False
 
     # ---- where things are -------------------------------------------------------------------------
@@ -275,16 +285,36 @@ class Field:
         for path in sorted((source / 'results').glob('*.yaml')):
             dump(session / 'results' / path.name, strip_samples(load(path)))
             written.append(f'results/{path.name}')
-        rows = []
-        for bag in sorted(p for p in (source / 'bags').glob('*') if p.is_dir()):
-            found = rec.span(bag)
-            when = ('-'.join(f'{datetime.datetime.fromtimestamp(t):%H:%M:%S}' for t in found) if found
-                    else '(recording)')
-            rows.append(f'{bag.name}  {socket.gethostname()}:{bag}  {when}  {size_text(bag)}')
+        fetched = source / 'bags.txt'
+        rows = fetched.read_text().splitlines() if fetched.exists() else bag_rows(source)
         if rows:
             (session / 'bags.txt').write_text('\n'.join(rows) + '\n')
             written.append('bags.txt')
         return written
+
+    def fetch_home(self, home, day, dest):
+        """Fetch HOME's day folder (see pack) into DEST/<date>/; True when it came."""
+        try:
+            _, argv, env = remote.home_words(self.vessel, home, ['sync', '--pack', day.isoformat()], False)
+            done = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired, config.Error):
+            return False
+        start = done.stdout.find(b'\x1f\x8b')          # the gzip stream, past anything a shell rc printed
+        if done.returncode or start < 0:
+            return False
+        target = Path(dest) / day.isoformat()
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            with tarfile.open(fileobj=io.BytesIO(done.stdout[start:]), mode='r:gz') as tar:
+                for member in tar.getmembers():
+                    name = Path(member.name)
+                    if member.isfile() and not name.is_absolute() and '..' not in name.parts:
+                        out = target / name
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        out.write_bytes(tar.extractfile(member).read())
+        except (tarfile.TarError, OSError):
+            return False
+        return True
 
     def fetch(self):
         """Clone, or pull, the repo into dir (keeping files written there before the first clone)."""
@@ -305,6 +335,39 @@ class Field:
                     self.git('checkout', '-q', '--', *deleted)
         if not done or done.returncode:
             raise config.Error(f'git: {first_line(done.stderr) if done else "not run"} ({self.dir})')
+
+
+def bag_rows(source):
+    """`NAME  HOST:PATH  START-END  SIZE` of each bag in a day folder."""
+    rows = []
+    for bag in sorted(p for p in (Path(source) / 'bags').glob('*') if p.is_dir()):
+        found = rec.span(bag)
+        when = ('-'.join(f'{datetime.datetime.fromtimestamp(t):%H:%M:%S}' for t in found) if found
+                else '(recording)')
+        rows.append(f'{bag.name}  {socket.gethostname()}:{bag}  {when}  {size_text(bag)}')
+    return rows
+
+
+def pack(vessel, date, out):
+    """`astro sync --pack DATE` (run on home): the day's log.txt, .tz, results/*.yaml and bags.txt as a
+    tar.gz on OUT. Bag data never goes in."""
+    try:
+        day = datetime.date.fromisoformat(date)
+    except ValueError:
+        raise config.Error(f'{date}: expected YYYY-MM-DD') from None
+    source = log.day_dir(vessel.data_root(), day)
+    with tarfile.open(fileobj=out, mode='w|gz') as tar:
+        for path in [source / 'log.txt', source / '.tz', *sorted((source / 'results').glob('*.yaml'))]:
+            if path.is_file():
+                tar.add(path, arcname=str(path.relative_to(source)))
+        rows = bag_rows(source)
+        if rows:
+            data = ('\n'.join(rows) + '\n').encode()
+            info = tarfile.TarInfo('bags.txt')
+            info.size, info.mtime = len(data), int(time.time())
+            tar.addfile(info, io.BytesIO(data))
+    out.flush()
+    return 0
 
 
 # ---- verbs ------------------------------------------------------------------------------------------
@@ -397,14 +460,33 @@ def auto(vessel, kind, name, error, detail=''):
         return None
 
 
-def sync(vessel):
+def sync(vessel, home=None):
+    """HOME: the astro.home the day's data is fetched from (None: this machine's data root)."""
     f = Field(vessel)
+    if home:
+        remote.replay_marks(vessel, home)
     probe = run(['git', 'ls-remote', '-q', f.url, 'HEAD'])
     if not probe or probe.returncode:
         print(f'astro sync: offline ({f.url} not reachable); nothing synced')
         return 0
-    f.fetch()
     day = datetime.date.today()
+    fetched = tempfile.TemporaryDirectory(prefix='astro-sync-') if home else None
+    if fetched:
+        if not f.fetch_home(home, day, fetched.name):
+            fetched.cleanup()
+            print(f'astro sync: {home} not reachable; its day log, results and bag index not synced '
+                  '(synced sessions stay)')
+            return 0
+        f.root = Path(fetched.name)
+    try:
+        return _sync(f, day)
+    finally:
+        if fetched:
+            fetched.cleanup()
+
+
+def _sync(f, day):
+    f.fetch()
     session = f.session(day)
     written = f.collect(day, session)
     sent, left = f.flush()
@@ -425,7 +507,22 @@ def sync(vessel):
     return 0
 
 
-def show(vessel, date=None):
+def home_log(vessel, home):
+    """Today's log lines from `astro log` on HOME ([] with one line when it is not reachable)."""
+    try:
+        _, argv, env = remote.home_words(vessel, home, ['log'], False)
+        done = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              timeout=TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired, config.Error):
+        done = None
+    if not done or done.returncode:
+        print(f'(not synced, and {home} not reachable)')
+        return []
+    return done.stdout.splitlines()
+
+
+def show(vessel, date=None, home=None):
+    """HOME: the day's data lives there (read the synced copy, else today's `astro log` on home)."""
     f = Field(vessel)
     try:
         day = datetime.date.fromisoformat(date) if date else datetime.date.today()
@@ -446,8 +543,11 @@ def show(vessel, date=None):
     if not checks:
         print('(none)')
     print('\n== log')
-    lines = log.read(f.root, day) or ((session / 'log.txt').read_text().splitlines()
-                                      if (session / 'log.txt').exists() else [])
+    synced = (session / 'log.txt').read_text().splitlines() if (session / 'log.txt').exists() else []
+    if home:
+        lines = synced or (home_log(vessel, home) if day == datetime.date.today() else [])
+    else:
+        lines = log.read(f.root, day) or synced
     parsed = [p for p in map(log.parse_line, lines) if p]
     tests = [m.split()[0] for _, k, m in parsed if k == 'test' and m.split()]
     print(f'tests: {tests.count("start")} started, {tests.count("done")} done, {tests.count("abort")} aborted; '

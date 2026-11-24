@@ -5,6 +5,9 @@ current one has none) reached over ssh, then `docker exec` into its dev containe
 whose registry has no ssh host (the sim), run on this machine with that vessel's environment: inside the
 registry host's `container:` when it names one, else this checkout's dev container, else (already in a
 container with ROS) right here."""
+import contextlib
+import datetime
+import fcntl
 import os
 from pathlib import Path
 import re
@@ -157,6 +160,89 @@ def home_words(vessel, home, args, tty):
     cmd = 'ASTRO_HERE=1 astro' + ''.join(' ' + shlex.quote(a) for a in args)
     argv, env = words(vessel, host, spec, cmd, tty)
     return host, argv, env
+
+
+# ---- forwarded marks: never lost ----------------------------------------------------------------------
+# A forwarded mark is sent in the background (deliver_mark). When its ssh fails it is appended to a local
+# pending file (ISO time, a tab, the text) and sent again, with its original time (`astro mark --at ISO`),
+# after the next forwarded command that succeeds or by astro sync.
+
+MARK_TIMEOUT = 20      # seconds a forwarded mark's ssh may take
+
+
+def pending_path(vessel):
+    base = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state')
+    return base / 'astro' / f'{vessel.name}-marks.pending'
+
+
+@contextlib.contextmanager
+def _locked(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'a+') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.seek(0)
+        yield handle
+
+
+def queue_mark(vessel, at, text):
+    path = pending_path(vessel)
+    with _locked(path) as handle:
+        handle.write(f'{at}\t{" ".join(str(text).split())}\n')
+    return path
+
+
+def send_mark(vessel, home, at, words):
+    """True when `astro mark --at AT WORDS` ran on HOME (exit 0) within MARK_TIMEOUT s."""
+    try:
+        _, argv, env = home_words(vessel, home, ['mark', '--at', at, *words], False)
+        done = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=MARK_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired, config.Error):
+        return False
+    return done.returncode == 0
+
+
+def replay_marks(vessel, home):
+    """Send the pending marks to HOME in order, keeping those from the first failure on. (sent, left)."""
+    path = pending_path(vessel)
+    if not path.exists():
+        return 0, 0
+    with _locked(path) as handle:
+        rows = [line.rstrip('\n').split('\t', 1) for line in handle if '\t' in line]
+        sent = 0
+        for at, text in rows:
+            if not send_mark(vessel, home, at, text.split()):
+                break
+            sent += 1
+        handle.seek(0)
+        handle.truncate()
+        handle.writelines(f'{at}\t{text}\n' for at, text in rows[sent:])
+    if not rows[sent:]:
+        path.unlink(missing_ok=True)
+    if sent:
+        print(f'astro: sent {sent} pending mark{"s" if sent > 1 else ""} to {home}'
+              + (f'; {len(rows) - sent} still pending in {path}' if rows[sent:] else ''), file=sys.stderr)
+    return sent, len(rows) - sent
+
+
+def deliver_mark(vessel, home, at, words):
+    """The background half of a forwarded mark: send it, else keep it pending and say so in one line."""
+    if send_mark(vessel, home, at, words):
+        replay_marks(vessel, home)
+        return 0
+    path = queue_mark(vessel, at, ' '.join(words))
+    print(f'astro mark: {home} not reachable; kept in {path} (sent on the next forwarded command or astro sync)',
+          file=sys.stderr)
+    return 1
+
+
+def mark_time(at):
+    """A mark's --at (ISO, with or without an offset) as a local naive datetime."""
+    try:
+        when = datetime.datetime.fromisoformat(at)
+    except ValueError:
+        raise config.Error(f'--at {at}: expected an ISO time (YYYY-MM-DDTHH:MM:SS[+HH:MM])') from None
+    return when.astimezone().replace(tzinfo=None) if when.tzinfo else when
 
 
 def on(name, cmd):

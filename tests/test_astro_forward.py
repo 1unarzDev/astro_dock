@@ -1,10 +1,12 @@
 """astro's forwarding: outside ROS, the verbs that need ROS or the vessel's data run on the profile's astro.home
 (`astro on HOME astro ...`). No network: subprocess and the vessel are stubbed."""
+import datetime
 import io
 import os
 from pathlib import Path
 import shlex
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -13,6 +15,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 os.environ['ASTRO_FIELD'] = 'off'
 
 from astro import cli, config, remote  # noqa: E402
+from astro.engine import log  # noqa: E402
 
 
 class FakeVessel:
@@ -135,22 +138,26 @@ class Argv(unittest.TestCase):
 
 
 class Forward(unittest.TestCase):
-    def call(self, args, tty=False):
+    def call(self, args, tty=False, code=0):
         with mock.patch.object(remote, 'home_words', return_value=('boat-main', ['ssh', 'x'], None)) as words, \
                 mock.patch.object(cli.subprocess, 'Popen') as popen, \
-                mock.patch.object(cli.subprocess, 'call', return_value=0) as call, \
-                mock.patch.object(cli.shutil, 'which', return_value='/usr/bin/timeout'), \
+                mock.patch.object(cli.subprocess, 'call', return_value=code) as call, \
+                mock.patch.object(remote, 'replay_marks', return_value=(0, 0)) as replay, \
                 mock.patch('sys.stdout', new=io.StringIO()) as out, mock.patch('sys.stderr', new=io.StringIO()) as err:
-            code = cli.forward(FakeVessel(), 'computer', args, tty)
-        return code, words, popen, call, out.getvalue(), err.getvalue()
+            result = cli.forward(FakeVessel(), 'computer', args, tty)
+        self.replay = replay
+        return result, words, popen, call, out.getvalue(), err.getvalue()
 
-    def test_mark_is_backgrounded_with_a_timeout_and_no_tty(self):
-        code, words, popen, call, _, err = self.call(['mark', 'wind'], tty=True)
+    def test_mark_is_backgrounded_with_its_time_and_no_tty(self):
+        code, words, popen, call, _, err = self.call(['mark', 'wind', 'up'], tty=True)
         self.assertEqual(code, 0)
         call.assert_not_called()
-        self.assertFalse(words.call_args[0][3])
+        words.assert_not_called()
         argv = popen.call_args[0][0]
-        self.assertEqual(argv[:2], ['timeout', str(cli.MARK_TIMEOUT)])
+        self.assertEqual(argv[1:3], ['-c', cli.DELIVER])
+        self.assertEqual(argv[4], 'computer')
+        self.assertRegex(argv[5], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$')
+        self.assertEqual(argv[6:], ['wind', 'up'])
         self.assertTrue(popen.call_args[1]['start_new_session'])
         self.assertIn('(on boat-main)', err)
 
@@ -163,6 +170,98 @@ class Forward(unittest.TestCase):
     def test_test_list_has_no_reminder(self):
         _, _, _, _, out, _ = self.call(['test', 'list'])
         self.assertNotIn('link drops', out)
+
+    def test_pending_marks_go_after_a_successful_command_only(self):
+        self.call(['log'])
+        self.replay.assert_called_once()
+        self.call(['log'], code=255)
+        self.replay.assert_not_called()
+
+
+class PendingMarks(unittest.TestCase):
+    """A forwarded mark whose ssh fails is kept locally and sent later with its original time."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {'XDG_STATE_HOME': self.tmp.name})
+        self.env.start()
+        self.vessel = FakeVessel()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def run_with(self, codes, fn, *args):
+        codes = list(codes)
+        sent = []
+
+        def fake_run(argv, **kwargs):
+            sent.append(shlex.split(shlex.split(argv[-1])[-1]))
+            self.assertEqual(kwargs['timeout'], remote.MARK_TIMEOUT)
+            return mock.Mock(returncode=codes.pop(0))
+        with mock.patch.object(remote.subprocess, 'run', side_effect=fake_run), \
+                mock.patch('sys.stderr', new=io.StringIO()) as err:
+            result = fn(*args)
+        return result, sent, err.getvalue()
+
+    def pending(self):
+        path = remote.pending_path(self.vessel)
+        return path.read_text().splitlines() if path.exists() else None
+
+    def test_failed_mark_is_kept_with_one_line(self):
+        at = '2026-11-24T14:02:03-06:00'
+        code, sent, err = self.run_with([255], remote.deliver_mark, self.vessel, 'computer', at, ['wind', "it's up"])
+        self.assertEqual(code, 1)
+        self.assertEqual(sent, [['ASTRO_HERE=1', 'astro', 'mark', '--at', at, 'wind', "it's up"]])
+        self.assertEqual(self.pending(), [f"{at}\twind it's up"])
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertIn('not reachable; kept in', err)
+
+    def test_replay_keeps_order_and_times_and_stops_at_a_failure(self):
+        for at, text in (('2026-11-24T14:00:00-06:00', 'one'), ('2026-11-24T14:01:00-06:00', 'two words'),
+                         ('2026-11-24T14:02:00-06:00', 'three')):
+            remote.queue_mark(self.vessel, at, text)
+        (sent, left), argvs, err = self.run_with([0, 255], remote.replay_marks, self.vessel, 'computer')
+        self.assertEqual((sent, left), (1, 2))
+        self.assertEqual(argvs[0][2:], ['mark', '--at', '2026-11-24T14:00:00-06:00', 'one'])
+        self.assertEqual(argvs[1][2:], ['mark', '--at', '2026-11-24T14:01:00-06:00', 'two', 'words'])
+        self.assertEqual(self.pending(), ['2026-11-24T14:01:00-06:00\ttwo words', '2026-11-24T14:02:00-06:00\tthree'])
+        self.assertIn('2 still pending', err)
+        (sent, left), _, _ = self.run_with([0, 0], remote.replay_marks, self.vessel, 'computer')
+        self.assertEqual((sent, left), (2, 0))
+        self.assertIsNone(self.pending())
+
+    def test_a_delivered_mark_sends_the_pending_ones(self):
+        remote.queue_mark(self.vessel, '2026-11-24T13:00:00-06:00', 'old')
+        code, sent, _ = self.run_with([0, 0], remote.deliver_mark, self.vessel, 'computer',
+                                      '2026-11-24T14:00:00-06:00', ['new'])
+        self.assertEqual(code, 0)
+        self.assertEqual([s[-1] for s in sent], ['new', 'old'])
+        self.assertIsNone(self.pending())
+
+    def test_nothing_pending_runs_nothing(self):
+        (sent, left), argvs, _ = self.run_with([], remote.replay_marks, self.vessel, 'computer')
+        self.assertEqual(((sent, left), argvs), ((0, 0), []))
+
+    def test_mark_at_writes_the_original_time_and_day(self):
+        when = remote.mark_time('2026-11-23T23:59:58')
+        root = Path(self.tmp.name) / 'data'
+        with mock.patch('sys.stdout', new=io.StringIO()):
+            log.write(root, 'mark', 'late', when=when)
+        self.assertEqual((root / '2026-11-23/log.txt').read_text(), '23:59:58  mark    late\n')
+        self.assertEqual(remote.mark_time('2026-11-24T20:00:00+00:00'),
+                         datetime.datetime(2026, 11, 24, 20, tzinfo=datetime.timezone.utc).astimezone().replace(tzinfo=None))
+
+
+class FieldHome(unittest.TestCase):
+    def test_sync_and_show_fetch_only_from_an_ssh_home(self):
+        with mock.patch.object(config, 'have_ros', return_value=False):
+            self.assertEqual(cli.field_home(FakeVessel(), False), 'computer')
+            self.assertIsNone(cli.field_home(FakeVessel(ssh=False), False))     # this machine's container
+            self.assertIsNone(cli.field_home(FakeVessel(), True))
+            self.assertIsNone(cli.field_home(FakeVessel(home=None), False))
+        with mock.patch.object(config, 'have_ros', return_value=True):
+            self.assertIsNone(cli.field_home(FakeVessel(), False))
 
 
 if __name__ == '__main__':

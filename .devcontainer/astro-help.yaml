@@ -102,7 +102,7 @@ commands:
   - name: mark
     run: astro mark
     summary: One log line, also published on the events topic (so it lands in the bag); returns at once.
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ... (in the background, ssh killed after 20 s); --here runs it here.
+    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ... (in the background with its time, ssh killed after 20 s; if that fails the mark is kept in ~/.local/state/astro/VESSEL-marks.pending, said in one line, and sent with its original time after the next forwarded command or astro sync); --here runs it here.
     ros: "ros2 topic pub --once /events std_msgs/msg/String \"{data: 'HH:MM:SS  mark  TEXT'}\""
     params:
       - {name: text, type: list, description: What happened.}
@@ -191,7 +191,7 @@ commands:
     run: astro sync
     summary: Clone or pull the field repo, copy today's log, results (without raw samples) and a bag index into the session folder, commit, push and file queued issues.
     ros: git pull; cp DATA/DATE/log.txt SESSION/; git commit; git push; gh issue create
-    notes: Safe to repeat. Offline it prints one line and exits 0. The session folder is sessions/DATE-LABEL (an existing one, else the day's first rec start label, else session).
+    notes: Safe to repeat. Offline, or with astro.home not reachable, it prints one line and exits 0 (synced sessions stay). When astro.home is reached over ssh (the operator laptop) it first fetches that host's day folder - log.txt, results and a bag index (name, start-end, size), never bag data - and sends pending marks. ASTRO_FIELD_DIR overrides field.dir. The session folder is sessions/DATE-LABEL (an existing one, else the day's first rec start label, else session).
     examples:
       - astro sync
 
@@ -206,6 +206,7 @@ commands:
     run: astro show
     summary: A session in plain text - its plan, check states, the log's counts (tests, applies, marks, bags) and the open issues.
     ros: cat SESSION/plan.md; gh issue list
+    notes: With astro.home reached over ssh it reads the synced copy, else today's astro log on home.
     params:
       - {name: date, required: false, description: 'YYYY-MM-DD (default today).'}
     examples:

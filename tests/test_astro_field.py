@@ -1,6 +1,7 @@
 """astro's field log (tools/astro/field.py): checklist parsing, failure signatures, auto-issue dedup and cap,
 and the files sync copies. gh is a fake script on PATH; nothing reaches the network."""
 import contextlib
+import datetime
 import io
 import os
 from pathlib import Path
@@ -146,6 +147,62 @@ class Sync(unittest.TestCase):
             self.assertEqual((kept['summary'], kept['measured']), ('d1=0.4', {'holds': [{'level': 0.3}]}))
             self.assertRegex((session / 'bags.txt').read_text(), r'^120000-lake  \S+:\S+120000-lake  \(recording\)  2\.0K')
             self.assertEqual(f.collect(day, session), ['log.txt', 'results/speed-surge-120300.yaml', 'bags.txt'])
+
+
+
+class HomeFetch(unittest.TestCase):
+    """sync on the operator laptop fetches the home host's day folder as a tar (no network: subprocess stubbed)."""
+
+    def test_pack_then_fetch_brings_the_index_not_the_bags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vessel = Vessel(tmp)
+            day = datetime.date(2030, 1, 2)
+            src = Path(tmp, 'data', day.isoformat())
+            (src / 'results').mkdir(parents=True)
+            (src / 'bags/120000-lake').mkdir(parents=True)
+            (src / 'bags/120000-lake/x.mcap').write_bytes(b'0' * 4096)
+            (src / 'log.txt').write_text('12:00:01  rec     start bags/120000-lake (lean)\n')
+            (src / '.tz').write_text('-0600\n')
+            (src / 'results/speed-surge-120300.yaml').write_text(yaml.safe_dump(
+                {'holds': [{'start': 1.0, 'samples': {'t': [0.0]}}]}))
+            packed = io.BytesIO()
+            field.pack(vessel, day.isoformat(), packed)
+            calls = []
+
+            def fake_run(argv, **kwargs):
+                calls.append(argv)
+                return mock.Mock(returncode=0, stdout=b'rc noise\n' + packed.getvalue())
+            f = field.Field(vessel)
+            words = ('boat-main', ['ssh', 'crew@10.0.0.2', 'docker exec -i dev1 bash -c X'], None)
+            with mock.patch.object(field.remote, 'home_words', return_value=words) as home_words, \
+                    mock.patch.object(field.subprocess, 'run', side_effect=fake_run):
+                self.assertTrue(f.fetch_home('computer', day, Path(tmp, 'fetched')))
+            self.assertEqual(home_words.call_args[0][1:], ('computer', ['sync', '--pack', '2030-01-02'], False))
+            self.assertEqual(calls, [words[1]])
+            got = Path(tmp, 'fetched', day.isoformat())
+            self.assertEqual(sorted(str(p.relative_to(got)) for p in got.rglob('*') if p.is_file()),
+                             ['.tz', 'bags.txt', 'log.txt', 'results/speed-surge-120300.yaml'])
+            f.root = Path(tmp, 'fetched')
+            session = f.session(day)
+            self.assertEqual(session.name, '2030-01-02-lake')
+            self.assertEqual(f.collect(day, session), ['log.txt', 'results/speed-surge-120300.yaml', 'bags.txt'])
+            self.assertRegex((session / 'bags.txt').read_text(), r'^120000-lake  \S+:\S+120000-lake  \(recording\)  4\.0K')
+            kept = yaml.safe_load((session / 'results/speed-surge-120300.yaml').read_text())
+            self.assertEqual(kept['holds'], [{'start': 1.0}])
+
+    def test_unreachable_home_is_one_line_and_exit_0(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vessel = Vessel(tmp)
+            with mock.patch.object(field, 'run', return_value=mock.Mock(returncode=0)), \
+                    mock.patch.object(field.remote, 'replay_marks', return_value=(0, 0)), \
+                    mock.patch.object(field.remote, 'home_words', return_value=('boat-main', ['ssh', 'x'], None)), \
+                    mock.patch.object(field.subprocess, 'run', return_value=mock.Mock(returncode=255, stdout=b'')), \
+                    mock.patch.object(field.Field, 'fetch') as fetch, \
+                    mock.patch('sys.stdout', new=io.StringIO()) as out:
+                self.assertEqual(field.sync(vessel, 'computer'), 0)
+            fetch.assert_not_called()
+            self.assertEqual(len(out.getvalue().strip().splitlines()), 1)
+            self.assertIn('computer not reachable', out.getvalue())
 
 
 if __name__ == '__main__':

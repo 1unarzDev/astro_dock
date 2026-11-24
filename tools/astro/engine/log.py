@@ -44,10 +44,11 @@ def publish(topic, line):
                             start_new_session=True)
 
 
-def write(root, kind, message, topic=None, echo=True, wait=False):
-    """Append one line to today's log, publish it (wait: until it went out), and print it."""
-    line = format_line(kind, message)
-    directory = day_dir(root)
+def write(root, kind, message, topic=None, echo=True, wait=False, when=None):
+    """Append one line to today's log (when: a local datetime, to that day's), publish it (wait: until it
+    went out), and print it."""
+    line = format_line(kind, message, when)
+    directory = day_dir(root, when.date() if when else None)
     directory.mkdir(parents=True, exist_ok=True)
     if not (directory / '.tz').exists():          # the clock of the HH:MM:SS lines (see epoch)
         (directory / '.tz').write_text(time.strftime('%z') + '\n')
