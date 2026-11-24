@@ -150,3 +150,23 @@ class Sync(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Docs(unittest.TestCase):
+    def test_listing_names_the_field_repos_handoff_and_plans(self):
+        from astro import docs
+        with tempfile.TemporaryDirectory() as tmp:
+            vessel = Vessel(tmp)
+            vessel.state = lambda: Path(tmp) / 'state.yaml'
+            for rel in ('handoff/next.md', 'plans/lake.md', 'checklists/lake.md'):
+                Path(tmp, 'field', rel).parent.mkdir(parents=True, exist_ok=True)
+                Path(tmp, 'field', rel).write_text('x\n')
+            Path(tmp, 'ws/src/repo/docs').mkdir(parents=True)
+            Path(tmp, 'ws/src/repo/.git').mkdir()
+            Path(tmp, 'ws/src/repo/docs/CONTROL.md').write_text('x\n')
+            text = '\n'.join(docs.lines(vessel, ws=Path(tmp, 'ws')))
+        self.assertIn('handoff/next.md', text)
+        self.assertIn('plans/lake.md', text)
+        self.assertIn('lake  (astro check NAME)', text)
+        self.assertIn('docs/CONTROL.md', text)
+        self.assertIn('https://github.com/o/r/issues', text)

@@ -15,7 +15,7 @@ from . import config, field, rec, remote, stacks, status
 from .engine import apply as applying
 from .engine import log, procedures, results
 
-VERBS = ('on', 'up', 'down', 'ps', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
+VERBS = ('docs', 'on', 'up', 'down', 'ps', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
          'check', 'issue', 'sync', 'show', 'help')
 HELP = config.WS / '.devcontainer' / 'astro-help.py'
 
@@ -344,6 +344,7 @@ def parser():
     i.add_argument('--label', dest='labels', action='append', default=[])
     sub.add_parser('sync', add_help=False)
     sub.add_parser('show', add_help=False).add_argument('date', nargs='?')
+    sub.add_parser('docs', add_help=False)
     return p
 
 
@@ -382,6 +383,9 @@ def main(argv=None):
             return field.sync(s.vessel)
         if verb == 'show':
             return field.show(s.vessel, args.date)
+        if verb == 'docs':
+            from . import docs
+            return docs.main(s.vessel)
         if verb == 'mark':
             log.write(s.root, 'mark', ' '.join(args.text), s.events)
             return 0

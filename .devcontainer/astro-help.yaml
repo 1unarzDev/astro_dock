@@ -188,6 +188,13 @@ commands:
     examples:
       - astro sync
 
+  - name: docs
+    run: astro docs
+    summary: Where the information lives - the field repo (clone, today's session and its plan, checklists, handoff/, plans/, issues), the day log and bags, and each repo's README.md and docs/*.md with GitHub links.
+    ros: 'none: reads files only (ls; git remote get-url origin)'
+    examples:
+      - astro docs
+
   - name: show
     run: astro show
     summary: A session in plain text - its plan, check states, the log's counts (tests, applies, marks, bags) and the open issues.
