@@ -199,29 +199,79 @@ commands:
       - ./setup.linux.sh --components repos --role operator
       - ./setup.linux.sh --components mdns
 
-  - name: hw.sh
-    run: $ROS_WS/hw.sh
-    summary: Robot device tooling (status, plan, apply, verify, rollback per device kind of the vessel profile).
-    notes: >-
-      Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES (a directory) or
-      ASTRO_PROFILES_URL at ASTRO_PROFILES_REF (hw.sh profile sync URL [REF] checks it out at profiles/);
-      without one it runs in generic mode with no device kinds. The machine finds its own host and vessel (hostname or permanent MAC);
-      --vessel and --host override. Secrets live in ~/.config/astro/secrets.env (mode 600).
+  # hw.sh verbs (machine, network and deploy): astro VERB runs $ROS_WS/hw.sh VERB; hw.sh stays usable directly.
+  - name: whoami
+    run: $ROS_WS/hw.sh whoami
+    summary: This machine's host and vessel, and how they were found.
     params:
-      - name: --vessel
-        required: false
-        description: The vessel profile when this machine matches none.
-      - name: --host
-        required: false
-        description: This machine's registry host.
-      - name: command
-        description: whoami [--root|--registry], env [KEY], profile show [NAME], profile sync [URL [REF]], secrets check, hot REPO, station take|release, overlay PATH, pyenv PATH, build, image, or KIND VERB (each with --help).
+      - {name: --root, type: bool, description: Print the profile root instead.}
+      - {name: --registry, type: bool, description: Print the host registry path instead.}
+  - name: env
+    run: $ROS_WS/hw.sh env
+    summary: The vessel's network env path, or one key or role address (<ROLE>_IP).
+    params:
+      - {name: key, required: false, description: 'A key such as ROUTER_IP.'}
+  - name: profile show
+    run: $ROS_WS/hw.sh profile show
+    summary: A merged vessel profile (no secrets).
+    params:
+      - {name: name, required: false, description: Profile name (default this vessel).}
+  - name: profile sync
+    run: $ROS_WS/hw.sh profile sync
+    summary: Check out your profile set at its recorded ref (URL REF records new ones first).
+  - name: secrets check
+    run: $ROS_WS/hw.sh secrets check
+    summary: The secrets file and the missing key names (never values).
+  - name: hot
+    run: $ROS_WS/hw.sh hot
+    summary: Push src/REPO's working tree (uncommitted too) to the robot hosts that run it and build it there, LAN only.
+    params:
+      - {name: repo, description: A repository under src/.}
+      - {name: --host, required: false, description: Only this host.}
+      - {name: --dry-run, type: bool, description: Show hosts, files and build plan; send nothing.}
     examples:
-      - $ROS_WS/hw.sh whoami
-      - $ROS_WS/hw.sh env ROUTER_IP
-      - $ROS_WS/hw.sh secrets check
-      - $ROS_WS/hw.sh --vessel VESSEL radio status
-      - $ROS_WS/hw.sh hosts repos
+      - astro hot mhseals_hardware --dry-run
+  - name: station take
+    run: $ROS_WS/hw.sh station take
+    summary: Make this computer the operator station (robot link, gateway and time roles, keys, station file).
+    params:
+      - {name: --dry-run, type: bool, description: Show the steps; change nothing.}
+  - name: station release
+    run: $ROS_WS/hw.sh station release
+    summary: Stop this computer's operator station services.
+  - name: overlay
+    run: $ROS_WS/hw.sh overlay
+    summary: Colcon-build a worktree's changed packages as an overlay on the workspace install; prints the source line.
+    params:
+      - {name: path, description: The worktree.}
+      - {name: --base, required: false, description: 'Compare against this ref (default origin/main).'}
+  - name: pyenv
+    run: $ROS_WS/hw.sh pyenv
+    summary: The PYTHONPATH that runs a worktree's pure-Python packages from source, no colcon.
+    params:
+      - {name: path, description: The worktree.}
+  - name: build
+    run: $ROS_WS/hw.sh build
+    summary: The workspace's colcon build in its dev container (from clean when the image or colcon defaults changed).
+  - name: image
+    run: $ROS_WS/hw.sh image
+    summary: The dev image the Compose config names.
+    params:
+      - {name: --pull, type: bool, description: Pull when the registry has a newer one.}
+      - {name: --local, type: bool, description: The local image built on it.}
+  - name: device
+    run: $ROS_WS/hw.sh
+    summary: One device kind's verb (status, plan, apply, verify, rollback) for the kinds the vessel profile names.
+    notes: >-
+      The kinds come from the vessel profile (hw.sh with no arguments lists them). Profiles are yours:
+      ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF.
+      Secrets live in ~/.config/astro/secrets.env (mode 600). --vessel and --host override detection.
+    params:
+      - {name: kind, description: A device kind of the vessel profile.}
+      - {name: verb, description: 'status, plan, apply, verify or rollback (KIND VERB --help for details).'}
+    examples:
+      - astro device hosts status
+      - astro device radio verify
 
   - name: net/share.sh
     run: $ROS_WS/net/share.sh

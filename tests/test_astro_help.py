@@ -149,10 +149,11 @@ class HelpCoverageTest(unittest.TestCase):
                 self.assertTrue(own.stdout.startswith('Usage: hw.sh ' + name), own.stdout)
 
     def test_astro_help_names_every_hw_command_and_no_other(self):
-        hw = next(c for c in astro_help.parse(astro_help.OWN)['commands'] if c['name'] == 'hw.sh')
-        described = next(p['description'] for p in hw['params'] if p['name'] == 'command')
-        named = {item.split()[0] for item in re.split(r', (?:or )?', described)}
-        self.assertEqual(named, dispatched() | {'KIND'})
+        """Every hw.sh command is an astro verb (run: $ROS_WS/hw.sh CMD), and device covers KIND VERB."""
+        runs = [c['run'] for c in astro_help.parse(astro_help.OWN)['commands']]
+        named = {r.split()[1] for r in runs if r.startswith('$ROS_WS/hw.sh ')}
+        self.assertEqual(named, dispatched())
+        self.assertIn('$ROS_WS/hw.sh', runs)          # astro device KIND VERB
 
     def test_every_net_script_is_listed_and_answers_help(self):
         runs = {c['run'] for c in astro_help.parse(astro_help.OWN)['commands']}
