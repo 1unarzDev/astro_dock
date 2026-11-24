@@ -11,11 +11,12 @@ import sys
 import tarfile
 import time
 
-from . import config, rec, remote, status
+from . import config, rec, remote, stacks, status
 from .engine import apply as applying
 from .engine import log, procedures, results
 
-VERBS = ('on', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim', 'help')
+VERBS = ('on', 'up', 'down', 'ps', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
+         'help')
 HELP = config.WS / '.devcontainer' / 'astro-help.py'
 
 
@@ -297,6 +298,14 @@ def parser():
     on = sub.add_parser('on', add_help=False)
     on.add_argument('host')
     on.add_argument('cmd', nargs=argparse.REMAINDER)
+    u = sub.add_parser('up', add_help=False)
+    u.add_argument('names', nargs='*')
+    u.add_argument('--with', dest='options', action='append', default=[])
+    sub.add_parser('down', add_help=False).add_argument('names', nargs='*')
+    sub.add_parser('ps', add_help=False)
+    g = sub.add_parser('logs', add_help=False)
+    g.add_argument('name')
+    g.add_argument('-f', dest='follow', action='store_true')
     sub.add_parser('status', add_help=False).add_argument('--watch', action='store_true')
     r = sub.add_parser('rec', add_help=False)
     r.add_argument('action', choices=('start', 'stop', 'ls'))
@@ -335,6 +344,14 @@ def main(argv=None):
             return remote.on(args.host, args.cmd)
         if verb == 'sim':
             return remote.sim(args.action, args.args)
+        if verb == 'up':
+            return stacks.main_up(s.vessel, s.root, args)
+        if verb == 'down':
+            return stacks.down(s.vessel, s.root, args.names)
+        if verb == 'ps':
+            return stacks.ps(s.vessel)
+        if verb == 'logs':
+            return stacks.logs(s.vessel, args.name, args.follow)
         if verb == 'mark':
             log.write(s.root, 'mark', ' '.join(args.text), s.events)
             return 0

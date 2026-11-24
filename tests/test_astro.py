@@ -371,5 +371,70 @@ class Verbs(unittest.TestCase):
         self.assertEqual(rec, {'start', 'stop', 'ls'})
 
 
+class Stacks(unittest.TestCase):
+    SECTION = {'stacks': {
+        'sensors': {'host': 'computer', 'run': 'ros2 launch p s.launch.py', 'ready': ['/odom']},
+        'camera': {'host': 'camera', 'run': 'ros2 launch p c.launch.py', 'ready': ['/points']},
+        'drive': {'host': 'computer', 'run': 'ros2 launch p d.launch.py', 'needs': ['sensors'],
+                  'with': {'controller': 'controller:=true'}},
+        'nav': {'host': 'computer', 'run': None, 'needs': ['drive'], 'default': False}}}
+
+    def test_defaults_in_profile_order_and_names_pull_their_needs_first(self):
+        from astro import stacks
+        found = stacks.parse(self.SECTION)
+        self.assertEqual([s.name for s in stacks.select(found)], ['sensors', 'camera', 'drive'])
+        self.assertEqual([s.name for s in stacks.select(found, ['nav'])], ['sensors', 'drive', 'nav'])
+        self.assertEqual(found['nav'].run, '')                         # run: null = started elsewhere
+        self.assertEqual(stacks.command(found['drive'], ['controller']), 'ros2 launch p d.launch.py controller:=true')
+        with self.assertRaisesRegex(Exception, "no stack 'navv'"):
+            stacks.select(found, ['navv'])
+
+    def test_profile_errors_name_the_stack(self):
+        from astro import config, stacks
+        for bad, word in (({'a': {'run': 'x'}}, 'needs host'), ({'a': {'host': 'h', 'needs': ['b']}}, "needs 'b'"),
+                          ({'a': {'host': 'h', 'rn': 'x'}}, 'unknown rn'),
+                          ({'a': {'host': 'h', 'needs': ['b']}, 'b': {'host': 'h', 'needs': ['a']}}, 'needs itself')):
+            with self.assertRaisesRegex(config.Error, word):
+                stacks.select(stacks.parse({'stacks': bad}))
+
+    def test_a_stack_starts_detached_in_its_hosts_container_over_ssh(self):
+        import shlex
+        from astro import remote, stacks
+        vessel = type('V', (), {'name': 'boat', 'hosts_kind': {'container': {'name': 'dev'}},
+                                'hosts': lambda self: HOSTS})()
+        HOSTS = {'boat-computer': {'user': 'u', 'address': '10.0.0.5', 'ssh': True, 'container': '', 'via': '',
+                                   'workspace': '', 'roles': ['computer']}}
+        host, spec = remote.place(vessel, 'computer')                   # by role
+        script = stacks.start_script('drive', 'ros2 launch p d.launch.py', stacks.data_expr({}))
+        argv, env = remote.words(vessel, host, spec, script)
+        self.assertEqual((host, env, argv[:2]), ('boat-computer', None, ['ssh', 'u@10.0.0.5']))
+        inner = shlex.split(argv[-1].split('docker exec -i ', 1)[1])
+        self.assertEqual(inner[-4:-1], ['dev', 'bash', '-c'])            # the whole script is one bash -c word
+        self.assertIn('tmux -L astro new-session -d -s "$n"', inner[-1])  # never the default tmux server
+        self.assertIn('setsid -f bash', inner[-1])
+        self.assertIn('${ASTRO_DATA:-', inner[-1])
+        self.assertEqual(stacks.data_expr({'data': 'bags/sim'}), '"${ROS_WS:-$PWD}"/bags/sim')
+
+    def test_start_ps_stop_round_trip_in_a_shell(self):
+        import shutil, subprocess
+        from astro import stacks
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp, 'bin')                     # the tools the scripts use, but no tmux: setsid
+            bin_dir.mkdir()
+            for tool in ('bash', 'mkdir', 'date', 'cat', 'ps', 'tr', 'setsid', 'sleep', 'tail', 'sed', 'rm', 'tee'):
+                (bin_dir / tool).symlink_to(shutil.which(tool))
+            data, env = repr(tmp), {'PATH': str(bin_dir), 'HOME': tmp}
+            def sh(script):
+                return subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True, timeout=30).stdout
+            self.assertIn('astro-stack started', sh(stacks.start_script('s', 'echo hi; sleep 30', data)))
+            self.assertIn('astro-stack running', sh(stacks.start_script('s', 'echo hi; sleep 30', data)))
+            self.assertIn('astro-ps s up', sh(stacks.ps_script(['s'], data)))
+            self.assertIn('astro-stack stopped', sh(stacks.stop_script('s', data)))  # SIGINT reaches it
+            self.assertIn('astro-ps s down', sh(stacks.ps_script(['s'], data)))
+            out = sh(stacks.start_script('bad', 'echo boom; exit 3', data))
+            self.assertIn('astro-stack exited', out)
+            self.assertIn('astro-log boom', out)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -30,6 +30,44 @@ commands:
       - astro on sim
       - astro on boat astro test list
 
+  - name: up
+    run: astro up
+    summary: Start the vessel's stacks (profile astro.stacks), each on its host in the background, and wait until their ready topics publish.
+    ros: ssh USER@HOST docker exec CONTAINER bash -c 'setsid -f ros2 launch PKG FILE.launch.py ARGS > LOG'; ros2 topic hz TOPIC
+    notes: In order, needs first; one line per stack (up with its topic rates, or FAILED with the last log lines). A stack runs in a private tmux server (tmux -L astro) when the container has tmux, else under setsid, so an ssh drop never stops it; its log is DATA/DATE/stacks/NAME.log. Waits at most 60 s per stack.
+    params:
+      - {name: names, type: list, required: false, description: 'Stacks to start (none: the default ones); their needs start first.'}
+      - {name: --with, description: 'An option a stack names under with: (e.g. controller), appended to its command.'}
+    examples:
+      - astro up
+      - astro up drive --with controller
+      - astro up nav
+
+  - name: down
+    run: astro down
+    summary: Stop stacks in reverse order (SIGINT to the process group, then SIGTERM after 20 s); no names = all.
+    ros: ssh USER@HOST docker exec CONTAINER kill -INT -- -PGID
+    params:
+      - {name: names, type: list, required: false, description: 'Stacks to stop; those that need them stop first.'}
+    examples:
+      - astro down
+      - astro down drive
+
+  - name: ps
+    run: astro ps
+    summary: Each stack - running or not, host, uptime, its ready topics' rates and its log path.
+    ros: ssh USER@HOST docker exec CONTAINER ps -o etimes= -p PID; ros2 topic hz TOPIC
+
+  - name: logs
+    run: astro logs
+    summary: The last 40 lines of a stack's log on its host; -f follows it.
+    ros: ssh USER@HOST docker exec CONTAINER tail -F DATA/DATE/stacks/NAME.log
+    params:
+      - {name: name, description: The stack.}
+      - {name: -f, type: bool, description: Follow until Ctrl-C.}
+    examples:
+      - astro logs drive -f
+
   - name: status
     run: astro status
     summary: Plain-text snapshot of the stack - nodes, the tests file's topics, recording, last log lines and the next test.

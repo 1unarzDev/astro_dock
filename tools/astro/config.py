@@ -14,6 +14,7 @@ else this machine's registry host. Its `astro:` section points at team files and
       env: {VAR: value}                 # optional: more variables for `on`/`sim`
       sim: CMD                          # optional (sim profiles): the world backend, `CMD up|down|status`
       sim_time: false                   # optional: test runs follow /clock (use_sim_time)
+      stacks: {NAME: {host, run, ready, needs, default, with}}   # optional: astro up/down/ps (stacks.py)
 """
 import datetime
 import importlib.util

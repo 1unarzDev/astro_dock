@@ -83,19 +83,34 @@ subnet `ros_net` adds unicast static peers.
 one high-level robot tool. It only composes plain ROS 2, and `astro help` shows the ROS equivalent of each verb.
 
 ```bash
-astro on boat                      # a shell in a registry host's dev container (ssh + docker exec)
-ros2 launch PKG drive.launch.py    # the long-running stack, plain ROS
+astro up                           # every default stack on its host, in order; waits for their ready topics
 astro rec start lean lake          # bag (mcap, 300 s splits) of a preset's topics
 astro test status                  # what is applied, measured, stale, aborted or pending; and the next step
 astro test still                   # one test, in this terminal; Ctrl-C sends neutral
 astro apply still                  # write its result into the state file (backup, check, live parameters)
 astro mark "wind picked up"        # a log line, also published on the events topic (so it is in the bag)
 astro rec stop && astro rec ls     # each bag with the log lines inside it
+astro down                         # stop the stacks, reverse order (SIGINT first)
 ```
+
+`astro up` prints one line per stack, from the operator laptop or any machine that reaches the hosts:
+
+```text
+sensors     up      boat-computer  /odom/local 50Hz /mavros/rc/in 10Hz
+perception  up      boat-camera    /points 10Hz /front/zed_node/rgb/color/rect/camera_info 15Hz
+drive       up      boat-computer  /command_mux/state 1Hz /thrusters/pwm 50Hz
+```
+
+A stack runs on its host in the dev container, in a private tmux server (`tmux -L astro`, never the default
+one) when the container has tmux, else under `setsid`; so an ssh drop never stops it. `astro ps` shows each
+stack's state, uptime, ready-topic rates and log; `astro logs NAME -f` follows its log
+(`DATA/DATE/stacks/NAME.log`). A test, by contrast, runs in your terminal (`astro on HOST astro test NAME`):
+if the link drops, the test stops and the drive's command timeout sends neutral.
 
 | Verb | Does |
 | --- | --- |
 | `on HOST [cmd]` | ssh to a registry host (name or unique part of it), `docker exec` into its dev container; a vessel without ssh hosts (the sim) runs on this machine with its environment |
+| `up [NAMES] [--with OPT]`, `down [NAMES]`, `ps`, `logs NAME [-f]` | the vessel's stacks (`astro.stacks`): start each on its host and wait for its ready topics, stop (SIGINT, then SIGTERM), list, tail |
 | `status [--watch]` | nodes, the last message on each topic of the tests file, recording, last log lines, next test |
 | `rec start [preset] [label]`, `rec stop`, `rec ls` | `ros2 bag record` into `DATA/DATE/bags/HHMMSS-label/` |
 | `mark TEXT`, `log [-n N]` | the day's log, `DATA/DATE/log.txt`: `HH:MM:SS  kind    message` |
@@ -119,6 +134,9 @@ astro:
   data: null                        # data root (workspace-relative); else $ASTRO_DATA
   state_env: null                   # on/sim also export the state path under this name (always ASTRO_STATE)
   sim: null                         # the sim profile's world backend command
+  stacks:                           # what `astro up` starts, in this order
+    drive: {host: ROLE|HOST, run: 'ros2 launch PKG drive.launch.py', ready: [/topic], needs: [sensors],
+            default: true, with: {controller: 'controller:=true'}}   # run: null = started elsewhere (waited for)
 ```
 
 Test types are generic (`still`, `couple`, `speed`, `steps`, `nav2`); the tests file names the topics, axes, keys
