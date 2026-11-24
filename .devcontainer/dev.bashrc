@@ -9,7 +9,8 @@ export ROS_WS="${ROS_WS:-${ASTRO_DIR%/.devcontainer}}"
 ros_env() {
   local prefix
   for prefix in "/opt/ros/${ROS_DISTRO:-jazzy}" /opt/zed_ros2 /opt/velodyne /opt/astro-extra "$ROS_WS/install"; do
-    if [[ -f "$prefix/setup.bash" ]]; then
+    # setup.bash sources local_setup.bash: skip a half-installed overlay rather than warn on every shell.
+    if [[ -f "$prefix/setup.bash" && -f "$prefix/local_setup.bash" ]]; then
       source "$prefix/setup.bash"
     fi
   done
