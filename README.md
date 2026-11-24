@@ -64,7 +64,7 @@ team's files (tests, bag presets, state file, stacks, field repo).
 | `rec start [PRESET] [LABEL]`, `rec stop`, `rec ls`, `rec fetch [BAG]` | Record a bag (mcap, 300 s splits); list today's bags with the log lines inside each; copy one of the home host's bags into `DATA/DATE/bags/` here (rsync through `astro on`) |
 | `mark TEXT`, `log [-n N]` | Add to, or print, the day's log |
 | `test list`, `test status`, `test NAME [--space S]` | Run a test or group in this terminal. Each prints its control layer, old -> new and the exact apply command |
-| `apply RESULT`, `undo` | Write a result into the state file (backup first, checked, rolled back on refusal), then set the live parameters; `undo` restores the newest backup |
+| `apply RESULT`, `undo` | Write a result into the state file (backup first, checked, rolled back on refusal), then set the live parameters; `undo` reverses one chosen apply (its keys only, from the history next to the state file) |
 | `bundle [--bags]` | The state file, today's results and log (and bags) in one tgz, for the sim |
 | `sim up\|down\|status\|check` | The sim vessel's world; then `astro on sim` works like a boat |
 | `check [NAME]`, `issue TEXT`, `sync`, `show [DATE]` | The field log: checklists, issues, and the day's log and results pushed to the field repo |

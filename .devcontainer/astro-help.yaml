@@ -183,9 +183,20 @@ commands:
 
   - name: undo
     run: astro undo
-    summary: Restore the state file from its newest backup and re-set the live parameters of that apply.
-    notes: Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; --here runs it here.
-    ros: cp STATE.bak-STAMP STATE; ros2 param set NODE PARAM VALUE
+    summary: "Undo one of today's applies: pick which change to reverse, see exactly what goes back, and the live boat is updated too."
+    notes: Only that apply's settings go back; later changes to other settings stay. If a later apply changed the same setting, you choose to restore it anyway or keep it.
+    ros: ros2 param set NODE PARAM VALUE
+    details: >-
+      Each apply is recorded in STATE.history.jsonl next to the profile's astro.state file. Undo writes the old
+      values back (backup first), runs astro.check (rolled back on refusal), sets the live parameters and logs
+      one line. Without a terminal and without --last or --list it prints the history and exits 2. Outside ROS
+      it runs on astro.home; --here runs it here.
+    params:
+      - {name: --last, type: bool, description: 'Undo the newest apply without asking (for scripts); a setting changed since is kept.'}
+      - {name: --list, type: bool, description: 'Only print the list of recorded applies, newest first, and change nothing.'}
+    examples:
+      - astro undo
+      - astro undo --list
 
   - name: bundle
     run: astro bundle

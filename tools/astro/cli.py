@@ -364,7 +364,7 @@ def cmd_apply(s, args):
     live = list(result.get('live') or [])
     try:
         backup, diffs = applying.apply(state_path, result['changes'], defaults, s.vessel.astro.get('check'),
-                                       spec.axes, live)
+                                       spec.axes, live, test=name, result=result['path'])
     except applying.Refused as error:
         log.write(s.root, 'apply', f'{name}  refused by the check, state unchanged', s.events)
         field.auto(s.vessel, 'apply', name, str(error))
@@ -377,7 +377,7 @@ def cmd_apply(s, args):
         return 0
     keys = '; '.join(f'{key} {procedures.fmt(old)} -> {procedures.fmt(new)}' for key, old, new in diffs)
     log.write(s.root, 'apply', f'{name}  {keys}  backup {backup.name}', s.events)
-    print(f'  {layer}: written to {state_path} (astro undo restores {backup.name})')
+    print(f'  {layer}: written to {state_path} (astro undo can reverse it)')
     results.mark_applied(result['path'], backup.name)
     for line in applying.set_live(live, state_path, defaults) if config.have_ros() else (
             ['not live: no ROS here; applies at the next launch'] if live else []):
@@ -388,20 +388,99 @@ def cmd_apply(s, args):
     return 0
 
 
+def when(entry, today=None):
+    """An apply's time: the clock time today, else the date too."""
+    day, _, clock_time = entry['time'].partition(' ')
+    return clock_time if day == f'{today or datetime.date.today():%Y-%m-%d}' else entry['time']
+
+
+def shown(value):
+    return 'unset' if value is None else procedures.fmt(value)
+
+
+def short(value, width=24):
+    text = shown(value)
+    return text if len(text) <= width else text[:width - 1] + '\u2026'
+
+
+def undo_rows(entries):
+    """[(value, about)]: one row per apply, newest first; the value its time and test (unique)."""
+    out, seen = [], set()
+    for entry in entries:
+        value = f'{when(entry)}  {entry.get("test") or "?"}'
+        while value in seen:
+            value += "'"
+        seen.add(value)
+        keys = [f'{k["label"]} {short(k["old"])} \u2192 {short(k["new"])}' for k in entry['keys']]
+        about = keys[0] + (f'  (+{len(keys) - 1} more)' if len(keys) > 1 else '')
+        out.append((value, about + (f'  [undone {when(dict(entry, time=entry["undone"]))}]'
+                                    if entry.get('undone') else '')))
+    return out
+
+
+def ask(question):
+    try:
+        return input(f'{question} [y/N] ').strip().lower() in ('y', 'yes')
+    except EOFError:
+        return False
+
+
 def cmd_undo(s, args):
     state_path = s.vessel.state()
+    entries = applying.history(state_path)
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    if args.listing or not (args.last or tty):
+        for value, about in undo_rows(entries):
+            print(f'  {value}  {about}')
+        if not entries:
+            print(f'no applies recorded next to {state_path}')
+        return 0 if args.listing else 2
+    pending = [e for e in entries if not e.get('undone')]
+    if not pending:
+        print('nothing to undo: no apply recorded that is not undone yet (astro undo --list)')
+        return 0
+    if args.last:
+        entry = pending[0]
+    else:
+        rows = undo_rows(pending)
+        picked = choose('Pick an apply to undo (newest first):', rows)
+        entry = pending[[v for v, _ in rows].index(picked)]
+    defaults = s.spec.defaults()
+    name, at = entry.get('test') or '?', when(entry)
+    print(f'undo {name} ({at}) restores:')
+    skip = []
+    for item, now, later in applying.plan(state_path, entry, defaults):
+        print(f'  {item["label"]}: {shown(now)} \u2192 {shown(item["old"])}')
+        if now == item['new']:
+            continue
+        since = ', '.join(f'{o.get("test") or "?"} ({when(o)})' for o in later) or 'a hand edit'
+        print(f'    changed since by {since}; this apply wrote {shown(item["new"])}')
+        if args.last or not tty:
+            print('    skipped (run astro undo on a terminal to choose)')
+            skip.append(item['label'])
+        elif not ask('    restore it anyway?'):
+            print('    skipped')
+            skip.append(item['label'])
+    if not args.last and not ask(f'write these to {state_path.name}?'):
+        print('nothing changed')
+        return 1
     try:
-        name, live, problem = applying.undo(state_path, s.vessel.astro.get('check'))
+        done = applying.revert(state_path, entry, defaults, s.vessel.astro.get('check'), skip)
     except applying.Refused as error:
+        log.write(s.root, 'apply', f'undo {name} ({at})  refused by the check, state unchanged', s.events)
         raise config.Error(str(error)) from None
-    log.write(s.root, 'apply', f'undo  {state_path.name} restored from {name}', s.events)
-    results.unmark_applied(s.root, name)
-    if live and config.have_ros():
-        for line in applying.set_live(live, state_path, s.spec.defaults()):
-            print('  ' + line)
-    if problem:
-        raise config.Error(problem)
-    print(f'  restored {state_path} from {name}')
+    if not done:
+        print('  nothing to restore: the state already holds those values')
+        return 0
+    keys = '; '.join(f'{label} \u2192 {shown(value)}' for label, _, value in done)
+    log.write(s.root, 'apply', f'undo {name} ({at}): {keys}', s.events)
+    if not skip:
+        results.unmark_applied(s.root, entry['backup'])
+    print(f'  restored in {state_path}')
+    live = entry.get('live') or []
+    for line in applying.set_live(live, state_path, defaults) if config.have_ros() else (
+            ['not live: no ROS here; applies at the next launch'] if live else []):
+        print('  ' + line)
     return 0
 
 
@@ -599,7 +678,9 @@ def parser():
     t.add_argument('--space', default='large')
     t.add_argument('--amp', type=float)
     sub.add_parser('apply', add_help=False).add_argument('result', nargs='?')
-    sub.add_parser('undo', add_help=False)
+    u = sub.add_parser('undo', add_help=False)
+    u.add_argument('--last', action='store_true')
+    u.add_argument('--list', dest='listing', action='store_true')
     sub.add_parser('bundle', add_help=False).add_argument('--bags', action='store_true')
     sim = sub.add_parser('sim', add_help=False)
     sim.add_argument('action')   # passed to the backend (up, down, status, check, restart …)

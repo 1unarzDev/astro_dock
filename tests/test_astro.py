@@ -7,6 +7,7 @@ import re
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 import numpy
 import yaml
@@ -135,15 +136,9 @@ class Apply(unittest.TestCase):
         first, _ = apply.apply(self.state, [dict(key='x', value=1)], {}, None, now=now)
         second, _ = apply.apply(self.state, [dict(key='x', value=2)], {}, None, now=now)
         self.assertNotEqual(first, second)
-        self.assertEqual(apply.undo(self.state)[0], second.name)
-        self.assertEqual(apply.undo(self.state)[0], first.name)
-        name, live, problem = apply.undo(self.state, self.check)
-        self.assertIn('fails the check', problem)                    # {'other': 1} has no decoupling
-        self.assertEqual(name, backup.name)
-        self.assertEqual(live, [{'node': '/n', 'param': 'decoupling'}])
-        self.assertEqual(yaml.safe_load(self.state.read_text()), {'other': 1})
-        with self.assertRaises(apply.Refused):
-            apply.undo(self.state)
+        with self.assertRaisesRegex(apply.Refused, 'check refused'):    # an undo the check refuses rolls back
+            apply.revert(self.state, apply.history(self.state)[-1], self.defaults, self.check)
+        self.assertEqual(yaml.safe_load(self.state.read_text())['x'], 2)
 
     def test_unchanged_writes_nothing(self):
         before = self.state.read_text()
@@ -163,8 +158,80 @@ class Apply(unittest.TestCase):
         self.state.unlink()
         apply.apply(self.state, [dict(key='a.b', value=2)], {}, None)
         self.assertEqual(yaml.safe_load(self.state.read_text()), {'a': {'b': 2}})
-        apply.undo(self.state)
-        self.assertFalse(self.state.exists())
+        apply.revert(self.state, apply.history(self.state)[0])
+        self.assertEqual(yaml.safe_load(self.state.read_text()), {})
+
+    def test_apply_records_its_keys_in_the_history(self):
+        now = datetime.datetime(2026, 11, 24, 13, 7, 2)
+        backup, _ = apply.apply(self.state, [dict(key='decoupling', column=0, value=[1.0, 0.04, -0.07]),
+                                             dict(key='other', value=3)], self.defaults, None, AXES,
+                                live=[{'node': '/n', 'param': 'decoupling'}], now=now, test='couple-surge',
+                                result='/r/couple-surge-130700.yaml')
+        [entry] = apply.history(self.state)
+        self.assertEqual((entry['id'], entry['time'], entry['test']), (backup.name, '2026-11-24 13:07:02', 'couple-surge'))
+        self.assertEqual(entry['live'], [{'node': '/n', 'param': 'decoupling'}])
+        self.assertEqual([(k['label'], k['old'], k['new']) for k in entry['keys']],
+                         [('decoupling[:,surge]', [1.0, 0, 0], [1.0, 0.04, -0.07]), ('other', 1, 3)])
+        self.assertIsNone(entry['undone'])
+
+    def test_undo_one_apply_leaves_the_others(self):
+        apply.apply(self.state, [dict(key='a', value=1), dict(key='b', value=1)], {}, None, test='one')
+        apply.apply(self.state, [dict(key='c', value=2)], {}, None, test='two')
+        apply.apply(self.state, [dict(key='decoupling', column=1, value=[0.1, 1.0, 0.0])],
+                    self.defaults, None, AXES, test='three')
+        one = next(e for e in apply.history(self.state) if e['test'] == 'one')
+        self.assertTrue(all(now == item['new'] and not later
+                            for item, now, later in apply.plan(self.state, one, self.defaults)))
+        done = apply.revert(self.state, one, self.defaults)
+        self.assertEqual(sorted(d[0] for d in done), ['a', 'b'])
+        data = yaml.safe_load(self.state.read_text())
+        self.assertEqual({k: data.get(k) for k in ('a', 'b', 'c', 'other')}, {'a': None, 'b': None, 'c': 2, 'other': 1})
+        self.assertEqual(data['decoupling'][1], 0.1)
+        three = apply.history(self.state)[0]
+        self.assertEqual(three['test'], 'three')
+        self.assertTrue(apply.history(self.state)[2]['undone'])
+        apply.revert(self.state, three, self.defaults)        # back to the defaults: the key goes again
+        self.assertEqual(yaml.safe_load(self.state.read_text()), {'other': 1, 'c': 2})
+
+    def test_a_key_changed_since_is_a_conflict_to_restore_or_skip(self):
+        apply.apply(self.state, [dict(key='x', value=1), dict(key='y', value=1)], {}, None, test='first')
+        apply.apply(self.state, [dict(key='x', value=2)], {}, None, test='second')
+        first = apply.history(self.state)[1]
+        rows = {item['label']: (now, [o['test'] for o in later]) for item, now, later in apply.plan(self.state, first)}
+        self.assertEqual(rows, {'x': (2, ['second']), 'y': (1, [])})
+        apply.revert(self.state, first, skip={'x'})              # skip: the later value stays
+        data = yaml.safe_load(self.state.read_text())
+        self.assertEqual((data.get('x'), data.get('y')), (2, None))
+        apply.apply(self.state, [dict(key='x', value=1), dict(key='y', value=1)], {}, None, test='first')
+        apply.apply(self.state, [dict(key='x', value=2)], {}, None, test='second')
+        apply.revert(self.state, apply.history(self.state)[1])     # restore anyway
+        self.assertEqual(yaml.safe_load(self.state.read_text()), {'other': 1, 'x': 2})  # x was 2 before 'first'
+
+    def test_undo_last_and_list_from_the_cli(self):
+        import contextlib
+        import io
+        from types import SimpleNamespace
+        apply.apply(self.state, [dict(key='x', value=1)], {}, None, test='first')
+        apply.apply(self.state, [dict(key='y', value=5)], {}, None, test='second')
+        vessel = SimpleNamespace(state=lambda: self.state, astro={})
+        session = SimpleNamespace(vessel=vessel, spec=SimpleNamespace(defaults=lambda: {}), root=self.dir / 'data',
+                                  events=None)
+        args = SimpleNamespace(last=True, listing=False)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), unittest.mock.patch.object(cli.config, 'have_ros', lambda: False):
+            self.assertEqual(cli.cmd_undo(session, args), 0)
+        self.assertIn('undo second', out.getvalue())
+        self.assertIn('y: 5 \u2192 unset', out.getvalue())
+        self.assertEqual(yaml.safe_load(self.state.read_text()), {'other': 1, 'x': 1})
+        self.assertRegex((self.dir / 'data').glob('*/log.txt').__next__().read_text(),
+                         r'apply +undo second \(\d\d:\d\d:\d\d\): y \u2192 unset')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(cli.cmd_undo(session, SimpleNamespace(last=False, listing=True)), 0)
+        lines = out.getvalue().splitlines()
+        self.assertIn('second', lines[0])
+        self.assertIn('[undone', lines[0])
+        self.assertIn('x unset \u2192 1', lines[1])
 
 
 class Log(unittest.TestCase):
@@ -315,8 +382,8 @@ class DriverRunner(FakeRunner):
         t0 = self.t
         while self.t - t0 < seconds:
             effort, left = self.script[0] if self.script else ([0, 0, 0], 1)
+            self.efforts.append((self.t, *effort))     # the mux applies it, then the boat responds
             super().hold(effort, 0.04)
-            self.efforts.append((self.t, *effort))
             if self.script:
                 self.script[0] = (effort, left - 0.04)
                 if self.script[0][1] <= 1e-9:
@@ -343,9 +410,9 @@ class Watch(unittest.TestCase):
         self.assertEqual(data['measured']['ended'], 'complete')
         changes = {c['key']: c['value'] for c in data['changes']}
         # the fake boat's steady speed equals its effort: e^2 = v^2, so d1 ~ 0 and d2 ~ 1
-        self.assertAlmostEqual(changes['c.speed_curves.surge+']['d2'], 1.0, delta=0.1)
+        self.assertAlmostEqual(changes['c.speed_curves.surge+']['d2'], 1.0, delta=0.05)
         self.assertLess(changes['c.speed_curves.surge+']['d1'], 0.05)
-        self.assertIn('c.t95.surge', changes)
+        self.assertAlmostEqual(changes['c.t95.surge'], 1.5, delta=0.15)     # the fake's tau 0.5 s: t95 = 3 tau
         self.assertEqual(len(data['holds']), 18)
 
     def test_mixed_commands_are_not_holds(self):
