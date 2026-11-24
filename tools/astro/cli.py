@@ -17,6 +17,7 @@ from .engine import log, procedures, results
 
 VERBS = ('docs', 'on', 'up', 'down', 'ps', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
          'check', 'issue', 'sync', 'show', 'help')
+HEADER = ('up', 'down', 'ps', 'status', 'rec', 'test', 'apply', 'undo', 'bundle', 'show')   # one context line
 HELP = config.WS / '.devcontainer' / 'astro-help.py'
 
 
@@ -108,11 +109,13 @@ def cmd_test(s, args):
     if args.name == 'status':
         rows = s.rows()
         width = max((len(r[0]) for r in rows), default=0)
+        step = results.next_step(rows)
         for name, state, result in rows:
             when = f'{result.get("date", "")} {result.get("time", "")}' if result else ''
             summary = (result or {}).get('summary') or (result or {}).get('reason') or ''
-            print(f'{name:<{width}}  {state:<8} {spec.layer(name):<16} {when:<19} {summary}'[:200])
-        print(f'next: {results.next_step(rows)}')
+            arrow = '->' if step.split()[-1:] == [name] else '  '
+            print(f'{arrow} {name:<{width}}  {state:<8} {spec.layer(name):<16} {when:<19} {summary}'[:200])
+        print(f'next: {step}')
         return 0
     need_ros('test')
     try:
@@ -363,6 +366,8 @@ def main(argv=None):
     args = parser().parse_args(argv)
     s = Session()
     try:
+        if verb in HEADER and not (verb == 'test' and args.name == 'list'):
+            print(f'astro {verb} · vessel {s.vessel.name} · state {s.vessel.state()} · data {s.root}')
         if verb == 'on':
             return remote.on(args.host, args.cmd)
         if verb == 'sim':
