@@ -190,6 +190,11 @@ rviz2() {
 }
 alias rqt_tf_tree="ros2 run rqt_tf_tree rqt_tf_tree"
 
+# astro, the workspace's robot tool (tools/bin/astro; `astro help` lists every command), on PATH.
+# astro-help is its old name for the browser.
+case ":$PATH:" in *":$ROS_WS/tools/bin:"*) ;; *) export PATH="$ROS_WS/tools/bin:$PATH" ;; esac
+alias astro-help='astro help'
+
 # Browse the commands every workspace package describes in its help.yaml. A command
 # confirmed there runs in this shell, with its functions, and lands in the history.
 help() {

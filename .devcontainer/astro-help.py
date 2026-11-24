@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Browse, fill in and run the commands that workspace packages describe in help.yaml.
+"""Browse, fill in and run the commands that workspace packages describe in help.yaml (`astro help`).
 
-    astro-help                 interactive browser (a terminal is required)
-    astro-help --list [WORD]   plain text: every command, or full details of matching ones
+    astro help                 interactive browser (a terminal is required)
+    astro help --list [WORD]   plain text: every command, or full details of matching ones
+    astro help WORD            the same details, without a terminal check
 
 help.yaml schema (unknown keys are ignored):
 
@@ -12,6 +13,7 @@ help.yaml schema (unknown keys are ignored):
       - name: boat_trial check  # display name
         run: ros2 run pkg boat_trial check   # command prefix (default: name)
         summary: one line
+        ros: optional; the plain ROS 2 an astro verb composes (shown beside it)
         notes: optional text (safety, which host)
         params:
           - name: --window      # "-x": option ("--x value", a bare switch when type bool;
@@ -25,7 +27,9 @@ help.yaml schema (unknown keys are ignored):
             form: option        # positional | option | switch | launch, overrides the inference
         examples: [full command lines]
 
-Discovery order: astro_dock's own astro-help.yaml beside this script, then the workspace
+Every command also runs as `astro NAME [args]` (its run line plus the args); the details show both.
+
+Discovery order: astro_dock's own astro-help.yaml beside this script (astro's verbs first), then the workspace
 sources ($ROS_WS/src/*/help.yaml and src/*/*/help.yaml), then share/*/help.yaml under each
 AMENT_PREFIX_PATH entry. A confirmed command runs in bash, or, when ASTRO_HELP_OUT names a
 file, is written there for the calling shell to run (so it keeps the shell's functions).
@@ -86,6 +90,7 @@ def parse(path):
             params.append(param)
         commands.append(dict(command, name=str(command['name']), run=str(command.get('run') or command['name']),
                              summary=str(command.get('summary', '')), notes=str(command.get('notes') or ''),
+                             ros=str(command.get('ros') or ''),
                              params=params, examples=[str(e) for e in command.get('examples') or []]))
     return {'package': data['package'], 'summary': str(data.get('summary', '')),
             'commands': commands, 'path': str(path)}
@@ -170,32 +175,46 @@ def matches(package, command, word):
 
 # ---- plain text -------------------------------------------------------------------------
 
-def text(packages, word=None, color=False):
-    """Every command with its summary, or full details of the commands matching word."""
+def details(command, paint=lambda code, s: s):
+    """The full description of one command: its command line(s), ros equivalent, notes, params, examples."""
+    out = [paint('2', f'    $ {build(command, {})}')]
+    if not command['run'].startswith('astro '):
+        out.append(paint('2', f'    $ astro {command["name"]}{build(command, {})[len(command["run"]):]}'))
+    if command['ros']:
+        out.append(paint('2', f'    ros: {command["ros"]}'))
+    if command['notes']:
+        out.extend(paint('33', '    ' + line) for line in wrap(command['notes'], 88))
+    for param in command['params']:
+        default = f' (default {shown(param["default"])})' if 'default' in param else ''
+        choices = f' [{"|".join(map(str, param["choices"]))}]' if param.get('choices') else ''
+        out.append(f'    {param["name"]:<22} {param["type"]:<6} '
+                   f'{param.get("description", "")}{choices}{paint("2", default)}')
+    out.extend(paint('2', f'    e.g. {example}') for example in command['examples'])
+    return out
+
+
+def text(packages, word=None, color=False, exact=None):
+    """Every command with its summary, or full details of the commands matching word (or, with exact,
+    the commands of that package whose name is exact or starts with it)."""
     def paint(code, s):
         return f'\033[{code}m{s}\033[0m' if color else s
     out = []
     for package in packages:
-        commands = [c for c in package['commands'] if not word or matches(package, c, word)]
+        if exact:
+            commands = [c for c in package['commands'] if package['package'] == exact[0]
+                        and (c['name'] == exact[1] or c['name'].startswith(exact[1] + ' '))]
+        else:
+            commands = [c for c in package['commands'] if not word or matches(package, c, word)]
         if not commands:
             continue
         out.append(paint('1;36', package['package']) + paint('2', f' · {package["summary"]}'))
         width = max(len(c['name']) for c in commands)
         for command in commands:
             out.append(f'  {command["name"]:<{width}}  {command["summary"]}')
-            if not word:
-                continue
-            out.append(paint('2', f'    $ {build(command, {})}'))
-            if command['notes']:
-                out.extend(paint('33', '    ' + line) for line in wrap(command['notes'], 88))
-            for param in command['params']:
-                default = f' (default {shown(param["default"])})' if 'default' in param else ''
-                choices = f' [{"|".join(map(str, param["choices"]))}]' if param.get('choices') else ''
-                out.append(f'    {param["name"]:<22} {param["type"]:<6} '
-                           f'{param.get("description", "")}{choices}{paint("2", default)}')
-            out.extend(paint('2', f'    e.g. {example}') for example in command['examples'])
+            if word or exact:
+                out.extend(details(command, paint))
         out.append('')
-    return '\n'.join(out).rstrip() + '\n' if out else f'No command matches {word!r}.\n'
+    return '\n'.join(out).rstrip() + '\n' if out else f'No command matches {word or exact[1]!r}.\n'
 
 
 # ---- browser ----------------------------------------------------------------------------
@@ -321,6 +340,8 @@ class Browser:
         header = [(command['name'], curses.A_BOLD)] + [(s, 0) for s in wrap(command['summary'], width)]
         header.append(('', 0))
         notes = [(s, self.style('note')) for s in wrap(command['notes'], width)]
+        if command['ros']:
+            notes = [(s, self.style('dim')) for s in wrap('ros: ' + command['ros'], width)] + notes
         values, body, footer = self.values_for(package, command), [], []
         if self.examples or not command['params']:
             examples = command['examples'] or ['(no examples)' if self.examples else '(no parameters)']
@@ -479,14 +500,11 @@ def main(argv=None):
     packages, errors = discover()
     for error in errors:
         print(error, file=sys.stderr)
-    if argv[:1] == ['--list'] or not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if argv[:1] == ['--list'] or argv or not (sys.stdin.isatty() and sys.stdout.isatty()):
         words = [a for a in argv if a != '--list']
         sys.stdout.write(text(packages, ' '.join(words) or None,
                               color=sys.stdout.isatty() and 'NO_COLOR' not in os.environ))
         return 0
-    if argv:
-        print('Usage: astro-help [--list [WORD]]', file=sys.stderr)
-        return 2
     locale.setlocale(locale.LC_ALL, '')
     os.environ.setdefault('ESCDELAY', '25')
     line = curses.wrapper(lambda screen: Browser(screen, packages).run())

@@ -40,7 +40,7 @@ class DiscoveryTest(unittest.TestCase):
             paths = list(astro_help.candidates(ws, [str(share.parent)]))
             packages, errors = astro_help.discover(paths)
         self.assertEqual(paths[0], astro_help.OWN)
-        self.assertEqual([p['package'] for p in packages], ['astro_dock', 'alpha', 'beta'])
+        self.assertEqual([p['package'] for p in packages], ['astro', 'alpha', 'beta'])
         self.assertEqual(packages[1]['commands'][0]['name'], 'from_source')
         self.assertEqual(len(errors), 2)  # the unclosed list and the nameless package
         self.assertTrue(all(e.startswith('help: ') for e in errors))
@@ -53,7 +53,7 @@ class DiscoveryTest(unittest.TestCase):
             for path, body in zip(paths, bodies):
                 path.write_text(body)
             packages, errors = astro_help.discover(paths + [astro_help.OWN])
-        self.assertEqual([p['package'] for p in packages], ['astro_dock'])
+        self.assertEqual([p['package'] for p in packages], ['astro'])
         self.assertEqual(len(errors), 3)
 
     def test_workspace_falls_back_like_dev_bashrc(self):
@@ -112,7 +112,7 @@ class BuilderTest(unittest.TestCase):
     def test_text_lists_and_details(self):
         packages = [astro_help.parse(astro_help.OWN)]
         overview = astro_help.text(packages)
-        self.assertIn('astro_dock · ', overview)
+        self.assertIn('astro · ', overview)
         self.assertNotIn('$ ', overview)
         detail = astro_help.text(packages, 'apt')
         self.assertIn('$ astro-ros-install <names>', detail)

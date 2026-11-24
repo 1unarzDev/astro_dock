@@ -1,21 +1,122 @@
-# Commands astro_dock itself provides, read by astro-help.py. Packages in the workspace
-# ship their own help.yaml (package root or share/<package>/); the schema is in astro-help.py.
-package: astro_dock
-summary: ROS 2 container workspace helpers, available in every image shell.
+# Commands astro_dock itself provides, read first by astro help (.devcontainer/astro-help.py): astro's own
+# verbs (run: astro VERB; ros: the plain ROS 2 they compose), then the workspace helpers. Packages in the
+# workspace ship their own help.yaml (package root or share/<package>/); the schema is in astro-help.py.
+package: astro
+summary: The astro tool and the ROS 2 container workspace helpers.
 commands:
   - name: help
-    run: help
-    summary: Browse every workspace package's commands, fill in parameters, and run them.
+    run: astro help
+    summary: Browse every workspace package's commands, fill in parameters, and run them (astro VERB --help for one).
     params:
       - name: --list
         type: bool
         description: Print the commands as plain text instead of opening the browser.
       - name: word
         required: false
-        description: With --list, show full details of the commands matching this word.
+        description: Show full details of the commands matching this word.
     examples:
-      - help --list
-      - help --list install
+      - astro help --list
+      - astro help rec
+
+  - name: "on"
+    run: astro on
+    summary: A shell (or one command) in a host's dev container over ssh; a vessel without ssh hosts (the sim) runs here with its env.
+    ros: ssh USER@HOST docker exec -it CONTAINER bash
+    notes: The host is a registry host of the vessel profile, matched by name or substring.
+    params:
+      - {name: host, description: 'Registry host (or a unique part of its name), or a local vessel profile such as sim.'}
+      - {name: cmd, type: list, required: false, description: 'Command to run there; none opens a shell.'}
+    examples:
+      - astro on sim
+      - astro on boat astro test list
+
+  - name: status
+    run: astro status
+    summary: Plain-text snapshot of the stack - nodes, the tests file's topics, recording, last log lines and the next test.
+    ros: ros2 node list; ros2 topic echo --once TOPIC
+    params:
+      - {name: --watch, type: bool, description: Refresh every second until Ctrl-C.}
+
+  - name: rec start
+    run: astro rec start
+    summary: Record a bag (mcap, 300 s splits) of a preset's topics into DATA/DATE/bags/HHMMSS-LABEL.
+    ros: ros2 bag record -s mcap -d 300 -o DIR TOPIC... (or -a)
+    notes: Presets come from the vessel profile's astro.bags file; the events topic is always recorded.
+    params:
+      - {name: preset, required: false, description: A preset of the bags file (default its first).}
+      - {name: label, required: false, description: Appended to the bag directory name.}
+    examples:
+      - astro rec start lean lake
+
+  - name: rec stop
+    run: astro rec stop
+    summary: Stop the recording astro rec start began (SIGINT, so the bag closes cleanly).
+    ros: kill -INT PID
+
+  - name: rec ls
+    run: astro rec ls
+    summary: Today's bags with their start-end times and the log lines that fall inside each.
+    ros: ros2 bag info DIR
+
+  - name: mark
+    run: astro mark
+    summary: One log line, also published on the events topic (so it lands in the bag); returns at once.
+    ros: "ros2 topic pub --once /events std_msgs/msg/String \"{data: 'HH:MM:SS  mark  TEXT'}\""
+    params:
+      - {name: text, type: list, description: What happened.}
+    examples:
+      - astro mark wind picked up from north
+
+  - name: log
+    run: astro log
+    summary: Today's log (marks, recordings, tests, applies).
+    ros: cat DATA/DATE/log.txt
+    params:
+      - {name: -n, type: int, description: Only the last N lines.}
+
+  - name: test
+    run: astro test
+    summary: Run one test or a group of the vessel's tests file in this terminal (Ctrl-C sends neutral); `astro test list` names them.
+    ros: ros2 topic pub /EFFORT geometry_msgs/msg/Twist ... (20 Hz) while ros2 topic echo /ODOM
+    notes: Each test prints its control layer, old -> new and the exact astro apply command. `astro test status` shows what is applied, measured, stale, aborted or pending, and the next step.
+    params:
+      - {name: name, description: 'list, status, a test or a group (astro test list).'}
+      - {name: --space, choices: [large, small], description: The space preset (amplitudes and levels).}
+      - {name: --amp, type: float, description: Override the space's amplitude.}
+    examples:
+      - astro test list
+      - astro test status
+      - astro test still
+
+  - name: apply
+    run: astro apply
+    summary: Write a test result into the state file (backup first), check it, roll back on refusal, then set the live parameters.
+    ros: ros2 param set NODE PARAM VALUE
+    params:
+      - {name: result, description: A test name (its latest result) or a result file.}
+
+  - name: undo
+    run: astro undo
+    summary: Restore the state file from its newest backup and re-set the live parameters of that apply.
+    ros: cp STATE.bak-STAMP STATE; ros2 param set NODE PARAM VALUE
+
+  - name: bundle
+    run: astro bundle
+    summary: The state file, today's results and log (and bags) in one tgz, e.g. to replay in the sim.
+    ros: tar czf bundle.tgz STATE DATA/DATE
+    params:
+      - {name: --bags, type: bool, description: Include today's bags.}
+
+  - name: sim
+    run: astro sim
+    summary: Start, stop or check the simulated world of the sim vessel profile (its astro.sim backend).
+    notes: The backend runs as `CMD up|down|status [args]` with the sim profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat.
+    params:
+      - {name: verb, choices: [up, down, status], description: What to do.}
+      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (e.g. --window, --headless).'}
+    examples:
+      - astro sim up
+      - astro sim status
 
   - name: astro-ros-install
     run: astro-ros-install
