@@ -37,7 +37,7 @@ HW_COMMANDS=(
     "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
     "secrets check|the secrets file and the missing key names (never values)"
     "device VERB KIND [ARGS]|one device kind's VERB (status, plan, apply, verify, rollback; KIND VERB is the same); device kinds lists the kinds and their drivers"
-    "hot REPO [--host NAME] [--dry-run]|push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)"
+    "hot [REPO...] [--all] [--host NAME] [--dry-run]|put the working tree (uncommitted too) of src/REPO, astro_dock or profiles on the boat hosts running it, directly or through the operator station, and build once per host (no REPO: pick a changed one; --dry-run: route, commits, files, build; sends nothing)"
     "station take [--dry-run]|make this computer the operator station (boat link, gateway and time roles, keys, station file, and a heartbeat service if the profile names one)"
     "station release|stop this computer's operator heartbeat service, if any"
     "overlay PATH [--base REF] [--all] [--dry-run]|colcon-build a worktree's packages touched against REF (origin/main) as an overlay on the workspace install, in the dev container; prints the source line"

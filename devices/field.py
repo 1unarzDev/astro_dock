@@ -6,6 +6,8 @@ the build plan of a hot patch. Reads, never changes anything.
                                 one, may be empty), then why, one line each
   field.py packages REPO        stdin: repo-relative paths; out: NAME<TAB>DIR of the packages holding
                                 them, once each (hw.sh overlay)
+  field.py pick TITLE FILE      astro's picker over FILE's VALUE<TAB>about lines on the terminal; the
+                                value goes to fd 3 (hw.sh hot); exit 1 when cancelled
 """
 import ipaddress
 import os
@@ -119,6 +121,20 @@ def plan(lines, repo):
     return packages, reasons
 
 
+def pick(title, path):
+    """The value picked with astro help's picker (.devcontainer/astro-help.py) from PATH's choices; exits 1
+    when cancelled."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'astro_help', Path(__file__).resolve().parents[1] / '.devcontainer/astro-help.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    value = module.pick(title, module.parse_choices(Path(path).read_text()))
+    if value is None:
+        sys.exit(1)
+    return value
+
+
 def main(command, *args):
     if command == 'link':
         found = boat_link(ip_lines('HW_IP_ADDR', '-o', '-4', 'addr', 'show'),
@@ -130,8 +146,10 @@ def main(command, *args):
         print('\n'.join(reasons))
     elif command == 'packages':
         print('\n'.join(packages_of(args[0], sys.stdin.read().splitlines())))
+    elif command == 'pick':
+        print(pick(*args) or '', end='', file=open(3, 'w', closefd=False))
     else:
-        raise Error('usage: field.py link SUBNET | plan REPO | packages REPO')
+        raise Error('usage: field.py link SUBNET | plan REPO | packages REPO | pick TITLE FILE')
 
 
 if __name__ == '__main__':

@@ -147,7 +147,7 @@ workspace.
 | `astro profile`, `astro profile env [KEY]`, `astro profile show` | Which host and vessel this is; the network env or one of its values; the merged profile |
 | `astro device status\|plan\|verify\|apply\|rollback KIND` | A device kind's `status`, `plan`, `verify` (read only), `apply` (typed confirmation; network changes roll back unless verified) or `rollback`; `astro device kinds` lists the kinds |
 | `astro station take`, `astro station release` | Make this computer the operator station, or stop that |
-| `astro hot REPO [--dry-run]` | Push a repo's working tree to the hosts that run it and build there (LAN only) |
+| `astro hot [REPO...] [--all] [--dry-run]` | Put your current code (uncommitted too) of src repos, astro_dock or profiles on the robot's computers, through the operator station when needed, and rebuild; run it outside the container |
 | `astro build`, `astro overlay PATH`, `astro pyenv PATH` | Build the workspace, or a worktree as an overlay, or run a worktree's Python from source |
 
 Secrets live in `~/.config/astro/secrets.env` (mode 600, outside any git tree); environment beats secrets
@@ -166,7 +166,7 @@ hw.sh profile show [NAME]        a merged profile (no secrets)
 hw.sh profile sync [URL [REF]]   check out your profile set at its ref (URL REF: record them first)
 hw.sh secrets check              the secrets file and the missing key names (never values)
 hw.sh device VERB KIND [ARGS]    one device kind's VERB (status, plan, apply, verify, rollback; KIND VERB is the same); device kinds lists the kinds and their drivers
-hw.sh hot REPO [--host NAME] [--dry-run] push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)
+hw.sh hot [REPO...] [--all] [--host NAME] [--dry-run] put the working tree (uncommitted too) of src/REPO, astro_dock or profiles on the boat hosts running it, directly or through the operator station, and build once per host (no REPO: pick a changed one; --dry-run: route, commits, files, build; sends nothing)
 hw.sh station take [--dry-run]   make this computer the operator station (boat link, gateway and time roles, keys, station file, and a heartbeat service if the profile names one)
 hw.sh station release            stop this computer's operator heartbeat service, if any
 hw.sh overlay PATH [--base REF] [--all] [--dry-run] colcon-build a worktree's packages touched against REF (origin/main) as an overlay on the workspace install, in the dev container; prints the source line

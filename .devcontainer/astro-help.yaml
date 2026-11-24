@@ -458,15 +458,22 @@ commands:
     details: Reads ~/.config/astro/secrets.env.
   - name: hot
     run: $ROS_WS/hw.sh hot
-    summary: Try your code changes on the robot right now, without committing - copies a project to the robot's computers and builds it there.
-    notes: Use --dry-run first to see where it goes. Works only on the robot's own network.
-    details: Pushes src/REPO's working tree (uncommitted too) to every robot host that runs the repo and builds it there.
+    summary: "Put your current code on the robot: sends the projects you pick (even uncommitted changes) to the robot's computers, through the operator laptop if needed, and rebuilds them. Works with no internet on the robot."
+    notes: Run it in this computer's own terminal, not inside the container. Try --dry-run first; it shows the way to each computer, what would change there and whether it rebuilds, and sends nothing.
+    details: >-
+      REPO is any src/REPO, astro_dock (the workspace) or profiles (also pins the host's ASTRO_PROFILES_REF).
+      Each boat host that runs it is reached by ssh straight, else through its registry jump or the vessel's
+      operator station as a jump; the route prints first. The working tree goes as a git bundle, checked out on
+      field/DATE after the host's own edits are backed up; then one colcon build per host of the packages that
+      need it, and one result line per host. hw.sh hosts apply returns the hosts to main.
     params:
-      - {name: repo, choices_from: 'ls "$ROS_WS/src"', description: 'The project in the workspace whose current code to send and build, e.g. ros_tcp_endpoint.'}
-      - {name: --host, default: auto, choices_from: 'astro _choices on', description: 'Send it to only this one computer of the robot; auto is every computer that runs the project.'}
-      - {name: --dry-run, type: bool, description: 'Show the computers, files and build plan, and send nothing.'}
+      - {name: repos, type: list, required: false, choices_from: '$ROS_WS/hw.sh hot --choices', description: 'The projects to send, e.g. a src/ repo, astro_dock (this toolkit) or profiles (the robot settings); leave empty to pick from the ones that changed.'}
+      - {name: --all, type: bool, description: 'Send every project, changed or not, to the computers that run it.'}
+      - {name: --host, default: auto, choices_from: 'astro _choices on', description: 'Send to only this one computer of the robot; auto is every computer that runs the project.'}
+      - {name: --dry-run, type: bool, description: 'Show the route, the projects, commits and files, and whether it rebuilds; send nothing.'}
     examples:
-      - astro hot REPO --dry-run
+      - astro hot --dry-run --all
+      - astro hot astro_dock profiles
   - name: station take
     run: $ROS_WS/hw.sh station take
     level: setup

@@ -32,6 +32,18 @@ unset XDG_STATE_HOME XDG_CONFIG_HOME
 if [[ $1 == docker ]]; then { echo "-- $*"; cat; } >> "$FAKE_SSH_LOG"; exit 0; fi
 exec bash -c "$*"
 '''
+# hot's ssh: as EXEC_SSH, and a FAKE_FAR destination answers only through a jump (ProxyCommand's last word).
+HOT_SSH = r'''#!/usr/bin/env bash
+jump=-
+while [[ $1 == -* ]]; do [[ $2 != ProxyCommand=* ]] || jump=${2##* }; shift 2; done
+target=$1; shift
+echo "== $target via $jump $*" >> "$FAKE_SSH_LOG"
+for far in $FAKE_FAR; do [[ ($jump == - && $target == "$far") || $jump == "$far" ]] && exit 255; done
+export HOME=$FAKE_ROOT/$target; mkdir -p "$HOME"; cd "$HOME" || exit 1
+unset XDG_STATE_HOME XDG_CONFIG_HOME
+if [[ $1 == docker ]]; then { echo "-- $*"; cat; } >> "$FAKE_SSH_LOG"; exit 0; fi
+exec bash -c "$*"
+'''
 FAKE_DOCKER = '''#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_SSH_LOG"
 case $1 in ps) [[ $* != *"name=^$ASTRO_CONTAINER\$"* ]] || echo c0ffee ;; exec) cat >/dev/null ;; esac
@@ -192,6 +204,8 @@ class Station(unittest.TestCase):
 
 
 class Hot(unittest.TestCase):
+    """hot from a station "here" (not in the registry) to the fixture vessel: a-pc runs alpha, a-cam runs
+    alpha and beta (none here); op is the operator station at 10.0.1.2."""
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(subprocess.run, ['rm', '-rf', str(self.tmp)])
@@ -200,34 +214,49 @@ class Hot(unittest.TestCase):
         (repo / 'pkg_dir/pkg_a').mkdir(parents=True)
         (repo / 'pkg_dir/package.xml').write_text('<package><name>pkg_a</name></package>\n')
         (repo / 'pkg_dir/pkg_a/node.py').write_text('SPEED = 1\n')
-        git(repo, 'init', '-q', '-b', 'main')
-        git(repo, 'add', '-A')
-        git(repo, 'commit', '-q', '-m', 'one')
+        self.commit(repo)
+        self.dock = self.tmp / 'dock'                                  # astro_dock, the workspace
+        (self.dock / 'tools').mkdir(parents=True)
+        (self.dock / 'tools/tool.py').write_text('X = 1\n')
+        self.commit(self.dock)
+        self.profiles = self.tmp / 'profiles'                          # the profile set, a checkout of its own
+        subprocess.run(['cp', '-r', str(PROFILES), str(self.profiles)], check=True)
+        self.commit(self.profiles)
         self.hosts = self.tmp / 'hosts'
         self.pc = self.hosts / 'crew@10.0.1.10/astro_dock/src/alpha'      # a-pc has it; a-cam does not
         git(self.tmp, 'clone', '-q', str(repo), str(self.pc))
 
-    def hot(self, *args):
+    @staticmethod
+    def commit(repo):
+        git(repo, 'init', '-q', '-b', 'main')
+        git(repo, 'add', '-A')
+        git(repo, 'commit', '-q', '-m', 'one')
+
+    def hot(self, *args, far='', inside='0'):
+        """hw.sh hot ARGS; FAR: ssh destinations that answer only through a jump (a jump to one fails too)."""
         log = self.tmp / 'calls.log'
         log.write_text('')
         run = subprocess.run(
-            [str(ROOT / 'hw.sh'), 'hot', 'alpha', *args], capture_output=True, text=True,
+            [str(ROOT / 'hw.sh'), 'hot', *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
             env={**os.environ, **GIT_ENV, 'XDG_STATE_HOME': str(self.tmp), 'XDG_CONFIG_HOME': str(self.tmp),
-                 'ASTRO_PROFILES': str(PROFILES), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent',
-                 'HW_SRC': str(self.src), 'FAKE_SSH_LOG': str(log),
-                 'FAKE_ROOT': str(self.hosts), 'HW_SSH': executable(self.tmp / 'ssh', EXEC_SSH)})
+                 'ASTRO_PROFILES': str(self.profiles), 'ASTRO_VESSEL': 'a', 'ASTRO_SECRETS': '/nonexistent',
+                 'ASTRO_HOST': 'here', 'HW_SRC': str(self.src), 'HW_DOCK': str(self.dock),
+                 'HW_IN_CONTAINER': inside, 'FAKE_SSH_LOG': str(log), 'FAKE_FAR': far,
+                 'FAKE_ROOT': str(self.hosts), 'HW_SSH': executable(self.tmp / 'ssh', HOT_SSH)})
         return run, log.read_text()
 
     def test_working_tree_reaches_every_host_on_the_field_branch(self):
         (self.repo / 'pkg_dir/pkg_a/node.py').write_text('SPEED = 2\n')     # uncommitted
         head = git(self.repo, 'rev-parse', 'HEAD')
-        run, calls = self.hot()
+        run, calls = self.hot('alpha')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         branch = git(self.pc, 'rev-parse', '--abbrev-ref', 'HEAD')
         self.assertRegex(branch, r'^field/\d{8}$')
         self.assertEqual((self.pc / 'pkg_dir/pkg_a/node.py').read_text(), 'SPEED = 2\n')
-        self.assertIn('a-pc: changed M\tpkg_dir/pkg_a/node.py', run.stdout)
-        self.assertIn('OK a-pc: no build', run.stdout)
+        self.assertIn('a-pc    M\tpkg_dir/pkg_a/node.py', run.stdout)
+        sha = git(self.pc, 'rev-parse', '--short=7', 'HEAD')
+        self.assertIn(f'\na-pc  alpha {sha}  build none\n', run.stdout)       # one result line per host
+        self.assertIn(f'\na-cam  alpha {sha}  build ok\n', run.stdout)
         cam = self.hosts / 'crew@10.0.1.11/astro_dock/src/alpha'          # not there before: created
         self.assertEqual((cam / 'pkg_dir/pkg_a/node.py').read_text(), 'SPEED = 2\n')
         # a-cam only, through hosts apply's one build body (devices/build.sh), image stamp included
@@ -239,11 +268,14 @@ class Hot(unittest.TestCase):
         self.assertEqual(git(self.repo, 'diff', '--name-only'), 'pkg_dir/pkg_a/node.py')
         self.assertEqual(git(self.repo, 'diff', '--cached', '--name-only'), '')
         self.assertEqual(git(self.repo, 'for-each-ref', 'refs/hot'), '')
+        run, calls = self.hot('alpha')                                     # again: both have it, nothing sent
+        self.assertIn(f'\na-pc  alpha {sha}  build none\n', run.stdout)
+        self.assertNotIn('bundle', calls)
 
     def test_new_file_builds_and_host_dirty_state_is_backed_up(self):
         (self.pc / 'pkg_dir/pkg_a/node.py').write_text('SPEED = 9\n')       # a field edit on the host
         (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')
-        run, calls = self.hot('--host', 'a-pc')
+        run, calls = self.hot('alpha', '--host', 'a-pc')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('a-pc: BACKUP alpha', run.stdout)
         self.assertIn('pkg_a: A pkg_dir/pkg_a/extra.py', run.stdout)
@@ -253,24 +285,95 @@ class Hot(unittest.TestCase):
         backups = list(self.tmp.glob('hosts/crew@10.0.1.10/.local/state/astro_dock/hosts/hot-*/alpha.diff'))
         self.assertTrue(backups and 'SPEED = 9' in backups[0].read_text())
 
-    def test_dry_run_prints_hosts_files_and_plan_and_sends_nothing(self):
+    def test_route_is_direct_else_through_the_operator_station(self):
+        run, calls = self.hot('alpha', '--dry-run')
+        self.assertIn('route  here → a-pc (container dev, ~/astro_dock)', run.stdout)
+        self.assertNotIn(' via crew@', calls)
+        # a-pc only through a jump; op's LAN address is out of reach too, its name answers (a mesh, ssh config)
+        run, calls = self.hot('alpha', '--dry-run', far='crew@10.0.1.10 crew@10.0.1.2')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('route  here → op → a-pc (container dev, ~/astro_dock)', run.stdout)
+        self.assertIn('route  here → a-cam (container dev, ~/astro_dock)', run.stdout)
+        self.assertIn('== crew@10.0.1.10 via crew@op ', calls)
+        run, _ = self.hot('alpha', far='crew@10.0.1.10 crew@10.0.1.2 crew@op')
+        self.assertEqual(run.returncode, 1)
+        self.assertIn('route  here → a-pc: unreachable (tried direct, via op)', run.stdout)
+        self.assertIn('\na-pc  unreachable\n', run.stdout)
+        self.assertRegex(run.stdout, r'\na-cam  alpha [0-9a-f]{7}  build ok\n')
+
+    def test_send_through_the_station(self):
+        (self.repo / 'pkg_dir/pkg_a/node.py').write_text('SPEED = 2\n')
+        run, calls = self.hot('alpha', '--host', 'a-pc', far='crew@10.0.1.10')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('route  here → op → a-pc', run.stdout)
+        self.assertEqual(calls.count('== crew@10.0.1.10 via - '), 1)          # the direct try only
+        self.assertGreaterEqual(calls.count('== crew@10.0.1.10 via crew@10.0.1.2 '), 3)   # probe, bundle, checkout
+        self.assertEqual((self.pc / 'pkg_dir/pkg_a/node.py').read_text(), 'SPEED = 2\n')
+
+    def test_dry_run_shows_route_commits_files_and_build_and_sends_nothing(self):
         (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')
         (self.repo / 'pkg_dir/README.md').write_text('docs\n')
         before = git(self.pc, 'rev-parse', 'HEAD')
-        run, calls = self.hot('--dry-run')
+        run, calls = self.hot('alpha', '--dry-run')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(calls, '')                                        # no ssh at all
-        self.assertIn('dry run: a-pc (crew@10.0.1.10)', run.stdout)
-        self.assertIn('dry run: changed A\tpkg_dir/pkg_a/extra.py', run.stdout)
-        self.assertIn('dry run: builds for pkg_a: A pkg_dir/pkg_a/extra.py', run.stdout)
+        self.assertNotIn('bundle', calls)
+        self.assertNotIn('checkout', calls)
+        self.assertRegex(run.stdout, rf'a-pc  alpha [0-9a-f]{{7}} \(was {before[:7]}\)')
+        self.assertIn('a-pc    A\tpkg_dir/pkg_a/extra.py', run.stdout)
+        self.assertIn('a-pc  would build pkg_a in dev', run.stdout)
+        self.assertIn('a-pc    builds for pkg_a: A pkg_dir/pkg_a/extra.py', run.stdout)
         self.assertNotIn('builds for pkg_a: A pkg_dir/README.md', run.stdout)
+        self.assertRegex(run.stdout, r'a-cam  alpha [0-9a-f]{7} \(new\)')
+        self.assertTrue(run.stdout.rstrip().endswith('dry run: nothing sent'))
         self.assertEqual(git(self.pc, 'rev-parse', 'HEAD'), before)
         self.assertEqual(git(self.repo, 'for-each-ref', 'refs/hot'), '')
 
-    def test_unknown_repo_or_host_is_refused(self):
-        run, _ = self.hot('--host', 'op')                                  # the operator host: no boat host
+    def test_repos_are_src_astro_dock_and_profiles(self):
+        run, _ = self.hot('astro_dock', 'profiles', 'alpha', '--dry-run')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        for host in ('a-pc', 'a-cam'):
+            self.assertIn(f'{host}    A\ttools/tool.py', run.stdout)                   # the workspace
+            self.assertIn(f'{host}    A\ta/devices.yaml', run.stdout)                  # the profile set
+        run, _ = self.hot('profiles', 'astro_dock', '--host', 'a-pc')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        ws = self.hosts / 'crew@10.0.1.10/astro_dock'
+        sha = git(self.profiles, 'rev-parse', 'HEAD')
+        self.assertEqual(git(ws / 'profiles', 'rev-parse', 'HEAD'), sha)
+        self.assertEqual((ws / 'tools/tool.py').read_text(), 'X = 1\n')
+        self.assertIn(f'ASTRO_PROFILES_REF={sha}',
+                      (self.hosts / 'crew@10.0.1.10/.config/astro/profiles.env').read_text())
+        self.assertIn(f'a-pc  profiles {sha[:7]}  astro_dock {git(self.dock, "rev-parse", "--short=7", "HEAD")}  build none',
+                      run.stdout)
+
+    def test_no_repo_lists_the_changed_ones(self):
+        git(self.tmp, 'clone', '-q', str(self.repo), str(self.hosts / 'crew@10.0.1.11/astro_dock/src/alpha'))
+        run, _ = self.hot('--choices')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertNotIn('alpha', run.stdout)                              # both hosts have it, nothing local
+        self.assertIn('astro_dock\tnot on a-pc a-cam', run.stdout)
+        (self.repo / 'pkg_dir/pkg_a/node.py').write_text('SPEED = 2\n')
+        run, _ = self.hot('--choices')
+        self.assertIn('alpha\t1 local changes; not on a-pc a-cam', run.stdout)
+        self.hot('alpha')
+        run, _ = self.hot('--choices')                                     # sent: the hosts have those files
+        self.assertNotIn('alpha', run.stdout)
+        run, _ = self.hot()                                                # no terminal: the list, exit 2
+        self.assertEqual(run.returncode, 2)
+        self.assertIn('Name the repos to send (or --all)', run.stderr)
+        run, _ = self.hot('--all', '--dry-run')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('a-cam  profiles', run.stdout)
+
+    def test_refusals(self):
+        run, _ = self.hot('alpha', '--host', 'op')                         # the operator host: no boat host
         self.assertNotEqual(run.returncode, 0)
-        self.assertIn('No boat host runs alpha among op', run.stderr)
+        self.assertIn("Not one of the robot's computers: op", run.stderr)
+        run, _ = self.hot('nope')
+        self.assertIn('No repo nope here', run.stderr)
+        run, calls = self.hot('alpha', inside='1')
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("Run astro hot from this machine's terminal, outside the container", run.stderr)
+        self.assertEqual(calls, '')
 
 
 if __name__ == '__main__':
