@@ -133,7 +133,7 @@ commands:
     notes: Each test prints its control layer, old -> new and the exact astro apply command. `astro test status` shows what is applied, measured, stale, aborted or pending, and the next step. Outside ROS (a host shell) it runs on the profile's astro.home host, as astro on HOME astro ...; forwarded over ssh, a test keeps running if the link drops (RC is the stop); --here runs it here.
     params:
       - {name: name, choices_from: 'astro _choices test', description: 'list, status, a test or a group (astro test list); none picks one.'}
-      - {name: --space, choices: [large, small], description: The space preset (amplitudes and levels).}
+      - {name: --space, choices: [large, small], default: large, description: The space preset (amplitudes and levels).}
       - {name: --amp, type: float, description: Override the space's amplitude.}
     examples:
       - astro test list
@@ -162,17 +162,60 @@ commands:
     params:
       - {name: --bags, type: bool, description: Include today's bags.}
 
-  - name: sim
-    run: astro sim
-    summary: Start, stop or check the simulated world of the sim vessel profile (its astro.sim backend).
-    notes: The backend runs as `CMD VERB [args]` with the sim profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat. Every backend has up, down, status and check; others (e.g. restart nav) pass through.
+  - name: sim up
+    run: astro sim up
+    level: core
+    summary: Start the simulated world of the sim vessel profile and wait until it is ready.
+    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
     params:
-      - {name: verb, description: "up, down, status, check (readiness), or a backend verb such as restart nav."}
-      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (e.g. --window, --headless).'}
+      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (up --help lists them).'}
     examples:
-      - astro sim up
-      - astro sim status
-      - astro sim check
+      - astro sim up --headless
+
+  - name: sim down
+    run: astro sim down
+    level: core
+    summary: Stop the simulated world.
+    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    params:
+      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (down --help lists them).'}
+
+  - name: sim status
+    run: astro sim status
+    level: core
+    summary: What runs in the simulated world (read-only).
+    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    params:
+      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (status --help lists them).'}
+
+  - name: sim check
+    run: astro sim check
+    level: core
+    summary: Is the running sim ready? Exit 0 when it is.
+    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    params:
+      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (check --help lists them).'}
+    examples:
+      - astro sim check --wait 120
+
+  - name: sim restart
+    run: astro sim restart
+    level: core
+    summary: Restart one part of the running world and keep the rest.
+    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    params:
+      - {name: part, description: 'The part, as the backend names it (e.g. nav).'}
+      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (restart --help lists them).'}
+    examples:
+      - astro sim restart nav
+
+  - name: sim logs
+    run: astro sim logs
+    level: setup
+    summary: The last lines of the sim's logs.
+    notes: "The backend (the sim profile's astro.sim) runs as `CMD VERB [args]` with that profile's environment (ROS_DOMAIN_ID, ASTRO_DATA, ASTRO_STATE); then `astro on sim` is used like a boat."
+    params:
+      - {name: args, type: list, required: false, description: 'Passed to the backend untouched (logs --help lists them).'}
 
   - name: check
     run: astro check
@@ -217,7 +260,7 @@ commands:
     ros: cat SESSION/plan.md; gh issue list
     notes: With astro.home reached over ssh it reads the synced copy, else today's astro log on home.
     params:
-      - {name: date, required: false, description: 'YYYY-MM-DD (default today).'}
+      - {name: date, default: auto, description: 'YYYY-MM-DD; auto is today.'}
     examples:
       - astro show
       - astro show 2026-11-24
@@ -292,12 +335,15 @@ commands:
         type: bool
         description: No prompts (needs --yes).
       - name: --vessel
-        description: The vessel profile (default this machine's, as hw.sh whoami finds it).
+        default: auto
+        description: The vessel profile; auto is this machine's, as hw.sh whoami finds it.
       - name: --host
-        description: This machine's registry host, or any other name for a generic control station.
+        default: auto
+        description: This machine's registry host (auto is as hw.sh whoami finds it), or any other name for a generic control station.
       - name: --role
         type: list
-        description: Repos stage roles whose repositories to add to repos.all (default this host's roles).
+        default: auto
+        description: Repos stage roles whose repositories to add to repos.all; auto is this host's roles.
     examples:
       - ./setup.linux.sh --components clock --dry-run
       - ./setup.linux.sh --components repos --role operator
@@ -319,7 +365,7 @@ commands:
     run: $ROS_WS/hw.sh profile show
     summary: A merged vessel profile (no secrets).
     params:
-      - {name: name, required: false, description: Profile name (default this vessel).}
+      - {name: name, default: auto, description: Profile name; auto is this vessel.}
   - name: profile sync
     run: $ROS_WS/hw.sh profile sync
     summary: Check out your profile set at its recorded ref (URL REF records new ones first).
@@ -331,7 +377,7 @@ commands:
     summary: Push src/REPO's working tree (uncommitted too) to the robot hosts that run it and build it there, LAN only.
     params:
       - {name: repo, description: A repository under src/.}
-      - {name: --host, required: false, description: Only this host.}
+      - {name: --host, default: auto, description: Only this host; auto is every robot host that runs the repo.}
       - {name: --dry-run, type: bool, description: Show hosts, files and build plan; send nothing.}
     examples:
       - astro hot REPO --dry-run
@@ -351,7 +397,7 @@ commands:
     summary: Colcon-build a worktree's changed packages as an overlay on the workspace install; prints the source line.
     params:
       - {name: path, description: The worktree.}
-      - {name: --base, required: false, description: 'Compare against this ref (default origin/main).'}
+      - {name: --base, default: origin/main, description: Compare against this ref.}
   - name: pyenv
     run: $ROS_WS/hw.sh pyenv
     level: setup
@@ -368,19 +414,68 @@ commands:
     params:
       - {name: --pull, type: bool, description: Pull when the registry has a newer one.}
       - {name: --local, type: bool, description: The local image built on it.}
-  - name: device
-    run: $ROS_WS/hw.sh
-    summary: One device kind's verb (status, plan, apply, verify, rollback) for the kinds the vessel profile names.
+  - name: device status
+    run: $ROS_WS/hw.sh device status
+    summary: One device kind as it is now (changes nothing).
     notes: >-
-      The kinds come from the vessel profile (hw.sh with no arguments lists them). Profiles are yours:
-      ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF.
-      Secrets live in ~/.config/astro/secrets.env (mode 600). --vessel and --host override detection.
+      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
     params:
-      - {name: kind, description: A device kind of the vessel profile.}
-      - {name: verb, description: 'status, plan, apply, verify or rollback (KIND VERB --help for details).'}
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: A device kind of the vessel profile (none picks one).}
+      - {name: args, type: list, required: false, description: 'The driver verb''s options (astro device status KIND --help).'}
     examples:
-      - astro device hosts status
-      - astro device radio verify
+      - astro device status hosts
+
+  - name: device plan
+    run: $ROS_WS/hw.sh device plan
+    level: setup
+    summary: What apply would change on one device kind (changes nothing).
+    notes: >-
+      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    params:
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: A device kind of the vessel profile (none picks one).}
+      - {name: args, type: list, required: false, description: 'The driver verb''s options (astro device plan KIND --help).'}
+    examples:
+      - astro device plan radio
+
+  - name: device apply
+    run: $ROS_WS/hw.sh device apply
+    level: setup
+    summary: Make one device kind match the vessel profile.
+    notes: >-
+      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    params:
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: A device kind of the vessel profile (none picks one).}
+      - {name: args, type: list, required: false, description: 'The driver verb''s options (astro device apply KIND --help).'}
+    examples:
+      - astro device apply radio
+
+  - name: device verify
+    run: $ROS_WS/hw.sh device verify
+    summary: Check one device kind against the vessel profile.
+    notes: >-
+      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    params:
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: A device kind of the vessel profile (none picks one).}
+      - {name: args, type: list, required: false, description: 'The driver verb''s options (astro device verify KIND --help).'}
+    examples:
+      - astro device verify radio
+
+  - name: device rollback
+    run: $ROS_WS/hw.sh device rollback
+    level: setup
+    summary: Undo the last apply on one device kind.
+    notes: >-
+      The kinds come from the vessel profile (astro device kinds lists them, with their driver). Profiles are yours: ~/.config/astro/profiles.env names ASTRO_PROFILES or ASTRO_PROFILES_URL at ASTRO_PROFILES_REF. Secrets live in ~/.config/astro/secrets.env (mode 600). hw.sh KIND VERB is the same.
+    params:
+      - {name: kind, choices_from: '$ROS_WS/hw.sh device kinds', description: A device kind of the vessel profile (none picks one).}
+      - {name: args, type: list, required: false, description: 'The driver verb''s options (astro device rollback KIND --help).'}
+    examples:
+      - astro device rollback radio
+
+  - name: device kinds
+    run: $ROS_WS/hw.sh device kinds
+    level: setup
+    summary: The device kinds of the vessel profile with their driver, one per line.
 
   - name: net/share.sh
     run: $ROS_WS/net/share.sh

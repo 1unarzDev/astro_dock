@@ -113,11 +113,28 @@ class Choices(unittest.TestCase):
         self.assertIn('camera', out.getvalue())
         self.assertIn('the zed', out.getvalue())
 
+    def test_esc_in_the_picker_runs_nothing_and_exits_1_with_one_line(self):
+        pkg = package({'name': 'device', 'run': 'echo ran', 'params': [
+            {'name': 'part', 'description': 'The part.', 'choices_from': "printf 'camera\\tthe zed\\n'"}]})
+        seen = {}
+
+        def pick(title, options, current=None):
+            seen['title'] = title
+            return None                                   # Esc
+
+        with only(pkg), mock.patch.object(HELP, 'pick', pick), mock.patch('subprocess.call') as call, \
+                mock.patch('sys.stdin.isatty', return_value=True), mock.patch('sys.stdout.isatty', return_value=True), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.dispatch(['device']), 1)
+        call.assert_not_called()
+        self.assertEqual(seen['title'], 'Pick the part for astro device (The part.):')
+        self.assertEqual(err.getvalue(), 'astro device: cancelled, nothing run\n')
+
     def test_a_given_value_needs_no_picker_and_a_picked_one_is_appended(self):
         entry = package({'name': 'device', 'params': [{'name': 'part', 'choices_from': 'echo camera'},
                                                       {'name': '--fast', 'type': 'bool'}]})['commands'][0]
         self.assertEqual(cli.fill(HELP, entry, ['lidar']), ['lidar'])
-        self.assertEqual(cli.fill(HELP, entry, ['--fast'], pick=lambda title, options: options[0][0]),
+        self.assertEqual(cli.fill(HELP, entry, ['--fast'], pick=lambda title, options, current=None: options[0][0]),
                          ['--fast', 'camera'])
 
 

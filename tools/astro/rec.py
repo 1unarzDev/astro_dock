@@ -244,7 +244,7 @@ def fetch(vessel, home, wanted, pick):
     if wanted:
         bag = find(bags, wanted)
     else:
-        value = pick(f'bag on {host}', [choice(b) for b in bags])
+        value = pick(f'Pick a bag on {host} to copy here:', [choice(b) for b in bags])
         if value is None:
             return 2
         bag = find(bags, value)

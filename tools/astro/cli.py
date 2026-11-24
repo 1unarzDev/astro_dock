@@ -63,15 +63,20 @@ def forwards(verb, here, ros, home):
 
 
 class NoChoice(Exception):
-    """A picker was cancelled, or had no terminal (the choices were printed): exit 2."""
+    """A picker had no terminal (the choices were printed) or nothing to choose from: exit 2."""
 
 
-def choose(title, options):
-    """The value picked from [(value, about)]: an arrow-key list on a terminal; else the choices are printed
-    and NoChoice is raised."""
-    value = help_module().pick(title, options)
+class Cancelled(Exception):
+    """Esc or q in a picker: one line, exit 1."""
+
+
+def choose(title, options, current=None):
+    """The value picked from [(value, about)]: an arrow-key list on a terminal under TITLE (what is being
+    chosen), CURRENT marked; Cancelled on Esc/q. Without a terminal the choices are printed and NoChoice
+    is raised."""
+    value = help_module().pick(title, options, current=current)
     if value is None:
-        raise NoChoice
+        raise Cancelled if options and sys.stdin.isatty() and sys.stdout.isatty() else NoChoice
     return value
 
 
@@ -220,7 +225,9 @@ def stack_lines(s):
 def cmd_test(s, args):
     spec = s.spec
     if not args.name:
-        args.name = choose('test', choices(s, 'test'))
+        nxt = results.next_step(s.rows()).split()
+        args.name = choose('Pick a test to run (ladder order; * is next):', choices(s, 'test'),
+                           nxt[-1] if nxt[:2] == ['astro', 'test'] else None)
     if args.name == 'list':
         width = max(map(len, spec.tests), default=0)
         for name in spec.order():
@@ -302,7 +309,7 @@ def cmd_apply(s, args):
         if not options:
             print('nothing measured waits to be applied (astro test status)')
             return 0
-        args.result = choose('result to apply', options)
+        args.result = choose('Pick a result to apply (measured, not yet applied):', options)
     result = find_result(s, args.result)
     name = result['test']
     if result.get('status') != 'done':
@@ -430,10 +437,16 @@ def fill(module, command, args, pick=None):
         if not (param.get('choices_from') and module.is_required(param)):
             break
         options = module.run_choices(param['choices_from'], env=dispatch_env())
-        value = pick(f'{command["name"]}: {param["name"]}', options)
+        value = pick(f'Pick the {param["name"]} for astro {command["name"]}'
+                     + (f' ({param["description"]})' if param.get('description') else '') + ':',
+                     options, current=shown_default(module, param))
         args.append(value)
         given.append(value)
     return args
+
+
+def shown_default(module, param):
+    return module.shown(param['default'], param) if 'default' in param else None
 
 
 def dispatch_env():
@@ -491,6 +504,9 @@ def dispatch(argv):
             target = entry_host(vessel, command, here, config.this_host(), remote.in_container())
     except NoChoice:
         return 2
+    except Cancelled:
+        print(f'astro {command["name"]}: cancelled, nothing run', file=sys.stderr)
+        return 1
     except config.Error as error:
         print(f'astro {command["name"]}: {error}', file=sys.stderr)
         return 1
@@ -596,7 +612,8 @@ def main(argv=None):
         if verb in HEADER and not (verb == 'test' and args.name == 'list') and not fetching:
             print(f'astro {verb} · vessel {s.vessel.name} · state {s.vessel.state()} · data {s.root}')
         if verb == 'on':
-            return remote.on(args.host or choose('host', choices(s, 'on')), args.cmd)
+            return remote.on(args.host or choose('Pick a host to open a shell on:', choices(s, 'on'),
+                                                 config.this_host()), args.cmd)
         if verb == 'sim':
             return remote.sim(args.action, args.args)
         if verb == 'up':
@@ -604,9 +621,11 @@ def main(argv=None):
         if verb == 'down':
             return stacks.down(s.vessel, s.root, args.names)
         if verb == 'logs':
-            return stacks.logs(s.vessel, args.name or choose('stack', choices(s, 'stacks')), args.follow)
+            return stacks.logs(s.vessel, args.name or choose('Pick a stack to show its log:', choices(s, 'stacks')),
+                               args.follow)
         if verb == 'check':
-            return field.check(s.vessel, args.name or choose('checklist', choices(s, 'check')), args.listing)
+            return field.check(s.vessel, args.name or choose('Pick a checklist to go through:', choices(s, 'check')),
+                               args.listing)
         if verb == 'clock':
             return clock.main(s.vessel, config.this_host(), args.fix)
         if verb == 'issue':
@@ -629,7 +648,7 @@ def main(argv=None):
                 home = s.vessel.astro.get('home')
                 if not home:
                     raise config.Error('rec fetch copies from the profile\'s astro.home, and it has none')
-                return rec.fetch(s.vessel, str(home), ' '.join(args.words), help_module().pick)
+                return rec.fetch(s.vessel, str(home), ' '.join(args.words), choose)
             if args.action == 'ls':
                 return rec.ls(s.vessel)
             need_ros('rec')
@@ -638,6 +657,9 @@ def main(argv=None):
                 'status': cmd_status, 'log': cmd_log}[verb](s, args)
     except NoChoice:
         return 2
+    except Cancelled:
+        print(f'astro {verb}: cancelled, nothing run', file=sys.stderr)
+        return 1
     except config.Error as error:
         print(f'astro {verb}: {error}', file=sys.stderr)
         return 1

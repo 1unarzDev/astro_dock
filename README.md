@@ -123,7 +123,7 @@ astro:
 topics, axes, state keys and live parameters. A result records the keys it ran on, so `astro test status`
 marks it stale when one of them changes.
 
-**Sim.** `astro sim VERB` runs the profile's `astro.sim` command as `CMD up|down|status|check [args]`, with
+**Sim.** `astro sim up|down|status|check|restart|logs` runs the profile's `astro.sim` command as `CMD up|down|status|check [args]`, with
 the sim profile's `ROS_DOMAIN_ID`, `ASTRO_DATA` and `ASTRO_STATE` exported. Any script with those verbs that
 starts a world and its ROS bridge works.
 
@@ -145,7 +145,7 @@ workspace.
 | Command | Does |
 | --- | --- |
 | `astro profile`, `astro profile env [KEY]`, `astro profile show` | Which host and vessel this is; the network env or one of its values; the merged profile |
-| `astro device KIND VERB` | A device kind's `status`, `plan`, `verify` (read only), `apply` (typed confirmation; network changes roll back unless verified) or `rollback` |
+| `astro device status\|plan\|verify\|apply\|rollback KIND` | A device kind's `status`, `plan`, `verify` (read only), `apply` (typed confirmation; network changes roll back unless verified) or `rollback`; `astro device kinds` lists the kinds |
 | `astro station take`, `astro station release` | Make this computer the operator station, or stop that |
 | `astro hot REPO [--dry-run]` | Push a repo's working tree to the hosts that run it and build there (LAN only) |
 | `astro build`, `astro overlay PATH`, `astro pyenv PATH` | Build the workspace, or a worktree as an overlay, or run a worktree's Python from source |
@@ -165,6 +165,7 @@ hw.sh env [KEY]                  the vessel's network env path, or one of its ke
 hw.sh profile show [NAME]        a merged profile (no secrets)
 hw.sh profile sync [URL [REF]]   check out your profile set at its ref (URL REF: record them first)
 hw.sh secrets check              the secrets file and the missing key names (never values)
+hw.sh device VERB KIND [ARGS]    one device kind's VERB (status, plan, apply, verify, rollback; KIND VERB is the same); device kinds lists the kinds and their drivers
 hw.sh hot REPO [--host NAME] [--dry-run] push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)
 hw.sh station take [--dry-run]   make this computer the operator station (boat link, gateway and time roles, keys, station file, and a heartbeat service if the profile names one)
 hw.sh station release            stop this computer's operator heartbeat service, if any

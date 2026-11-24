@@ -1,4 +1,5 @@
 import importlib.util
+import itertools
 import os
 from pathlib import Path
 import re
@@ -109,6 +110,20 @@ class BuilderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unbalanced quote'):
             astro_help.build(install, {'names': "a 'b"})
 
+    def test_list_usage_and_form_placeholders(self):
+        mosfet = command(name='mosfet', params=[
+            {'name': 'file', 'type': 'path'}, {'name': '--seconds', 'type': 'float'},
+            {'name': 'side', 'choices': ['a', 'b']}, {'name': 'port', 'default': 'auto'},
+            {'name': '--check', 'type': 'bool'}, {'name': 'names', 'type': 'list', 'required': False}])
+        self.assertEqual(astro_help.synopsis(mosfet), '<file> [--seconds N] {a|b} [port] [--check] [names...]')
+        self.assertEqual(astro_help.build(mosfet, {'file': 'x', 'side': 'a', 'port': 'auto'}), 'mosfet x a')
+        port, seconds, file = (next(p for p in mosfet['params'] if p['name'] == n) for n in ('port', '--seconds', 'file'))
+        self.assertEqual(astro_help.placeholder(port, '/dev/ttyACM0'), '(auto: /dev/ttyACM0)')
+        self.assertEqual(astro_help.placeholder(port), '(auto)')
+        self.assertEqual(astro_help.placeholder(seconds), '(not set)')
+        self.assertEqual(astro_help.placeholder(file), '(required)')
+        self.assertRegex(astro_help.text([astro_help.parse(astro_help.OWN)]), r'\n  rec fetch \[bag\] +Copy ')
+
     def test_text_lists_and_details(self):
         packages = [astro_help.parse(astro_help.OWN)]
         overview = astro_help.text(packages)
@@ -149,11 +164,33 @@ class HelpCoverageTest(unittest.TestCase):
                 self.assertTrue(own.stdout.startswith('Usage: hw.sh ' + name), own.stdout)
 
     def test_astro_help_names_every_hw_command_and_no_other(self):
-        """Every hw.sh command is an astro verb (run: $ROS_WS/hw.sh CMD), and device covers KIND VERB."""
+        """Every hw.sh command is an astro verb (run: $ROS_WS/hw.sh CMD); device VERB covers KIND VERB."""
         runs = [c['run'] for c in astro_help.parse(astro_help.OWN)['commands']]
         named = {r.split()[1] for r in runs if r.startswith('$ROS_WS/hw.sh ')}
         self.assertEqual(named, dispatched())
-        self.assertIn('$ROS_WS/hw.sh', runs)          # astro device KIND VERB
+        self.assertIn('$ROS_WS/hw.sh device status', runs)
+
+
+class ConventionTest(unittest.TestCase):
+    """Every help.yaml in the workspace: a noun's actions are entries of their own (rec start, rec stop),
+    never a param, and a noun lists all of them."""
+
+    def test_no_subcommand_params_and_every_noun_lists_its_entries(self):
+        packages, _ = astro_help.discover(list(astro_help.candidates(prefixes=[])))
+        self.assertGreater(len(packages), 1)
+        for package in packages:
+            names = [c['name'] for c in package['commands']]
+            for command in package['commands']:
+                for param in command['params']:
+                    self.assertNotIn(param['name'].lstrip('-'), ('command', 'verb', 'action', 'subcommand'),
+                                     f'{package["package"]}: {command["name"]}: make each action an entry')
+            rows, path = astro_help.tree(package['commands']), []
+            for i, (cmd, depth, label) in enumerate(rows):
+                path[depth:] = [label]
+                prefix = ' '.join(path)
+                under = [c['name'] for c, d, _ in itertools.takewhile(lambda r: r[1] > depth, rows[i + 1:]) if c]
+                subs = [n for n in names if n.startswith(prefix + ' ')]
+                self.assertEqual(sorted(under), sorted(subs), f'{package["package"]}: {prefix}')
 
     def test_every_net_script_is_listed_and_answers_help(self):
         runs = {c['run'] for c in astro_help.parse(astro_help.OWN)['commands']}

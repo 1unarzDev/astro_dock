@@ -36,6 +36,7 @@ HW_COMMANDS=(
     "profile show [NAME]|a merged profile (no secrets)"
     "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
     "secrets check|the secrets file and the missing key names (never values)"
+    "device VERB KIND [ARGS]|one device kind's VERB (status, plan, apply, verify, rollback; KIND VERB is the same); device kinds lists the kinds and their drivers"
     "hot REPO [--host NAME] [--dry-run]|push src/REPO's working tree (uncommitted too) to the boat hosts running it, LAN only; branch field/DATE (--dry-run: hosts, files, build plan; sends nothing)"
     "station take [--dry-run]|make this computer the operator station (boat link, gateway and time roles, keys, station file, and a heartbeat service if the profile names one)"
     "station release|stop this computer's operator heartbeat service, if any"
@@ -194,6 +195,19 @@ case ${1:-} in
         [[ $2 =~ ^[A-Z][A-Z0-9_]*$ ]] || die "Not an env key: $2"
         # Network values and role keys (<ROLE>_IP) only: secrets and other variables are never printed.
         exec python3 -I "$HW_ROOT/devices/profile.py" value "$ASTRO_NETWORK_ENV" "${ASTRO_REGISTRY:-}" "$2"
+        ;;
+    device)
+        case ${2:-} in
+            kinds)
+                for kind in $HW_PROFILE_KINDS; do
+                    (hw_load_kind "$kind" 2>/dev/null; d=$(cfg driver); [[ -z $d ]] || printf '%s\t%s\n' "$kind" "$d")
+                done
+                exit 0
+                ;;
+            ''|-*) command_usage device | sed '1s/^      /Usage:/'; exit 2 ;;
+        esac
+        [[ -n ${3:-} ]] || die "Usage: $HW_PROGRAM device VERB KIND [ARGS] (device kinds lists the kinds)"
+        set -- "$3" "$2" "${@:4}"
         ;;
     hot|station)
         # shellcheck source=devices/field.sh
