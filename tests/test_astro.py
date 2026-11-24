@@ -353,6 +353,14 @@ class Verbs(unittest.TestCase):
         call.assert_not_called()
         self.assertIn('hw.sh hot', out.getvalue())
 
+    def test_astro_starts_without_numpy(self):
+        import subprocess
+        code = ("import sys; sys.modules['numpy'] = None; sys.path.insert(0, sys.argv[1]); "
+                "from astro import cli; sys.exit(cli.main(['help', '--list']))")
+        run = subprocess.run([sys.executable, '-c', code, str(ROOT / 'tools')], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('astro', run.stdout)
+
     def test_every_verb_has_a_help_entry_and_every_astro_entry_is_a_verb(self):
         packages, errors = cli.help_module().discover([cli.HELP.with_name('astro-help.yaml')])
         self.assertEqual(errors, [])

@@ -7,7 +7,7 @@ import statistics
 import yaml
 
 from . import apply as applying
-from . import fit, log, results
+from . import log, results     # fit (numpy) is imported by the test types that run
 
 TYPES = ('still', 'couple', 'speed', 'steps', 'nav2')
 DEFAULT_LAYER = {'still': 'conditions', 'couple': 'decoupling', 'speed': 'speed curve',
@@ -268,6 +268,7 @@ def record(ctx, main, command, settle, end, rows):
 
 
 def still(ctx, runner, test, state, defaults, room, amplitude):
+    from . import fit
     seconds = float(test.get('seconds', 20))
     ctx.progress = 'neutral'
     t0, t1 = runner.hold(neutral(len(ctx.spec.axes)), seconds)
@@ -287,6 +288,7 @@ def couple(ctx, runner, test, state, defaults, room, amplitude):
     """The decoupling column of one axis, measured as applied: each hold sets the candidate column live on
     the driver (both signed matrices in one request) and commands the main axis alone, so the search's root
     is the column to write. The original live matrices come back at the end, on abort and on Ctrl-C."""
+    from . import fit
     axes, target = ctx.spec.axes, test.get('apply') or {}
     j, n = axes.index(test['axis']), len(axes)
     key, signed = target.get('key'), target.get('signed')
@@ -367,6 +369,7 @@ def _levels(room, amplitude):
 
 
 def speed(ctx, runner, test, state, defaults, room, amplitude):
+    from . import fit
     axes, target = ctx.spec.axes, test.get('apply') or {}
     j, n, axis = ctx.spec.axes.index(test['axis']), len(ctx.spec.axes), test['axis']
     levels = _levels(room, amplitude)
@@ -417,6 +420,7 @@ def speed(ctx, runner, test, state, defaults, room, amplitude):
 
 
 def steps(ctx, runner, test, state, defaults, room, amplitude):
+    from . import fit
     axes = ctx.spec.axes
     j, n, axis = axes.index(test['axis']), len(axes), test['axis']
     limit_key = test.get('limits')
@@ -449,6 +453,7 @@ def steps(ctx, runner, test, state, defaults, room, amplitude):
 
 
 def nav2(ctx, test, state, defaults):
+    from . import fit
     axes, source, target = ctx.spec.axes, test.get('from') or {}, test.get('apply') or {}
     values = {}
     for part in ('velocity', 'acceleration', 't95'):

@@ -95,7 +95,8 @@ def cmd_test(s, args):
             print(f'{name:<{width}}  {spec.layer(name):<16} {test["type"]:<7} {test.get("axis") or ""}')
         for group, items in spec.groups.items():
             print(f'group {group}: {" ".join(items)}')
-        print(f'spaces: {", ".join(f"{k} (amp {v.get("amp")})" for k, v in spec.spaces.items())}')
+        spaces = ', '.join(f'{k} (amp {v.get("amp")})' for k, v in spec.spaces.items())
+        print(f'spaces: {spaces}')
         return 0
     if args.name == 'status':
         rows = s.rows()
