@@ -137,6 +137,8 @@ def run(ctx, name, space='large', amp=None):
     runner = ctx.make_runner(command_topic, topics['odom'], topics.get('battery'), ctx.sim_time)
     if kind == 'watch':
         runner.listen(listen)
+        if topics.get('gps_status') and hasattr(runner, 'listen_gps'):
+            runner.listen_gps(topics['gps_status'])
     try:
         if not runner.wait_ready():
             raise Abort(f'no odometry on {topics["odom"]} (or no /clock with sim time)')
@@ -588,10 +590,10 @@ def nav2(ctx, test, state, defaults):
 # ---- watch: someone else drives (RC, keyboard), the test only listens ----------------------------------------
 
 WATCH = {'levels': 3, 'level_gap': 0.08, 'min_effort': 0.12, 'steady_tol': 0.04, 'cross_max': 0.1,
-         'max_turn': 0.1, 'battery_spread': 0.5,
-         'baseline_s': 1.0, 'settle_s': 2.5, 'measure_s': 1.5, 'drift_s': 10.0, 'max_s': 900.0}
-EFFORT_GAP_S = 0.5
-REST = 0.06               # m/s (rad/s): the most a baseline may still move for its hold to start from rest        # a pause this long in the applied command ends a run
+         'max_turn': 0.1, 'battery_spread': 0.5, 'rest_s': 3.0, 'rest_hold_s': 2.0, 'cross_min_s': 1.5,
+         'cross_skip_s': 1.0, 'baseline_s': 1.0, 'settle_s': 2.5, 'measure_s': 1.5, 'drift_s': 10.0, 'max_s': 900.0}
+EFFORT_GAP_S = 0.5        # a pause this long in the applied command ends a run
+REST = 0.06               # m/s (rad/s): a shorter neutral is rest only when the odometry is this still
 NEUTRAL_E = 0.02          # every effort under this is neutral
 STATUS_S = 2.0
 
@@ -661,6 +663,8 @@ class Coverage:
         self.holds = []           # dicts: j, sign, level, t0, t1, baseline (b0, b1) or None
         self.neutral_s = 0.0
         self.calm = []            # (t0, t1) neutral windows the boat had stopped coasting in
+        self.rests = []           # (t0, t1) neutral runs of at least rest_s (the boat stopped, whatever odometry says)
+        self.pushes = []          # every single-axis push of at least cross_min_s (j, sign, level, t0, t1): cross terms
         self.seen = set()
 
     def add(self, run, previous, window, battery=None):
@@ -668,6 +672,9 @@ class Coverage:
         if (t0, kind) in self.seen:
             return None
         if kind == 'neutral':
+            if t1 - t0 >= self.o['rest_s'] and (t0, 'rest') not in self.seen:
+                self.seen.add((t0, 'rest'))
+                self.rests.append((t0, t1))
             if t1 - t0 >= self.o['baseline_s']:
                 b0 = t1 - self.o['baseline_s']
                 if coasted(window(b0, t1)):
@@ -676,20 +683,25 @@ class Coverage:
                     self.neutral_s += t1 - t0
             return None
         self.seen.add((t0, kind))
-        if t1 - t0 < self.o['settle_s'] + self.o['measure_s']:
-            if t1 - t0 < 1.0:             # a tap or a stick passing through: not worth a line
-                return None
-            self.rejected.append((j, sign, level, 'too short'))
-            return dict(j=j, sign=sign, level=level, t0=t0, t1=t1, rejected='too short')
+        if t1 - t0 >= self.o['cross_min_s']:
+            self.pushes.append((j, sign, level, t0, t1))
         baseline = None
         if previous and previous[0] == 'neutral' and t0 - previous[5] <= EFFORT_GAP_S and \
                 previous[5] - previous[4] >= self.o['baseline_s']:
             b1 = previous[5]
             b0 = b1 - self.o['baseline_s']
             rows = window(b0, b1)
-            # at rest: stopped coasting and nearly stopped (a slow glide after a tap would read as a response)
-            if rows and coasted(rows) and max(abs(sum(r[k] for r in rows) / len(rows)) for k in (1, 2, 3)) < REST:
+            # at rest: neutral for rest_s (the boat has stopped, even when GPS-derived odometry wanders), or
+            # stopped coasting and nearly stopped by the odometry (a slow glide after a tap is not rest)
+            if previous[5] - previous[4] >= self.o['rest_s'] or (rows and coasted(rows) and max(
+                    abs(sum(r[k] for r in rows) / len(rows)) for k in (1, 2, 3)) < REST):
                 baseline = (b0, b1)
+        short = t1 - t0 < (self.o['rest_hold_s'] if baseline else self.o['settle_s'] + self.o['measure_s'])
+        if short:
+            if t1 - t0 < 1.0:             # a tap or a stick passing through: not worth a line
+                return None
+            self.rejected.append((j, sign, level, 'too short'))
+            return dict(j=j, sign=sign, level=level, t0=t0, t1=t1, rejected='too short')
         hold = dict(j=j, sign=sign, level=level, t0=t0, t1=t1, baseline=baseline, efforts=mean, battery=battery)
         reason = self.judge(hold, window)
         if reason:
@@ -722,6 +734,8 @@ class Coverage:
             if found and found[0] > 0 and found[2] + 2 * found[1] <= hold['t1'] - hold['t0']:
                 hold['v_ss'], hold['tau'], hold['delay'] = round(found[0], 4), round(found[1], 3), found[2]
                 return None
+            if hold['t1'] - hold['t0'] < o['settle_s'] + o['measure_s']:
+                return 'too short'
         half = len(main) // 2
         a, b = sum(main[:half]) / half, sum(main[half:]) / (len(main) - half)
         if abs(b - a) > max(0.03, 0.04 * abs(b)):
@@ -753,7 +767,7 @@ class Coverage:
                         if levels else ''
                     out.append(f'{axis}{"+" if sign > 0 else "-"} {need - have} more level(s){hint}')
             if not self.onset(j):
-                out.append(f'{axis} one hold started from rest ({self.o["baseline_s"]:g} s still first)')
+                out.append(f'{axis} one hold started from rest ({self.o["rest_s"]:g} s still first)')
         if self.neutral_s < self.o['drift_s']:
             out.append(f'{self.o["drift_s"] - self.neutral_s:.0f} s more sitting still')
         return out
@@ -793,7 +807,7 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
     o = watch_options(test)
     axes, target = ctx.spec.axes, test.get('apply') or {}
     cover = Coverage(axes, o, ctx.spec.rotational)
-    show = Display(ctx, cover, axes, ctx.spec.rotational, test.get('max'))
+    show = Display(ctx, cover, axes, ctx.spec.rotational, test.get('max'), test.get('keyboard'))
     start = runner.now()
     ended, finished = 'complete', set()
     try:
@@ -823,8 +837,11 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
                     show.emit(f'{show.name(j, sign)} done ({int(o["levels"])} levels)')
             last = done[-1] if done else None
             from_rest = bool(current and current['kind'] == 'hold' and last and last[0] == 'neutral'
-                             and current['t0'] - last[5] <= EFFORT_GAP_S and last[5] - last[4] >= o['baseline_s'])
+                             and current['t0'] - last[5] <= EFFORT_GAP_S and last[5] - last[4] >= o['rest_s'])
             still_now = now - current['t0'] if current and current['kind'] == 'neutral' else None
+            show.lane = lane_at(runner, now)
+            gps = getattr(runner, 'gps', None)
+            show.gps = gps[-1][1] if gps else None
             show.update(current, from_rest, still_now, now, start)
             if cover.fraction() >= 1.0 - 1e-9:
                 break
@@ -835,7 +852,20 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
         ended = 'ctrl-c'
     show.close(f'  watch ended ({ended}) at {100 * cover.fraction():.0f}%'
                + (': still missing ' + '; '.join(cover.missing()) if cover.fraction() < 1 else ''))
-    return watch_fit(ctx, runner, cover, o, target, ended)
+    outcome = watch_fit(ctx, runner, cover, o, target, ended)
+    cross = cross_terms(ctx, runner, cover, o, test, state, defaults)
+    if cross:
+        outcome['changes'].extend(cross['changes'])
+        outcome['measured']['cross_terms'] = cross['measured']
+        if cross['summary']:
+            outcome['summary'] += ' | ' + cross['summary']
+        if cross['changes']:
+            outcome['live'] = list(target.get('live') or [])
+    found = quality(ctx, runner, cover, o)
+    outcome['quality'] = found
+    outcome['summary'] = f'quality {found["score"]}/100 | ' + outcome['summary']
+    show.report(found)
+    return outcome
 
 
 def watch_fit(ctx, runner, cover, o, target, ended):
@@ -929,7 +959,7 @@ WORDS = {(0, 1): 'straight forward', (0, -1): 'straight back', (1, 1): 'straight
          (1, -1): 'straight sideways right (no turning)', (2, 1): 'spin in place left', (2, -1): 'spin in place right'}
 SHORT = {(0, 1): 'fwd', (0, -1): 'back', (1, 1): 'left', (1, -1): 'right', (2, 1): 'left', (2, -1): 'right'}
 TARGETS = ((0.15, 'small'), (0.3, 'medium'), (0.5, 'full'))
-HINT = {'too short': 'hold {s:g} s', 'not steady (hold longer)': 'keep the stick still, hold longer',
+HINT = {'too short': 'let go {rest:g} s, then hold {short:g} s; or hold {s:g} s', 'not steady (hold longer)': 'keep the stick still, hold longer',
         'turning': 'keep the heading, no spin', 'odometry frozen': 'check odometry (not your driving)',
         'no odometry': 'check odometry (not your driving)'}
 BLOCK = 6
@@ -939,7 +969,7 @@ class Display:
     """A tty gets a 6-line block (header, one row per axis, the live line, Next) redrawn in place with event
     lines scrolling above it; anything else gets plain event lines and a status line every 20 s."""
 
-    def __init__(self, ctx, cover, axes, rotational, caps=None):
+    def __init__(self, ctx, cover, axes, rotational, caps=None, keyboard=None):
         import os
         import sys
         self.ctx, self.cover, self.axes = ctx, cover, axes
@@ -950,6 +980,8 @@ class Display:
         self.ch = dict(full='●', empty='○', ok='✓', bad='✗', bar='█', gap='░', live='▶', dot='·') if utf else \
             dict(full='#', empty='.', ok='*', bad='x', bar='#', gap='-', live='>', dot='-')
         self.caps = caps or {}
+        self.keyboard = keyboard or {}     # {lane, scale: {axis: effort per keyboard speed}}: Next in keyboard words
+        self.lane, self.gps = None, None
         self.drawn, self.last_plain, self.flash, self.last = False, None, None, None   # last: (j, sign, level)
 
     def paint(self, text, code):
@@ -988,14 +1020,18 @@ class Display:
         have = [h['level'] for h in cover.holds if h['j'] == j and h['sign'] == s]
         options = [(round(t * cap / 0.5, 2), w) for t, w in TARGETS]
         options = [(e, w) for e, w in options if e >= o['min_effort'] and all(abs(e - h) >= o['level_gap'] for h in have)]
+        keys = self.keyboard and self.lane == self.keyboard.get('lane')
         if options:
             e, word = max(options, key=lambda x: abs(x[0] - (last[2] if last else 0)))
-            text = f'{WORDS.get((j, s), self.name(j, s))}, {word} stick (~{e:g}), {o["settle_s"] + o["measure_s"]:g} s'
+            if keys:
+                speed = 5 * round(20 * e / float((self.keyboard.get('scale') or {}).get(self.axes[j], 1.0)))
+                level = f'keyboard speed {speed:.0f}% (+/-)'
+            else:
+                level = f'{word} stick (~{e:g})'
+            text = f'{WORDS.get((j, s), self.name(j, s))}, {level}'
         else:
-            text = f'{WORDS.get((j, s), self.name(j, s))}, a stick level not yet done, ' \
-                   f'{o["settle_s"] + o["measure_s"]:g} s'
-        if not cover.onset(j):
-            text += ', from rest' + (' (let go 1 s first)' if current_moving else '')
+            text = f'{WORDS.get((j, s), self.name(j, s))}, a level not yet done'
+        text += f', let go {o["rest_s"]:g} s, then hold {o["rest_hold_s"]:g} s'
         return text
 
     def block(self, current, from_rest, still_now, now, start):
@@ -1003,9 +1039,13 @@ class Display:
         need, f = int(o['levels']), cover.fraction()
         cells = int(round(f * 20))
         elapsed = int(now - start)
+        gps = ''
+        if self.gps is not None:
+            name = GPS_FIX.get(self.gps, str(self.gps))
+            gps = '   GPS ' + (self.paint(name, 32) if self.gps >= 5 else self.paint(name + ' (no RTK)', 31))
         lines = [f'astro watch  {100 * f:3.0f}%  {self.paint(ch["bar"] * cells, 32)}{ch["gap"] * (20 - cells)}  '
                  f'{elapsed // 60}:{elapsed % 60:02d}   still {min(cover.neutral_s, o["drift_s"]):.0f}/'
-                 f'{o["drift_s"]:g} s   ^C fit']
+                 f'{o["drift_s"]:g} s{gps}   ^C fit']
         for j, axis in enumerate(self.axes):
             parts = []
             for s in (1, -1):
@@ -1029,7 +1069,7 @@ class Display:
                               f'{"from rest" if from_rest else "moving start"}  '
                               f'{ch["bar"] * filled}{ch["gap"] * (10 - filled)}{tail}', 33)
         elif still_now is not None:
-            ready = still_now >= o['baseline_s']
+            ready = still_now >= o['rest_s']
             live = f' {ch["dot"]} still {still_now:.1f} s' + (', ready: the next hold counts as from rest' if ready else '')
         else:
             live = f' {ch["dot"]} listening: drive one stick at a time'
@@ -1071,11 +1111,18 @@ class Display:
 
     def refused(self, j, s, level, length, reason, now):
         ch, o = self.ch, self.cover.o
-        hint = HINT.get(reason, '').format(s=o['settle_s'] + o['measure_s'])
+        hint = HINT.get(reason, '').format(s=o['settle_s'] + o['measure_s'], rest=o['rest_s'], short=o['rest_hold_s'])
         text = f'{self.paint(ch["bad"], 31)} {self.name(j, s):<11} {level:.2f}   {length:.1f} s   ' \
                f'{self.paint(reason, 31)}' + (f': {hint}' if hint else '')
         self.emit(text)
         self.flash = (now, f' {self.paint(ch["bad"], 31)} {self.name(j, s)}: {reason}' + (f', {hint}' if hint else ''))
+
+    def report(self, found):
+        """The run's quality score and what to change next time."""
+        mark = self.paint(f'quality {found["score"]}/100', 32 if found['score'] >= 80 else 33 if found['score'] >= 50 else 31)
+        self.ctx.out(f'  {mark}' + ('' if found['problems'] else ': clean data'))
+        for p in sorted(found['problems'], key=lambda p: -p['cost']):
+            self.ctx.out(f'   - {p["what"]}: {p["fix"]}')
 
     def close(self, text):
         import sys
@@ -1098,3 +1145,127 @@ def _clip(line, width):
         seen += 1
         i += 1
     return out + ('\033[0m' if '\033[' in out else '')
+
+
+# ---- watch: cross terms from every push, and how good the run's data was --------------------------------------
+
+def cross_terms(ctx, runner, cover, o, test, state, defaults):
+    """The `cross: {key, rows, probe, tolerance, min_pushes, max_step}` entries of the matrix ``key`` (e.g. the
+    yaw row of the decoupling, read from the gyro, so good without RTK): for each other axis, the row axis's
+    response per unit of that axis's effort over every push of at least cross_min_s (after cross_skip_s). With
+    the entry in force and earlier watch runs' (entry, response) points, a secant gives the entry that zeroes
+    it; with one point the entry moves one `probe` against the response, and the next run sees the slope."""
+    cfg = test.get('cross') or {}
+    if not cfg.get('key'):
+        return None
+    axes, n = ctx.spec.axes, len(ctx.spec.axes)
+    key, probe = cfg['key'], float(cfg.get('probe', 0.004))
+    tolerance, need = float(cfg.get('tolerance', 0.02)), int(cfg.get('min_pushes', 4))
+    max_step = float(cfg.get('max_step', 0.05))
+    matrix = [float(v) for v in applying.current(state, defaults, key)]
+    history = [r for r in results.load_all(ctx.data_root)
+               if r.get('type') == 'watch' and r.get('status') == 'done']
+    changes, measured, parts = [], {}, []
+    columns = {}
+    for row in cfg.get('rows') or []:
+        k = axes.index(row)
+        for j, main in enumerate(axes):
+            if j == k:
+                continue
+            values = []
+            for pj, sign, level, t0, t1 in cover.pushes:
+                if pj != j:
+                    continue
+                rows = runner.window(t0 + o['cross_skip_s'], t1)
+                if len(rows) >= 3:
+                    values.append(sum(r[1 + k] for r in rows) / len(rows) / (sign * level))
+            name = f'{row}<-{main}'
+            if len(values) < need:
+                continue
+            mean = sum(values) / len(values)
+            se = statistics.pstdev(values) / math.sqrt(len(values)) if len(values) > 1 else abs(mean)
+            c0 = matrix[n * k + j]
+            entry = dict(entry=round(c0, 5), response=round(mean, 4), se=round(se, 4), pushes=len(values))
+            measured[name] = entry
+            if abs(mean) <= max(3 * se, tolerance):
+                parts.append(f'{name} {mean:+.3f}/effort: within tolerance')
+                continue
+            points = [((h.get('measured') or {}).get('cross_terms') or {}).get(name) for h in history]
+            points = [(p['entry'], p['response']) for p in points if p and 'entry' in p] + [(c0, mean)]
+            entries = sorted({round(c, 5) for c, _ in points})
+            how = 'probe'
+            c1 = c0 - math.copysign(probe, mean)
+            if len(entries) >= 2:
+                xs = [c for c, _ in points]
+                ys = [r for _, r in points]
+                xm, ym = sum(xs) / len(xs), sum(ys) / len(ys)
+                sxx = sum((x - xm) ** 2 for x in xs)
+                slope = sum((x - xm) * (y - ym) for x, y in zip(xs, ys)) / sxx if sxx else 0.0
+                if slope > 0:            # more entry, more response on that row: the root is ahead
+                    c1 = xm - ym / slope
+                    how = f'secant over {len(points)} runs'
+            c1 = max(c0 - max_step, min(c0 + max_step, c1))
+            entry.update(next=round(c1, 5), how=how)
+            column = columns.setdefault(j, [matrix[n * r + j] for r in range(n)])
+            column[k] = round(c1, 5)
+            parts.append(f'{name} {mean:+.3f}/effort (n={len(values)}): entry {c0:g} -> {c1:.4f} ({how})')
+    for j, column in columns.items():
+        changes.append(dict(key=key, column=j, value=column))
+    return dict(changes=changes, measured=measured, summary='; '.join(parts))
+
+
+GPS_FIX = {0: 'no GPS', 1: 'no fix', 2: '2D', 3: '3D', 4: 'DGPS', 5: 'RTK float', 6: 'RTK fixed'}
+
+
+def quality(ctx, runner, cover, o):
+    """A 0-100 score for the run and what held it back, each with what to change next time."""
+    problems, score = [], 100
+    need = int(o['levels'])
+    # odometry while the boat sat still (neutral for rest_s): GPS-derived velocity wanders without RTK
+    speeds = [math.hypot(r[1], r[2]) for t0, t1 in cover.rests for r in runner.window(t0 + o['rest_s'] / 2, t1)]
+    p90 = sorted(speeds)[int(0.9 * (len(speeds) - 1))] if speeds else None
+    if p90 is not None and p90 > 0.05:
+        cost = 15 if p90 <= 0.15 else 35
+        score -= cost
+        problems.append(dict(cost=cost, what=f'odometry moves {p90:.2f} m/s (p90) while the boat sits still',
+                             fix='get RTK (astro rtk base on the laptop, wait for float) before driving'))
+    gps = getattr(runner, 'gps', None) or []
+    shares = {}
+    if gps:
+        for _, fix in gps:
+            shares[GPS_FIX.get(fix, str(fix))] = shares.get(GPS_FIX.get(fix, str(fix)), 0) + 1
+        shares = {k: round(v / len(gps), 3) for k, v in shares.items()}
+        rtk = sum(1 for _, fix in gps if fix >= 5) / len(gps)
+        if rtk < 0.5:
+            score -= 20
+            problems.append(dict(cost=20, what=f'no RTK for {100 * (1 - rtk):.0f}% of the run (mostly {max(shares, key=shares.get)})',
+                                 fix='astro rtk base on the laptop (--known SITE or --source ntrip skips the survey); '
+                                     'astro rtk status should say float or fixed'))
+    reasons = {}
+    for *_, why in cover.rejected:
+        reasons[why] = reasons.get(why, 0) + 1
+    refused = sum(reasons.values())
+    total = refused + len(cover.holds)
+    if total and refused / total > 0.5:
+        top = max(reasons, key=reasons.get)
+        hint = HINT.get(top, '').format(s=o['settle_s'] + o['measure_s'], rest=o['rest_s'], short=o['rest_hold_s'])
+        score -= 15
+        problems.append(dict(cost=15, what=f'{refused} of {total} holds refused, mostly {top} ({reasons[top]})',
+                             fix=hint or 'see the refused lines'))
+    pairs = [cover.pair(j, s) for j in range(len(cover.axes)) for s in (1, -1)
+             if any(h['j'] == j and h['sign'] == s for h in cover.holds)]
+    if pairs and max(pairs) < 2:
+        score -= 15
+        problems.append(dict(cost=15, what='every hold at one effort, so no speed curve',
+                             fix='change the keyboard speed (+/-) or the stick depth between holds'))
+    if cover.holds and not any(h['baseline'] for h in cover.holds):
+        score -= 5
+        problems.append(dict(cost=5, what='no hold started from rest (no rise time)',
+                             fix=f'let go {o["rest_s"]:g} s before a push'))
+    volts = [h['battery'] for h in cover.holds if h.get('battery')]
+    if volts and max(volts) - min(volts) > o['battery_spread']:
+        score -= 5
+        problems.append(dict(cost=5, what=f'battery sagged {max(volts):.1f} -> {min(volts):.1f} V',
+                             fix='mix levels instead of sweeping, or charge between runs'))
+    return dict(score=max(0, score), problems=problems, odom_still_p90=None if p90 is None else round(p90, 3),
+                gps=shares, holds=dict(counted=len(cover.holds), refused=reasons))

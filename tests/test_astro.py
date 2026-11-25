@@ -416,6 +416,48 @@ class Watch(unittest.TestCase):
         self.assertAlmostEqual(changes['c.t95.surge'], 1.5, delta=0.15)     # the fake's tau 0.5 s: t95 = 3 tau
         self.assertEqual(len(data['holds']), 18)
 
+    def test_cross_term_probes_against_a_turn_then_takes_the_secant(self):
+        procedures = procedures_module()
+
+        class Turning(DriverRunner):
+            """Surging turns the boat: yaw rate -0.2 per unit surge effort, less 50 per unit of the decoupling's
+            yaw-from-surge entry (what that entry does through the mixer), so the entry that zeroes it is 0.004."""
+            entry = 0.0
+
+            def hold(self, command, seconds):
+                t0 = self.t
+                while self.t - t0 < seconds:
+                    effort, left = self.script[0] if self.script else ([0, 0, 0], 1)
+                    self.efforts.append((self.t, *effort))
+                    plant = list(effort)
+                    plant[2] += effort[0] * (-0.2 + 50 * self.entry)
+                    FakeRunner.hold(self, plant, 0.04)
+                    if self.script:
+                        self.script[0] = (effort, left - 0.04)
+                        if self.script[0][1] <= 1e-9:
+                            self.script.pop(0)
+                return t0, self.t
+        with tempfile.TemporaryDirectory() as tmp:
+            tests = Path(tmp, 'tests.yaml')
+            tests.write_text(yaml.safe_dump({
+                'topics': {'applied': '/a', 'odom': '/o'}, 'axes': AXES, 'rotational': 'yaw',
+                'tests': {'watch': {'type': 'watch', 'max_s': 300, 'max_turn': 1.0, 'upstream': ['decoupling'],
+                                    'cross': {'key': 'decoupling', 'rows': ['yaw'], 'probe': 0.004},
+                                    'apply': {'key': 'c'}}}}))
+            state = Path(tmp, 'state.yaml')
+            state.write_text(yaml.safe_dump({'decoupling': [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0]}))
+            ctx = procedures.Context(procedures.Spec(tests), state, tmp, make_runner=Turning, out=lambda *a: None)
+            first = yaml.safe_load(procedures.run(ctx, 'watch').read_text())
+            self.assertEqual(first['measured']['cross_terms']['yaw<-surge']['how'], 'probe')
+            self.assertEqual([c['value'] for c in first['changes'] if c['key'] == 'decoupling'], [[1.0, 0.0, 0.004]])
+            self.assertIn('score', first['quality'])
+            state.write_text(yaml.safe_dump({'decoupling': [1.0, 0, 0, 0, 1.0, 0, 0.002, 0, 1.0]}))
+            Turning.entry = 0.002                # a different entry in force: two points, so a secant
+            second = yaml.safe_load(procedures.run(ctx, 'watch').read_text())
+        term = second['measured']['cross_terms']['yaw<-surge']
+        self.assertTrue(term['how'].startswith('secant'), term)
+        self.assertAlmostEqual(term['next'], 0.004, delta=0.0005)
+
     def test_mixed_commands_are_not_holds(self):
         procedures = procedures_module()
         o = procedures.watch_options({})

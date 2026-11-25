@@ -112,6 +112,16 @@ class Runner:
             self.efforts.append((self.now(), msg.linear.x, msg.linear.y, msg.angular.z))
         self.node.create_subscription(self.Twist, topic, effort, 20)
 
+    def listen_gps(self, topic):
+        """Record the GPS fix type (mavros_msgs/GPSRAW, MAVLink GPS_RAW_INT: 4 DGPS, 5 RTK float, 6 RTK fixed):
+        self.gps gets (t, fix_type). Without mavros_msgs nothing is recorded."""
+        self.gps = []
+        try:
+            from mavros_msgs.msg import GPSRAW
+        except ImportError:
+            return
+        self.node.create_subscription(GPSRAW, topic, lambda msg: self.gps.append((self.now(), int(msg.fix_type))), 5)
+
     def set_params(self, node, values, timeout=3.0):
         """Set {name: list of floats} on ``node`` in one SetParameters request; raises when refused."""
         from rcl_interfaces.srv import SetParameters

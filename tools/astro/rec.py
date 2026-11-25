@@ -82,7 +82,8 @@ def stop(vessel):
     pid, directory = found
     log.write(root, 'rec', f'stop  bags/{Path(directory).name}', vessel.astro.get('events'), wait=True)
     os.killpg(pid, signal.SIGINT)
-    for _ in range(100):
+    # the recorder writes its cache and the bag's index after SIGINT: killed sooner, the last file is cut off
+    for _ in range(600):
         if not log.pid_alive(pid):
             break
         time.sleep(0.1)
