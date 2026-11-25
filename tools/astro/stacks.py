@@ -286,9 +286,11 @@ def outside(vessel, stack):
 
 def clean_shm(vessel, stack):
     """Remove the host's stale Fast DDS shared-memory files (in its container); one line with the count.
-    Never for a simulated vessel: its worlds share /dev/shm across containers (host IPC), so files another
-    container holds look unheld from here and removing them kills that world's DDS."""
-    if vessel.astro.get('sim') or os.environ.get('ASTRO_SIM_INSTANCE'):
+    Off unless ASTRO_CLEAN_SHM=1: containers share /dev/shm with the host and each other (host IPC), so a file
+    held outside this container looks unheld from here and removing it kills that process's DDS."""
+    # Off until the holder check covers the whole machine: containers share /dev/shm with the host (host IPC),
+    # and a check inside one container cannot see files held by the host or by other containers.
+    if not os.environ.get('ASTRO_CLEAN_SHM'):
         return
     _, lines = run_on(vessel, stack, SHM_SCRIPT, tag='astro-shm')
     found = tagged(lines, 'astro-shm')
