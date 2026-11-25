@@ -823,6 +823,7 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
     (which fits what there is). Writes the speed-curve keys of each axis with enough holds."""
     o = watch_options(test)
     axes, target = ctx.spec.axes, test.get('apply') or {}
+    force = in_force(ctx, runner, test, state, defaults) if (test.get('cross') or {}).get('key') else {}
     cover = Coverage(axes, o, ctx.spec.rotational)
     show = Display(ctx, cover, axes, ctx.spec.rotational, test.get('max'), test.get('keyboard'))
     start = runner.now()
@@ -869,7 +870,7 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
     show.close(f'  watch ended ({ended}) at {100 * cover.fraction():.0f}%'
                + (': still missing ' + '; '.join(cover.missing()) if cover.fraction() < 1 else ''))
     outcome = watch_fit(ctx, runner, cover, o, target, ended)
-    cross = cross_terms(ctx, runner, cover, o, test, state, defaults)
+    cross = cross_terms(ctx, runner, cover, o, test, state, defaults, force)
     if cross:
         outcome['changes'].extend(cross['changes'])
         outcome['measured']['cross_terms'] = cross['measured']
@@ -1190,89 +1191,119 @@ def _clip(line, width):
 
 # ---- watch: cross terms from every push, and how good the run's data was --------------------------------------
 
-def cross_terms(ctx, runner, cover, o, test, state, defaults):
-    """The `cross: {key, rows, probe, tolerance, min_pushes, max_step}` entries of the matrix ``key`` (e.g. the
-    yaw row of the decoupling, read from the gyro, so good without RTK): for each other axis, the row axis's
-    response per unit of that axis's effort over every push of at least cross_min_s (after cross_skip_s). With
-    the entry in force and earlier watch runs' (entry, response) points, a secant gives the entry that zeroes
-    it; with one point the entry moves one `probe` against the response, and the next run sees the slope."""
+def in_force(ctx, runner, test, state, defaults):
+    """The matrices the boat drives with: the driver's live values of the test's apply.live parameters when it
+    answers (a `ros2 param set` since the last apply is what the data saw), else the state file's. Says so when
+    the two differ. {key: flat list or None}."""
+    cfg = test.get('cross') or {}
+    keys = [k for k in (cfg.get('key'), cfg.get('signed')) if k]
+    filed = {k: applying.current(state, defaults, k) for k in keys}
+    live = {}
+    items = [i for i in (test.get('apply') or {}).get('live') or [] if (i.get('key') or i['param']) in keys]
+    if items and hasattr(runner, 'get_params'):
+        try:
+            got = runner.get_params(items[0]['node'], [i['param'] for i in items])
+        except Exception:
+            got = {}
+        live = {(i.get('key') or i['param']): got.get(i['param']) for i in items if got.get(i['param'])}
+    out = {}
+    for k in keys:
+        value = live.get(k) if live.get(k) is not None else filed.get(k)
+        if live.get(k) is not None and filed.get(k) is not None and \
+                [round(float(v), 5) for v in live[k]] != [round(float(v), 5) for v in filed[k]]:
+            ctx.out(f'  note: the driver runs {k} {fmt([float(v) for v in live[k]])}, not the state file\'s; '
+                    f'the analysis builds on what runs')
+        out[k] = [float(v) for v in value] if value is not None else None
+    return out
+
+
+def cross_terms(ctx, runner, cover, o, test, state, defaults, force=None):
+    """The `cross: {key, signed, rows, probe, tolerance, min_pushes, max_step}` entries of the matrix ``key``
+    (e.g. the yaw row of the decoupling, from the gyro, so good without RTK), built on the matrices in force
+    (``force``, from in_force): for each other axis, the row axis's rate over every push of at least cross_min_s
+    (after cross_skip_s), per unit of effort. With the entry in force and earlier watch runs' (entry, response)
+    points a secant gives the entry that zeroes it; with one point the entry moves one `probe` against it. When
+    the signed matrix (`signed`) has its own column for an axis, each sign is fitted and written on its own.
+    Nothing is proposed when a step did not reduce the response or it does not grow with effort."""
     cfg = test.get('cross') or {}
     if not cfg.get('key'):
         return None
     axes, n = ctx.spec.axes, len(ctx.spec.axes)
-    key, probe = cfg['key'], float(cfg.get('probe', 0.004))
+    key, signed, probe = cfg['key'], cfg.get('signed'), float(cfg.get('probe', 0.004))
     tolerance, need = float(cfg.get('tolerance', 0.02)), int(cfg.get('min_pushes', 4))
     max_step = float(cfg.get('max_step', 0.05))
-    matrix = [float(v) for v in applying.current(state, defaults, key)]
+    force = force or {}
+    plus = force.get(key) or [float(v) for v in applying.current(state, defaults, key)]
+    minus = (force.get(signed) if signed else None) or plus
     history = [r for r in results.load_all(ctx.data_root)
                if r.get('type') == 'watch' and r.get('status') == 'done']
-    changes, measured, parts = [], {}, []
-    columns = {}
+    changes, measured, parts = [], {'in_force': {key: plus, **({signed: minus} if signed else {})}}, []
+    columns = {}                     # (target key, j) -> column
     for row in cfg.get('rows') or []:
         k = axes.index(row)
         for j, main in enumerate(axes):
             if j == k:
                 continue
-            values, rates = [], []
-            for pj, sign, level, t0, t1 in cover.pushes:
-                if pj != j:
+            split = [minus[n * r + j] for r in range(n)] != [plus[n * r + j] for r in range(n)]
+            for want, matrix, target in (((1,), plus, key), ((-1,), minus, signed)) if split else (((1, -1), plus, key),):
+                values, rates = [], []
+                for pj, sign, level, t0, t1 in cover.pushes:
+                    if pj != j or sign not in want:
+                        continue
+                    rows = runner.window(t0 + o['cross_skip_s'], t1)
+                    if len(rows) >= 3:
+                        rate = sum(r[1 + k] for r in rows) / len(rows)
+                        values.append(rate / (sign * level))
+                        rates.append((level, rate * sign))
+                name = f'{row}<-{main}' + (('+' if want == (1,) else '-') if split else '')
+                if len(values) < need:
                     continue
-                rows = runner.window(t0 + o['cross_skip_s'], t1)
-                if len(rows) >= 3:
-                    rate = sum(r[1 + k] for r in rows) / len(rows)
-                    values.append(rate / (sign * level))
-                    rates.append((level, rate * sign))
-            name = f'{row}<-{main}'
-            if len(values) < need:
-                continue
-            # a decoupling entry adds a cross effort in proportion to the main one: it can cancel a cross response
-            # that grows with effort, not one that stays put (a thruster starting late or weaker than its pair)
-            groups = clusters([lv for lv, _ in rates], o['level_gap'])
-            if len(groups) >= 2 and groups[-1][0] - groups[0][0] >= 0.15:
-                low = [r for lv, r in rates if lv in groups[0]]
-                high = [r for lv, r in rates if lv in groups[-1]]
-                lo, hi = sum(low) / len(low), sum(high) / len(high)
-                if abs(hi) < 1.3 * abs(lo) * (groups[-1][0] / groups[0][0]) ** 0.5 and abs(hi) <= abs(lo) * 1.2:
-                    measured[name] = dict(entry=round(matrix[n * k + j], 5), how='does not grow with effort',
-                                          rates={f'{groups[0][0]:g}': round(lo, 3), f'{groups[-1][0]:g}': round(hi, 3)})
-                    parts.append(f'{name}: {lo:+.2f} {row} rate at e={groups[0][0]:g}, {hi:+.2f} at e={groups[-1][0]:g}: '
-                                 f'it does not grow with effort, so no decoupling entry cancels it (likely a thruster '
-                                 f'starting later or weaker than its pair: check them one at a time); nothing proposed')
+                c0 = matrix[n * k + j]
+                # a decoupling entry adds a cross effort in proportion to the main one: it can cancel a cross
+                # response that grows with effort, not one that stays put (a thruster late or weaker than its pair)
+                groups = clusters([lv for lv, _ in rates], o['level_gap'])
+                if len(groups) >= 2 and groups[-1][0] - groups[0][0] >= 0.15:
+                    low = [r for lv, r in rates if lv in groups[0]]
+                    high = [r for lv, r in rates if lv in groups[-1]]
+                    lo, hi = sum(low) / len(low), sum(high) / len(high)
+                    if abs(hi) <= abs(lo) * 1.2:
+                        measured[name] = dict(entry=round(c0, 5), how='does not grow with effort',
+                                              rates={f'{groups[0][0]:g}': round(lo, 3), f'{groups[-1][0]:g}': round(hi, 3)})
+                        parts.append(f'{name}: {lo:+.2f} {row} rate at e={groups[0][0]:g}, {hi:+.2f} at '
+                                     f'e={groups[-1][0]:g}: it does not grow with effort, so no decoupling entry '
+                                     f'cancels it (likely a thruster starting later or weaker than its pair: check '
+                                     f'them one at a time); nothing proposed')
+                        continue
+                mean = sum(values) / len(values)
+                se = statistics.pstdev(values) / math.sqrt(len(values)) if len(values) > 1 else abs(mean)
+                entry = dict(entry=round(c0, 5), response=round(mean, 4), se=round(se, 4), pushes=len(values))
+                measured[name] = entry
+                if abs(mean) <= max(3 * se, tolerance):
+                    parts.append(f'{name} {mean:+.3f}/effort: within tolerance')
                     continue
-            mean = sum(values) / len(values)
-            se = statistics.pstdev(values) / math.sqrt(len(values)) if len(values) > 1 else abs(mean)
-            c0 = matrix[n * k + j]
-            entry = dict(entry=round(c0, 5), response=round(mean, 4), se=round(se, 4), pushes=len(values))
-            measured[name] = entry
-            if abs(mean) <= max(3 * se, tolerance):
-                parts.append(f'{name} {mean:+.3f}/effort: within tolerance')
-                continue
-            points = [((h.get('measured') or {}).get('cross_terms') or {}).get(name) for h in history]
-            points = [(p['entry'], p['response']) for p in points if p and 'entry' in p] + [(c0, mean)]
-            entries = sorted({round(c, 5) for c, _ in points})
-            how = 'probe'
-            c1 = c0 - math.copysign(probe, mean)
-            if len(entries) >= 2:
-                xs = [c for c, _ in points]
-                ys = [r for _, r in points]
-                xm, ym = sum(xs) / len(xs), sum(ys) / len(ys)
-                sxx = sum((x - xm) ** 2 for x in xs)
-                slope = sum((x - xm) * (y - ym) for x, y in zip(xs, ys)) / sxx if sxx else 0.0
-                if slope > 0:            # more entry, more response on that row: the root is ahead
-                    c1 = xm - ym / slope
-                    how = f'secant over {len(points)} runs'
-                else:                    # the steps so far did not reduce it: stop and say so
-                    entry.update(how='steps did not reduce it')
-                    parts.append(f'{name} {mean:+.3f}/effort at entry {c0:g}: changing the entry did not reduce it '
-                                 f'(points {", ".join(f"{c:g}:{r:+.2f}" for c, r in points)}); nothing proposed')
-                    continue
-            c1 = max(c0 - max_step, min(c0 + max_step, c1))
-            entry.update(next=round(c1, 5), how=how)
-            column = columns.setdefault(j, [matrix[n * r + j] for r in range(n)])
-            column[k] = round(c1, 5)
-            parts.append(f'{name} {mean:+.3f}/effort (n={len(values)}): entry {c0:g} -> {c1:.4f} ({how})')
-    for j, column in columns.items():
-        changes.append(dict(key=key, column=j, value=column))
+                points = [((h.get('measured') or {}).get('cross_terms') or {}).get(name) for h in history]
+                points = [(p['entry'], p['response']) for p in points if p and 'response' in p] + [(c0, mean)]
+                how = 'probe'
+                c1 = c0 - math.copysign(probe, mean)
+                if len({round(c, 5) for c, _ in points}) >= 2:
+                    xs, ys = [c for c, _ in points], [r for _, r in points]
+                    xm, ym = sum(xs) / len(xs), sum(ys) / len(ys)
+                    sxx = sum((x - xm) ** 2 for x in xs)
+                    slope = sum((x - xm) * (y - ym) for x, y in zip(xs, ys)) / sxx if sxx else 0.0
+                    if slope <= 0:       # the steps so far did not reduce it: stop and say so
+                        entry.update(how='steps did not reduce it')
+                        parts.append(f'{name} {mean:+.3f}/effort at entry {c0:g}: changing the entry did not reduce '
+                                     f'it (points {", ".join(f"{c:g}:{r:+.2f}" for c, r in points)}); nothing proposed')
+                        continue
+                    c1, how = xm - ym / slope, f'secant over {len(points)} runs'
+                c1 = max(c0 - max_step, min(c0 + max_step, c1))
+                entry.update(next=round(c1, 5), how=how)
+                column = columns.setdefault((target, j), [matrix[n * r + j] for r in range(n)])
+                column[k] = round(c1, 5)
+                parts.append(f'{name} {mean:+.3f}/effort (n={len(values)}): entry {c0:g} -> {c1:.4f} ({how})')
+    for (target, j), column in columns.items():
+        changes.append(dict(key=target, column=j, value=column) if target == key else
+                       dict(key=target, column=j, value=column, fallback=key))
     return dict(changes=changes, measured=measured, summary='; '.join(parts))
 
 

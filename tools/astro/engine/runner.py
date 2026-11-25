@@ -122,6 +122,23 @@ class Runner:
             return
         self.node.create_subscription(GPSRAW, topic, lambda msg: self.gps.append((self.now(), int(msg.fix_type))), 5)
 
+    def get_params(self, node, names, timeout=3.0):
+        """{name: list of floats or None} from ``node`` (GetParameters); {} when it does not answer."""
+        from rcl_interfaces.srv import GetParameters
+        client = self.node.create_client(GetParameters, f'{node.rstrip("/")}/get_parameters')
+        try:
+            if not client.wait_for_service(timeout_sec=timeout):
+                return {}
+            future = client.call_async(GetParameters.Request(names=list(names)))
+            end = time.monotonic() + timeout
+            while not future.done() and time.monotonic() < end:
+                self.rclpy.spin_once(self.node, timeout_sec=0.05)
+            if not future.done():
+                return {}
+            return {name: (list(value.double_array_value) or None) for name, value in zip(names, future.result().values)}
+        finally:
+            self.node.destroy_client(client)
+
     def set_params(self, node, values, timeout=3.0):
         """Set {name: list of floats} on ``node`` in one SetParameters request; raises when refused."""
         from rcl_interfaces.srv import SetParameters

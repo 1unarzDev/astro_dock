@@ -458,6 +458,28 @@ class Watch(unittest.TestCase):
         self.assertTrue(term['how'].startswith('secant'), term)
         self.assertAlmostEqual(term['next'], 0.004, delta=0.0005)
 
+    def test_cross_term_builds_on_each_signs_column_in_force(self):
+        procedures = procedures_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            tests = Path(tmp, 'tests.yaml')
+            tests.write_text(yaml.safe_dump({
+                'topics': {'applied': '/a', 'odom': '/o'}, 'axes': AXES, 'rotational': 'yaw',
+                'tests': {'watch': {'type': 'watch', 'max_s': 300, 'max_turn': 1.0,
+                                    'cross': {'key': 'decoupling', 'signed': 'decoupling_negative', 'rows': ['yaw'],
+                                              'probe': 0.004, 'tolerance': 0.0, 'min_pushes': 2},
+                                    'apply': {'key': 'c'}}}}))
+            state = Path(tmp, 'state.yaml')       # reverse has its own surge column (entry 0.01) and sway entry
+            state.write_text(yaml.safe_dump({'decoupling': [1.0, 0, 0, 0.02, 1.0, 0, 0, 0, 1.0],
+                                             'decoupling_negative': [1.0, 0, 0, 0.02, 1.0, 0, 0.01, 0, 1.0]}))
+            ctx = procedures.Context(procedures.Spec(tests), state, tmp, make_runner=DriverRunner, out=lambda *a: None)
+            data = yaml.safe_load(procedures.run(ctx, 'watch').read_text())
+        terms = data['measured']['cross_terms']
+        self.assertEqual(terms['yaw<-surge+']['entry'], 0.0)
+        self.assertEqual(terms['yaw<-surge-']['entry'], 0.01)
+        for change in data['changes']:      # the other entries of each column stay as they were in force
+            if change['key'] == 'decoupling_negative':
+                self.assertEqual((change['column'], change['value'][:2], change['fallback']), (0, [1.0, 0.02], 'decoupling'))
+
     def test_mixed_commands_are_not_holds(self):
         procedures = procedures_module()
         o = procedures.watch_options({})
