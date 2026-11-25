@@ -825,7 +825,7 @@ class Browser:
                 x = 4
                 attr = here if chosen else (curses.A_BOLD if depth == -1 else 0)
                 more = f'  {self.counts.get(package["package"], 0)}'
-                more += f' {self.g["more"]}' if depth == -1 and self.folded(package) else ''   # folded
+                more += self.g['more'] if depth == -1 and self.folded(package) else ''   # folded
                 self.put(y, x, label, attr, width - x - 1)
                 if x + len(label) < width:
                     self.put(y, x + len(label), more, self.style('dim'), width - x - len(label) - 1)

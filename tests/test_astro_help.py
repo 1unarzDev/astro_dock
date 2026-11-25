@@ -146,6 +146,52 @@ class BuilderTest(unittest.TestCase):
         self.assertIn('No command matches', astro_help.text(packages, 'zzz'))
 
 
+class GroupingTest(unittest.TestCase):
+    """The list: a noun's children are exactly the entries named NOUN + space; groups are findable."""
+
+    @staticmethod
+    def browser(packages):
+        browser = astro_help.Browser.__new__(astro_help.Browser)        # no terminal: the list logic only
+        browser.packages, browser.levels, browser.word = packages, ('core',), ''
+        browser.row, browser.here, browser.top, browser.collapsed, browser.counts = None, None, 0, set(), {}
+        return browser
+
+    @staticmethod
+    def package(name, *commands):
+        return {'package': name, 'summary': '', 'commands': [
+            {'name': c, 'summary': '', 'level': 'core'} for c in commands]}
+
+    def test_children_are_the_names_under_the_noun(self):
+        names = ['profile', 'profile env', 'profile show', 'hot', 'device status', 'device verify', 'rec start']
+        rows = astro_help.tree([{'name': n} for n in names])
+        self.assertEqual([(c and c['name'], d, label) for c, d, label in rows],
+                         [('profile', 0, 'profile'), ('profile env', 1, 'env'), ('profile show', 1, 'show'),
+                          ('hot', 0, 'hot'), (None, 0, 'device'), ('device status', 1, 'status'),
+                          ('device verify', 1, 'verify'), ('rec start', 0, 'rec start')])
+
+    def test_group_index_tab_fold_and_filter_by_group(self):
+        browser = self.browser([self.package('astro', 'help', 'hot', 'profile', 'profile env'),
+                                self.package('mhseals_hardware', 'drive', 'thrusters', 'thrusters mix'),
+                                self.package('mhseals_nav', 'task')])
+        rows = browser.rows()
+        self.assertEqual([r[3] for r in rows if r[2] == -3], ['astro', 'mhseals_hardware', 'mhseals_nav'])
+        self.assertEqual(browser.selected(rows)[1]['name'], 'help')       # starts on the first command
+        browser.next_group(1)
+        self.assertEqual(browser.selected(browser.rows()), (browser.packages[1], None))
+        browser.next_group(-1)
+        self.assertEqual(browser.selected(browser.rows())[0]['package'], 'astro')
+        browser.collapsed.add('mhseals_hardware')
+        self.assertFalse([r for r in browser.rows() if r[1] and r[1]['name'] == 'drive'])
+        browser.row = 1                                                  # the index row of mhseals_hardware
+        browser.go_group(browser.selected(browser.rows())[0])
+        self.assertNotIn('mhseals_hardware', browser.collapsed)
+        self.assertEqual(browser.selected(browser.rows())[0]['package'], 'mhseals_hardware')
+        for word, want in (('mhseals', {'drive', 'thrusters', 'thrusters mix', 'task'}),
+                           ('thrusters', {'thrusters', 'thrusters mix'})):
+            browser.word = word
+            self.assertEqual({r[1]['name'] for r in browser.rows() if r[1]}, want)
+
+
 def run(*args, **env):
     return subprocess.run(['/bin/bash', *args], cwd=ROOT, env=dict(HW_ENV, **env), stdin=subprocess.DEVNULL,
                           capture_output=True, text=True, timeout=60)
