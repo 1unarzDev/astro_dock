@@ -480,6 +480,17 @@ class Watch(unittest.TestCase):
             if change['key'] == 'decoupling_negative':
                 self.assertEqual((change['column'], change['value'][:2], change['fallback']), (0, [1.0, 0.02], 'decoupling'))
 
+    def test_coast_fit_recovers_drag_over_mass(self):
+        a, b, v, t, rows = 0.4, 1.2, 0.8, 0.0, []
+        while t < 5:                              # v' = -a v - b v^2, integrated finely
+            rows.append((t, v))
+            for _ in range(10):
+                v += (-a * v - b * v * v) * 0.002
+            t += 0.02
+        found = fit.coast([r[0] for r in rows], [r[1] for r in rows])
+        self.assertAlmostEqual(found[0], a, delta=0.05)
+        self.assertAlmostEqual(found[1], b, delta=0.15)
+
     def test_mixed_commands_are_not_holds(self):
         procedures = procedures_module()
         o = procedures.watch_options({})

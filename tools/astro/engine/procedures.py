@@ -870,6 +870,17 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
     show.close(f'  watch ended ({ended}) at {100 * cover.fraction():.0f}%'
                + (': still missing ' + '; '.join(cover.missing()) if cover.fraction() < 1 else ''))
     outcome = watch_fit(ctx, runner, cover, o, target, ended)
+    try:
+        model = plant(ctx, runner, cover, o, test, outcome['measured'].get('curves') or {})
+    except Exception as error:           # a report: never lose the run's result over it
+        model = {'error': str(error)}
+    if model:
+        outcome['measured']['plant'] = model
+        for axis, m in model.items():
+            if isinstance(m, dict) and (m.get('M') or m.get('mass_per_force_rise') or m.get('mass_per_force_coast')):
+                ctx.out(f'  plant {axis}: d1={m.get("d1")} d2={m.get("d2")} M/F rise={m.get("mass_per_force_rise")} '
+                        f'coast={m.get("mass_per_force_coast")}' + (f' M={m["M"]}' if m.get('M') else '')
+                        + (f' added={m["added"]}' if m.get('added') is not None else ''))
     cross = cross_terms(ctx, runner, cover, o, test, state, defaults, force)
     if cross:
         outcome['changes'].extend(cross['changes'])
@@ -893,6 +904,7 @@ def watch_fit(ctx, runner, cover, o, target, ended):
     reference = calm_rows or None            # baseline of a hold not started from rest: the still windows
     prefix = target.get('key', 'characterization')
     changes, parts, points, cross, skipped, rises_all = [], [], {}, {}, [], {}
+    all_curves = {}
     for j, axis in enumerate(axes):
         unit = 'rad/s' if axis == ctx.spec.rotational else 'm/s'
         curves, rises = {}, []
@@ -937,6 +949,7 @@ def watch_fit(ctx, runner, cover, o, target, ended):
             curve = fit.speed_curve(kept) if len(kept) >= 2 else None
             if curve:
                 curves[name] = curve
+                all_curves[name] = dict(curve, full_effort_speed=round(fit.speed_at(curve['d1'], curve['d2'], 1.0), 3))
                 parts.append(f'{name} d1={curve["d1"]:.3g} d2={curve["d2"]:.3g}')
             else:
                 skipped.append(f'{name} ({len(kept)} level(s))')
@@ -963,7 +976,7 @@ def watch_fit(ctx, runner, cover, o, target, ended):
     summary = (' | '.join(parts) or 'no axis had two levels') + \
         (f' | not fitted: {", ".join(skipped)}' if skipped else '') + f' ({ended}, {len(cover.holds)} holds)'
     return dict(summary=summary, changes=changes, live=list(target.get('live') or []),
-                measured=dict(points=points, t95=rises_all, drift=drift, still_s=round(cover.neutral_s, 1),
+                measured=dict(points=points, curves=all_curves, t95=rises_all, drift=drift, still_s=round(cover.neutral_s, 1),
                               cross=cross_median, coverage=round(cover.fraction(), 3), ended=ended,
                               missing=cover.missing(), rejected=[[axes[j], s, lv, why] for j, s, lv, why in
                                                                   cover.rejected],
@@ -1305,6 +1318,62 @@ def cross_terms(ctx, runner, cover, o, test, state, defaults, force=None):
         changes.append(dict(key=target, column=j, value=column) if target == key else
                        dict(key=target, column=j, value=column, fallback=key))
     return dict(changes=changes, measured=measured, summary='; '.join(parts))
+
+
+def plant(ctx, runner, cover, o, test, curves):
+    """The marine plant per axis, M v' = F e|e| - D1 v - D2 v|v| (the thrust law e|e|), from the same driving:
+    the speed curve gives D/F (d1, d2); each rise from rest gives M/F = tau (d1 + 2 d2 v); each coast after a
+    push (thrust off, still moving) gives D/M, so M/F a second way. With `plant: {mass_kg, full_force: {axis:
+    N or N m}}` in the test it is in SI: D1, D2, M, and the added mass M - mass (inertia for the rotational
+    axis, whose added part needs the hull's own inertia: `inertia_kgm2`). Report only."""
+    from . import fit
+    cfg = test.get('plant') or {}
+    out = {}
+    for j, axis in enumerate(cover.axes):
+        both = [curves.get(f'{axis}+'), curves.get(f'{axis}-')]
+        both = [c for c in both if c]
+        if not both:
+            continue
+        d1 = sum(c['d1'] for c in both) / len(both)
+        d2 = sum(c['d2'] for c in both) / len(both)
+        rises = [h['tau'] * (d1 + 2 * d2 * h['v_ss']) for h in cover.holds
+                 if h['j'] == j and h.get('tau') and h.get('v_ss')]
+        coasts = []
+        for h in cover.holds:
+            if h['j'] != j:
+                continue
+            # from the push's end until the next command (or 8 s), while still moving
+            nxt = min([p[3] for p in cover.pushes if p[3] > h['t1']] + [h['t1'] + 8.0])
+            rows = runner.window(h['t1'] + 0.2, nxt)
+            speeds = [(r[0], along(r, j, h['sign'], cover.rotational)) for r in rows]
+            speeds = [(t, v) for t, v in speeds if v > MOVED]
+            if len(speeds) < 8:
+                continue
+            found = fit.coast([t for t, _ in speeds], [v for _, v in speeds])
+            if found:
+                coasts.append(found)
+        entry = dict(d1=round(d1, 5), d2=round(d2, 5), rises=len(rises), coasts=len(coasts))
+        if rises:
+            entry['mass_per_force_rise'] = round(statistics.median(rises), 4)
+        if coasts:
+            a = statistics.median(c[0] for c in coasts)
+            b = statistics.median(c[1] for c in coasts)
+            entry.update(coast_a=round(a, 4), coast_b=round(b, 4))
+            per = [x for x in ((d1 / a) if a > 1e-3 and d1 > 1e-4 else None,
+                               (d2 / b) if b > 1e-3 and d2 > 1e-4 else None) if x]
+            if per:
+                entry['mass_per_force_coast'] = round(statistics.median(per), 4)
+        force = (cfg.get('full_force') or {}).get(axis)
+        best = entry.get('mass_per_force_rise') or entry.get('mass_per_force_coast')
+        if force:
+            entry.update(D1=round(d1 * force, 3), D2=round(d2 * force, 3))
+            if best:
+                entry['M'] = round(best * force, 3)
+                own = cfg.get('inertia_kgm2') if j == cover.rotational else cfg.get('mass_kg')
+                if own:
+                    entry['added'] = round(best * force - float(own), 3)
+        out[axis] = entry
+    return out
 
 
 GPS_FIX = {0: 'no GPS', 1: 'no fix', 2: '2D', 3: '3D', 4: 'DGPS', 5: 'RTK float', 6: 'RTK fixed'}

@@ -313,3 +313,26 @@ def nav2_limits(velocity, acceleration, t95s, rules, axes, rotational):
         why[a] = dict(velocity=v, acceleration=acc)
     return dict(velocity=[round(min(float(velocity[a]), cap_v[a]), 4) for a in axes],
                 acceleration=[round(min(float(acceleration[a]), cap_a[a]), 4) for a in axes]), why
+
+
+# ---- coast-downs: drag over mass -----------------------------------------------------------------
+
+def coast(t, v):
+    """Fit a coast-down v' = -a v - b v|v| (a = D1/M, b = D2/M, both >= 0) to a speed that starts above zero
+    and decays with no thrust: the closed form v(t) = a v0 e^{-at} / (a + b v0 (1 - e^{-at})) over a grid of
+    a, b. Returns (a, b, rms) or None."""
+    t, v = numpy.asarray(t, float), numpy.asarray(v, float)
+    if t.size < 8 or v[0] <= 0:
+        return None
+    t = t - t[0]
+    v0 = float(numpy.mean(v[:3]))
+    best = None
+    for a in numpy.concatenate(([1e-4], numpy.geomspace(0.01, 5.0, 60))):
+        e = numpy.exp(-a * t)
+        for b in numpy.concatenate(([0.0], numpy.geomspace(0.01, 10.0, 60))):
+            model = a * v0 * e / (a + b * v0 * (1 - e))
+            sse = float(((v - model) ** 2).sum())
+            if best is None or sse < best[2]:
+                best = (float(a), float(b), sse)
+    a, b, sse = best
+    return a, b, math.sqrt(sse / t.size)
