@@ -471,6 +471,7 @@ commands:
       - {name: --all, type: bool, description: 'Send every project, changed or not, to the computers that run it.'}
       - {name: --host, default: auto, choices_from: 'astro _choices on', description: 'Send to only this one computer of the robot; auto is every computer that runs the project.'}
       - {name: --dry-run, type: bool, description: 'Show the route, the projects, commits and files, and whether it rebuilds; send nothing.'}
+      - {name: --untracked, type: bool, description: 'Also send new files git does not track yet (off by default, so notes and scratch files stay on this computer).'}
     examples:
       - astro hot --dry-run --all
       - astro hot astro_dock profiles

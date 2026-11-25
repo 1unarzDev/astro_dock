@@ -1,9 +1,10 @@
 # shellcheck shell=bash
 # Field commands over the hosts kind (hw.sh sources this, then devices/hosts/fleet.sh):
-#   hot [REPO...] [--all] [--host NAME]... [--dry-run]
+#   hot [REPO...] [--all] [--host NAME]... [--untracked] [--dry-run]
 #                            put this computer's code on the robot: each REPO (src/REPO, astro_dock or
 #                            profiles; none: pick from those with local changes or commits a host lacks;
-#                            --all: every one) as its working tree, uncommitted and untracked files too,
+#                            --all: every one) as its working tree: committed and uncommitted edits of tracked files
+#                            (untracked files only with --untracked),
 #                            on the boat hosts that run it. Each host is reached straight, else through its
 #                            registry jump or the vessel's operator station (the route is printed first),
 #                            so it works with no internet on the boat. A git bundle over ssh, checked out on
@@ -176,7 +177,9 @@ hot_snapshot() {
     index=$(mktemp) || exit 1
     # -p: the index keeps its mtime, so git still re-reads a file edited in the tick of its last stat (racy git)
     cp -p -- "$(git -C "$dir" rev-parse --path-format=absolute --git-path index)" "$index" 2>/dev/null
-    tree=$(GIT_INDEX_FILE=$index git -C "$dir" add -A && GIT_INDEX_FILE=$index git -C "$dir" write-tree)
+    # Tracked files only, unless --untracked: notes and scratch files never ride along to the robot.
+    tree=$(GIT_INDEX_FILE=$index git -C "$dir" add "$( [[ ${HOT_UNTRACKED:-} == 1 ]] && echo -A || echo -u )" \
+        && GIT_INDEX_FILE=$index git -C "$dir" write-tree)
     rm -f -- "$index"
     [[ -n $tree ]] || die "Cannot snapshot $dir"
     if [[ $tree == "$(git -C "$dir" rev-parse 'HEAD^{tree}')" ]]; then printf '%s\n' "$head"; return; fi
@@ -352,6 +355,7 @@ hot_main() {
             --host) [[ -n ${2:-} ]] || hot_usage 2; only+=("$2"); shift 2 ;;
             --all) all=true; shift ;;
             --dry-run) dry=true; shift ;;
+            --untracked) HOT_UNTRACKED=1; shift ;;
             --choices) choices=true; shift ;;     # the picker's list (help.yaml choices_from)
             -h|--help) hot_usage ;;
             -*) hot_usage 2 ;;
@@ -413,7 +417,7 @@ hot_main() {
             rm -rf -- "$probes"; exit 2
         fi
     fi
-    # Each repo's working tree as a commit (uncommitted and untracked files too).
+    # Each repo's working tree as a commit (tracked files' edits; untracked only with --untracked).
     declare -gA HOT_DIRS=() HOT_SNAP=()
     HOT_BRANCH=field/$(date +%Y%m%d)
     local sent=()

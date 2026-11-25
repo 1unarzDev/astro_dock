@@ -275,7 +275,7 @@ class Hot(unittest.TestCase):
     def test_new_file_builds_and_host_dirty_state_is_backed_up(self):
         (self.pc / 'pkg_dir/pkg_a/node.py').write_text('SPEED = 9\n')       # a field edit on the host
         (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')
-        run, calls = self.hot('alpha', '--host', 'a-pc')
+        run, calls = self.hot('alpha', '--untracked', '--host', 'a-pc')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('a-pc: BACKUP alpha', run.stdout)
         self.assertIn('pkg_a: A pkg_dir/pkg_a/extra.py', run.stdout)
@@ -322,12 +322,12 @@ class Hot(unittest.TestCase):
                    '[[ $* == *project=proj* ]] && echo "$FAKE_PROJECT_DEV" || echo "$FAKE_ANY_DEV"\n')
         path = f'{bin_}:{os.environ["PATH"]}'
         (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')
-        run, _ = self.hot('alpha', '--dry-run', PATH=path, FAKE_PROJECT_DEV='mine_dev', FAKE_ANY_DEV='other_dev')
+        run, _ = self.hot('alpha', '--untracked', '--dry-run', PATH=path, FAKE_PROJECT_DEV='mine_dev', FAKE_ANY_DEV='other_dev')
         self.assertIn('route  here → a-pc (container mine_dev, ~/astro_dock)', run.stdout)
         self.assertIn('a-pc  would build pkg_a in mine_dev', run.stdout)
-        run, _ = self.hot('alpha', '--dry-run', PATH=path, FAKE_PROJECT_DEV='', FAKE_ANY_DEV='other_dev')
+        run, _ = self.hot('alpha', '--untracked', '--dry-run', PATH=path, FAKE_PROJECT_DEV='', FAKE_ANY_DEV='other_dev')
         self.assertIn('route  here → a-pc (container other_dev, ~/astro_dock)', run.stdout)
-        run, calls = self.hot('alpha', '--host', 'a-pc', PATH=path, FAKE_PROJECT_DEV='', FAKE_ANY_DEV='')
+        run, calls = self.hot('alpha', '--untracked', '--host', 'a-pc', PATH=path, FAKE_PROJECT_DEV='', FAKE_ANY_DEV='')
         self.assertIn('route  here → a-pc (container fixture_dev, ~/astro_dock)', run.stdout)   # none runs: the name
         self.assertIn('fixture_dev bash -s -- --packages-select pkg_a', calls)
 
@@ -335,7 +335,7 @@ class Hot(unittest.TestCase):
         (self.repo / 'pkg_dir/pkg_a/extra.py').write_text('X = 1\n')
         (self.repo / 'pkg_dir/README.md').write_text('docs\n')
         before = git(self.pc, 'rev-parse', 'HEAD')
-        run, calls = self.hot('alpha', '--dry-run')
+        run, calls = self.hot('alpha', '--untracked', '--dry-run')
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertNotIn('bundle', calls)
         self.assertNotIn('checkout', calls)
@@ -348,6 +348,14 @@ class Hot(unittest.TestCase):
         self.assertTrue(run.stdout.rstrip().endswith('dry run: nothing sent'))
         self.assertEqual(git(self.pc, 'rev-parse', 'HEAD'), before)
         self.assertEqual(git(self.repo, 'for-each-ref', 'refs/hot'), '')
+
+    def test_untracked_files_stay_home_without_the_flag(self):
+        (self.repo / 'notes.md').write_text('private\n')
+        before = git(self.pc, 'rev-parse', 'HEAD')
+        run, _ = self.hot('alpha', '--dry-run')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertNotIn('notes.md', run.stdout)
+        self.assertEqual(git(self.pc, 'rev-parse', 'HEAD'), before)
 
     def test_repos_are_src_astro_dock_and_profiles(self):
         run, _ = self.hot('astro_dock', 'profiles', 'alpha', '--dry-run')
