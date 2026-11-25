@@ -593,6 +593,16 @@ WATCH = {'levels': 3, 'level_gap': 0.08, 'min_effort': 0.12, 'steady_tol': 0.04,
          'max_turn': 0.1, 'battery_spread': 0.5, 'rest_s': 3.0, 'rest_hold_s': 2.0, 'cross_min_s': 1.5,
          'cross_skip_s': 1.0, 'baseline_s': 1.0, 'settle_s': 2.5, 'measure_s': 1.5, 'drift_s': 10.0, 'max_s': 900.0}
 EFFORT_GAP_S = 0.5        # a pause this long in the applied command ends a run
+MOVED = 0.05              # m/s (rad/s): a hold slower than this did not move the boat (the thrusters' deadband)
+
+
+def along(r, j, sign, rotational):
+    """The speed a row shows along a commanded axis, positive with the command: the gyro rate for the rotational
+    axis; for a linear one the size of the planar velocity, which no heading error can rotate away (a compass
+    off by 140 deg in a steel pool flipped body-frame surge), so it assumes the boat moves along the command."""
+    if j == rotational:
+        return sign * r[1 + j]
+    return math.hypot(r[1], r[2])
 REST = 0.06               # m/s (rad/s): a shorter neutral is rest only when the odometry is this still
 NEUTRAL_E = 0.02          # every effort under this is neutral
 STATUS_S = 2.0
@@ -663,6 +673,7 @@ class Coverage:
         self.holds = []           # dicts: j, sign, level, t0, t1, baseline (b0, b1) or None
         self.neutral_s = 0.0
         self.calm = []            # (t0, t1) neutral windows the boat had stopped coasting in
+        self.holds_dead = []      # holds that did not move the boat (below the deadband): Next asks for more
         self.rests = []           # (t0, t1) neutral runs of at least rest_s (the boat stopped, whatever odometry says)
         self.pushes = []          # every single-axis push of at least cross_min_s (j, sign, level, t0, t1): cross terms
         self.seen = set()
@@ -707,6 +718,8 @@ class Coverage:
         if reason:
             hold['rejected'] = reason
             self.rejected.append((j, sign, level, reason))
+            if reason.startswith('no motion'):
+                self.holds_dead.append(hold)
             return hold
         self.holds.append(hold)
         return hold
@@ -721,25 +734,29 @@ class Coverage:
         rows = window(m0, hold['t1'])
         if len(rows) < 4:
             return 'no odometry'
-        main = [r[1 + j] for r in rows]
-        if max(main) - min(main) == 0:
+        if max(r[1 + j] for r in rows) - min(r[1 + j] for r in rows) == 0:
             return 'odometry frozen'
         if j != self.rotational and abs(sum(r[3] for r in rows) / len(rows)) > o['max_turn']:
             return 'turning'
+        main = [along(r, j, sign, self.rotational) for r in rows]
         if hold['baseline']:
-            before = window(*hold['baseline'])
-            base = sum(r[1 + j] for r in before) / len(before) if before else 0.0
             span = window(hold['t0'], hold['t1'])
-            found = fit.first_order([r[0] for r in span], [sign * (r[1 + j] - base) for r in span], hold['t0'])
+            found = fit.first_order([r[0] for r in span], [along(r, j, sign, self.rotational) for r in span],
+                                    hold['t0'])
             if found and found[0] > 0 and found[2] + 2 * found[1] <= hold['t1'] - hold['t0']:
+                if found[0] < MOVED:
+                    return 'no motion (below the deadband)'
                 hold['v_ss'], hold['tau'], hold['delay'] = round(found[0], 4), round(found[1], 3), found[2]
                 return None
             if hold['t1'] - hold['t0'] < o['settle_s'] + o['measure_s']:
                 return 'too short'
         half = len(main) // 2
         a, b = sum(main[:half]) / half, sum(main[half:]) / (len(main) - half)
-        if abs(b - a) > max(0.03, 0.04 * abs(b)):
+        if b < MOVED:
+            return 'no motion (below the deadband)'
+        if abs(b - a) > max(0.06, 0.1 * abs(b)):
             return 'not steady (hold longer)'
+        hold['v_mean'] = round(sum(main) / len(main), 4)
         return None
 
     def pair(self, j, sign):
@@ -828,8 +845,7 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
                 ctx.progress = f'{100 * cover.fraction():.0f}%'
                 hold['lane'] = lane_at(runner, hold['t0'])
                 during = runner.window(hold['t1'] - o['measure_s'], hold['t1'])
-                v = sign * hold['v_ss'] if hold.get('v_ss') else \
-                    (sum(r[1 + j] for r in during) / len(during) if during else 0.0)
+                v = sign * (hold.get('v_ss') or hold.get('v_mean') or 0.0)
                 show.counted(hold, v, 'rad/s' if axes[j] == ctx.spec.rotational else 'm/s', now)
                 pair = f'{axes[j]}{"+" if sign > 0 else "-"}'
                 if cover.pair(j, sign) == int(o['levels']) and pair not in finished:
@@ -895,7 +911,7 @@ def watch_fit(ctx, runner, cover, o, target, ended):
                     continue
                 delta = fit.response(before, during)
                 # from rest: the fitted rise's asymptote (a short hold reads low), else the measure window's mean
-                raw.append((h['v_ss'] if h.get('v_ss') else sign * delta[j], h['level']))
+                raw.append((h['v_ss'] if h.get('v_ss') else h.get('v_mean', sign * delta[j]), h['level']))
                 cross.setdefault(axis, []).append([round(delta[k] / delta[j], 4) if abs(delta[j]) > 1e-3 else None
                                                    for k in range(n)])
                 b0 = h['baseline'][0] if h['baseline'] else h['t0']
@@ -959,7 +975,7 @@ WORDS = {(0, 1): 'straight forward', (0, -1): 'straight back', (1, 1): 'straight
          (1, -1): 'straight sideways right (no turning)', (2, 1): 'spin in place left', (2, -1): 'spin in place right'}
 SHORT = {(0, 1): 'fwd', (0, -1): 'back', (1, 1): 'left', (1, -1): 'right', (2, 1): 'left', (2, -1): 'right'}
 TARGETS = ((0.15, 'small'), (0.3, 'medium'), (0.5, 'full'))
-HINT = {'too short': 'let go {rest:g} s, then hold {short:g} s; or hold {s:g} s', 'not steady (hold longer)': 'keep the stick still, hold longer',
+HINT = {'no motion (below the deadband)': 'use a higher speed', 'too short': 'let go {rest:g} s, then hold {short:g} s; or hold {s:g} s', 'not steady (hold longer)': 'keep the stick still, hold longer',
         'turning': 'keep the heading, no spin', 'odometry frozen': 'check odometry (not your driving)',
         'no odometry': 'check odometry (not your driving)'}
 BLOCK = 6
@@ -1000,15 +1016,46 @@ class Display:
     def name(self, j, sign):
         return f'{self.axes[j]} {SHORT.get((j, sign), "+" if sign > 0 else "-")}'
 
-    def level_word(self, j, level):
+    def keys(self, lane=None):
+        """True when the keyboard lane drives (lane: a hold's, else the latest seen)."""
+        return bool(self.keyboard) and (lane or self.lane) == self.keyboard.get('lane')
+
+    def scale(self, j):
+        return float((self.keyboard.get('scale') or {}).get(self.axes[j], 1.0))
+
+    def level_word(self, j, level, lane=None):
+        """How the driver sets this effort: the keyboard speed when keys drive, else the stick depth."""
+        if self.keys(lane):
+            return f'kb {5 * round(20 * level / self.scale(j)):.0f}%'
         cap = self.caps.get(self.axes[j], 0.5)
-        word = min(TARGETS, key=lambda t: abs(t[0] * cap / 0.5 - level))[1]
-        return word
+        return min(TARGETS, key=lambda t: abs(t[0] * cap / 0.5 - level))[1]
+
+    def suggest(self, j, s):
+        """The effort to ask for next on axis j, sign s: the one farthest from the levels already held there (at
+        least level_gap from each), within [min_effort, the top]; in keyboard steps when keys drive. None if the
+        range has no room left."""
+        o = self.cover.o
+        have = [h['level'] for h in self.cover.holds if h['j'] == j and h['sign'] == s]
+        dead = [h['level'] for h in self.cover.holds_dead if h['j'] == j and h['sign'] == s]
+        floor = max([o['min_effort'], *[d + 0.05 for d in dead]])
+        if self.keys():
+            top = float((self.keyboard.get('max') or {}).get(self.axes[j], 0.6))
+            grid = [round(k * 0.05 * self.scale(j), 3) for k in range(1, 21)]
+        else:
+            top = self.caps.get(self.axes[j], 0.5)
+            grid = [round(k * 0.05, 3) for k in range(1, 21)]
+        grid = [e for e in grid if floor - 1e-9 <= e <= top + 1e-9 and all(abs(e - h) >= o['level_gap'] for h in have)]
+        if not grid:
+            return None
+        if not have:                    # start in the middle of the range
+            return min(grid, key=lambda e: abs(e - (floor + top) / 2))
+        return max(grid, key=lambda e: min(abs(e - h) for h in have))
 
     def next_move(self, current_moving):
         cover, o = self.cover, self.cover.o
         need = int(o['levels'])
         pairs = [(j, s) for j in range(len(self.axes)) for s in (1, -1) if cover.pair(j, s) < need]
+        pairs = [p for p in pairs if self.suggest(*p) is not None] or pairs
         if not pairs:
             if cover.neutral_s < o['drift_s']:
                 return f'let go fully, sticks centred, {o["drift_s"] - cover.neutral_s:.0f} s more'
@@ -1016,23 +1063,17 @@ class Display:
         last = self.last
         flip = [(j, s) for j, s in pairs if last and j == last[0] and s == -last[1]]
         j, s = flip[0] if flip else min(pairs, key=lambda p: (cover.pair(*p), p[0] == (last or (None,))[0]))
-        cap = self.caps.get(self.axes[j], 0.5)
-        have = [h['level'] for h in cover.holds if h['j'] == j and h['sign'] == s]
-        options = [(round(t * cap / 0.5, 2), w) for t, w in TARGETS]
-        options = [(e, w) for e, w in options if e >= o['min_effort'] and all(abs(e - h) >= o['level_gap'] for h in have)]
-        keys = self.keyboard and self.lane == self.keyboard.get('lane')
-        if options:
-            e, word = max(options, key=lambda x: abs(x[0] - (last[2] if last else 0)))
-            if keys:
-                speed = 5 * round(20 * e / float((self.keyboard.get('scale') or {}).get(self.axes[j], 1.0)))
-                level = f'keyboard speed {speed:.0f}% (+/-)'
-            else:
-                level = f'{word} stick (~{e:g})'
-            text = f'{WORDS.get((j, s), self.name(j, s))}, {level}'
+        e = self.suggest(j, s)
+        have = sorted(h['level'] for h in cover.holds if h['j'] == j and h['sign'] == s)
+        if e is None:
+            level = 'any speed not yet held'
+        elif self.keys():
+            level = f'keyboard speed {5 * round(20 * e / self.scale(j)):.0f}% (+/-)'
         else:
-            text = f'{WORDS.get((j, s), self.name(j, s))}, a level not yet done'
-        text += f', let go {o["rest_s"]:g} s, then hold {o["rest_hold_s"]:g} s'
-        return text
+            level = f'{self.level_word(j, e)} stick (~{e:g})'
+        done = (' (done: ' + ', '.join(self.level_word(j, h) for h in have) + ')') if have else ''
+        return (f'{WORDS.get((j, s), self.name(j, s))}, {level}{done}, '
+                f'let go {o["rest_s"]:g} s, then hold {o["rest_hold_s"]:g} s')
 
     def block(self, current, from_rest, still_now, now, start):
         cover, o, ch = self.cover, self.cover.o, self.ch
@@ -1103,7 +1144,7 @@ class Display:
         j, s, ch = hold['j'], hold['sign'], self.ch
         self.last = (j, s, hold['level'])
         got = self.cover.pair(j, s)
-        text = (f'{self.paint(ch["ok"], 32)} {self.name(j, s):<11} {hold["level"]:.2f} {self.level_word(j, hold["level"]):<6} '
+        text = (f'{self.paint(ch["ok"], 32)} {self.name(j, s):<11} {hold["level"]:.2f} {self.level_word(j, hold["level"], hold.get("lane")):<7} '
                 f'{"from rest " if hold["baseline"] else ""}v {v:.2f} {unit}   {got}/{int(self.cover.o["levels"])}'
                 + (f'  ({hold["lane"]})' if hold.get('lane') else ''))
         self.emit(text)
@@ -1172,16 +1213,32 @@ def cross_terms(ctx, runner, cover, o, test, state, defaults):
         for j, main in enumerate(axes):
             if j == k:
                 continue
-            values = []
+            values, rates = [], []
             for pj, sign, level, t0, t1 in cover.pushes:
                 if pj != j:
                     continue
                 rows = runner.window(t0 + o['cross_skip_s'], t1)
                 if len(rows) >= 3:
-                    values.append(sum(r[1 + k] for r in rows) / len(rows) / (sign * level))
+                    rate = sum(r[1 + k] for r in rows) / len(rows)
+                    values.append(rate / (sign * level))
+                    rates.append((level, rate * sign))
             name = f'{row}<-{main}'
             if len(values) < need:
                 continue
+            # a decoupling entry adds a cross effort in proportion to the main one: it can cancel a cross response
+            # that grows with effort, not one that stays put (a thruster starting late or weaker than its pair)
+            groups = clusters([lv for lv, _ in rates], o['level_gap'])
+            if len(groups) >= 2 and groups[-1][0] - groups[0][0] >= 0.15:
+                low = [r for lv, r in rates if lv in groups[0]]
+                high = [r for lv, r in rates if lv in groups[-1]]
+                lo, hi = sum(low) / len(low), sum(high) / len(high)
+                if abs(hi) < 1.3 * abs(lo) * (groups[-1][0] / groups[0][0]) ** 0.5 and abs(hi) <= abs(lo) * 1.2:
+                    measured[name] = dict(entry=round(matrix[n * k + j], 5), how='does not grow with effort',
+                                          rates={f'{groups[0][0]:g}': round(lo, 3), f'{groups[-1][0]:g}': round(hi, 3)})
+                    parts.append(f'{name}: {lo:+.2f} {row} rate at e={groups[0][0]:g}, {hi:+.2f} at e={groups[-1][0]:g}: '
+                                 f'it does not grow with effort, so no decoupling entry cancels it (likely a thruster '
+                                 f'starting later or weaker than its pair: check them one at a time); nothing proposed')
+                    continue
             mean = sum(values) / len(values)
             se = statistics.pstdev(values) / math.sqrt(len(values)) if len(values) > 1 else abs(mean)
             c0 = matrix[n * k + j]
@@ -1204,6 +1261,11 @@ def cross_terms(ctx, runner, cover, o, test, state, defaults):
                 if slope > 0:            # more entry, more response on that row: the root is ahead
                     c1 = xm - ym / slope
                     how = f'secant over {len(points)} runs'
+                else:                    # the steps so far did not reduce it: stop and say so
+                    entry.update(how='steps did not reduce it')
+                    parts.append(f'{name} {mean:+.3f}/effort at entry {c0:g}: changing the entry did not reduce it '
+                                 f'(points {", ".join(f"{c:g}:{r:+.2f}" for c, r in points)}); nothing proposed')
+                    continue
             c1 = max(c0 - max_step, min(c0 + max_step, c1))
             entry.update(next=round(c1, 5), how=how)
             column = columns.setdefault(j, [matrix[n * r + j] for r in range(n)])
@@ -1265,10 +1327,32 @@ def quality(ctx, runner, cover, o):
         score -= 5
         problems.append(dict(cost=5, what='no hold started from rest (no rise time)',
                              fix=f'let go {o["rest_s"]:g} s before a push'))
+    # heading: the direction the boat moved (odometry position) against where the heading says it points
+    offs = []
+    for h in cover.holds:
+        if h['j'] == cover.rotational or h['j'] > 1:
+            continue
+        rows = runner.window(h['t1'] - o['measure_s'], h['t1'])
+        if len(rows) < 5 or any(len(r) < 7 or r[4] is None for r in rows):
+            continue
+        dx, dy = rows[-1][5] - rows[0][5], rows[-1][6] - rows[0][6]
+        if math.hypot(dx, dy) < 0.3:
+            continue
+        expect = (0.0 if h['sign'] > 0 else math.pi) + (math.pi / 2 if h['j'] == 1 else 0.0)
+        heading = rows[len(rows) // 2][4]
+        offs.append(abs(math.degrees(math.remainder(math.atan2(dy, dx) - heading - expect, 2 * math.pi))))
+    heading_off = sorted(offs)[len(offs) // 2] if offs else None
+    if heading_off is not None and heading_off > 30:
+        score -= 20
+        problems.append(dict(cost=20, what=f'the heading points {heading_off:.0f} deg (median) away from where the boat '
+                                           f'moves on straight pushes (compass)',
+                             fix='calibrate the compass away from steel and check the heading source (EK3_SRC1_YAW); '
+                                 'speeds are read heading-free, sway and cross terms from odometry are not trusted'))
     volts = [h['battery'] for h in cover.holds if h.get('battery')]
     if volts and max(volts) - min(volts) > o['battery_spread']:
         score -= 5
         problems.append(dict(cost=5, what=f'battery sagged {max(volts):.1f} -> {min(volts):.1f} V',
                              fix='mix levels instead of sweeping, or charge between runs'))
     return dict(score=max(0, score), problems=problems, odom_still_p90=None if p90 is None else round(p90, 3),
+                heading_off_deg=None if heading_off is None else round(heading_off, 1),
                 gps=shares, holds=dict(counted=len(cover.holds), refused=reasons))
