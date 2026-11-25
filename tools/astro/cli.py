@@ -667,20 +667,30 @@ def dispatch(argv):
                 argv_, env = remote.local_words(vessel, spec['container'], line, tty)
             else:
                 argv_, env = remote.ssh_command(vessel, host, spec, [line], tty), None
-            return run_logged(command['name'], argv_, env)
+            return run_logged(command['name'], argv_, env, plain=command.get('interactive'))
         except config.Error as error:
             print(f'astro {command["name"]}: {error}', file=sys.stderr)
             return 1
         except KeyboardInterrupt:
             return 130
-    return run_logged(command['name'], ['bash', '-c', line], dispatch_env())
+    return run_logged(command['name'], ['bash', '-c', line], dispatch_env(), plain=command.get('interactive'))
 
 
-def run_logged(name, argv, env=None):
+def run_logged(name, argv, env=None, plain=False):
     """Run a help.yaml command with everything it prints also kept in <data>/<date>/logs/NAME-HHMMSS.log (a
     pty through `script`, so colours, redraws and Ctrl-C behave as before), and say where in the day's log.
-    Without `script` or a writable data dir it runs unlogged."""
+    Without `script` or a writable data dir it runs unlogged; PLAIN (an interactive entry: raw keys, full
+    screen) runs straight in the terminal, its start still noted in the day's log."""
     import shutil
+    if plain:
+        try:
+            log.write(Path(config.Vessel().data_root()), 'cmd', f'{name} (interactive, not logged)', echo=False)
+        except Exception:
+            pass
+        try:
+            return subprocess.call(argv, env=env)
+        except KeyboardInterrupt:
+            return 130
     try:
         root = Path(config.Vessel().data_root())
     except Exception:                     # no vessel (or a stand-in without a data dir): the user's state dir

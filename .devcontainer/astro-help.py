@@ -21,6 +21,8 @@ help.yaml schema (unknown keys are ignored):
         needs: [nav, drive+controller]   # optional: stacks (profile astro.stacks) astro starts first when
                                 # down, their needs too; NAME+OPTION starts it with that `with` option
         conflicts: [drive]      # optional: stacks astro stops first when up; {drive: why} says why
+        interactive: true       # optional: reads raw keys or redraws full screen; astro runs it straight in
+                                # the terminal (no output log), so keyboards and screens work
                                 # (--here or ASTRO_NO_AUTOSTART=1 skips both)
         notes: optional, at most two short plain sentences: what you see when it works, the common mistake
                                 # and its fix, what to run next
@@ -150,6 +152,7 @@ def parse(path):
                              details=str(command.get('details') or ''),
                              ros=str(command.get('ros') or ''),
                              needs=[str(n) for n in command.get('needs') or []],
+                             interactive=bool(command.get('interactive')),
                              conflicts=[c if isinstance(c, dict) else str(c) for c in command.get('conflicts') or []],
                              params=params, examples=[str(e) for e in command.get('examples') or []]))
     return {'package': data['package'], 'summary': str(data.get('summary', '')),
@@ -624,7 +627,10 @@ class Browser:
     def __init__(self, screen, packages, levels=('core',)):
         self.screen, self.packages, self.levels = screen, packages, levels
         self.values, self.word, self.status, self.focus = {}, '', '', 'list'
-        self.row = self.param = self.top = self.cmd_top = 0
+        self.param = self.top = self.cmd_top = 0
+        self.row = None                       # the selected row among the selectable ones (None: first command)
+        self.here = None                      # that row
+        self.collapsed, self.counts = set(), {}   # folded package groups; commands shown per group
         self.examples = self.keys = False
         self.opened = None                    # the entry Enter opened (its details show), when it has no params
         self.detected = {}                    # (package, command, param) -> what auto finds ('' none)
@@ -645,35 +651,65 @@ class Browser:
                 pass
 
     def rows(self):
-        """[(package, command or None, depth, label)]: each package, then its commands grouped by noun; a
-        blank row (depth -2) between packages."""
-        out = []
+        """[(package, command or None, depth, label)]: a group index (a 'groups' label, depth -4, then one
+        row per package, -3) when there are several, then each package (its header, -1) with its commands
+        grouped by noun unless folded; a blank row (-2) between them."""
+        groups = []
         for package in self.packages:
             commands = [c for c in package['commands']
                         if (matches(package, c, self.word) if self.word else c['level'] in self.levels)]
             if commands:
-                if out:
-                    out.append((package, None, -2, ''))
-                out.append((package, None, -1, package['package']))
+                groups.append((package, commands))
+        self.counts = {p['package']: len(c) for p, c in groups}
+        out = []
+        if len(groups) > 1:
+            out.append((None, None, -4, 'groups'))
+            out.extend((package, None, -3, package['package']) for package, _ in groups)
+        for package, commands in groups:
+            if out:
+                out.append((package, None, -2, ''))
+            out.append((package, None, -1, package['package']))
+            if not self.folded(package):
                 out.extend((package, c, depth, label) for c, depth, label in tree(commands))
         return out
 
+    def folded(self, package):
+        return package['package'] in self.collapsed and not self.word     # a filter shows every match
+
+    @staticmethod
+    def selectable(rows):
+        """The rows the cursor stops on: commands, group index rows and package headers."""
+        return [r for r in rows if r[1] or r[2] in (-3, -1)]
+
     def selected(self, rows):
-        commands = [r for r in rows if r[1]]
-        if not commands:
+        """(package, command or None) under the cursor (None, None when nothing is listed)."""
+        items = self.selectable(rows)
+        if not items:
+            self.here = None
             return None, None
-        self.row = max(0, min(self.row, len(commands) - 1))
-        return commands[self.row][:2]
+        if self.row is None:
+            self.row = next((i for i, r in enumerate(items) if r[1]), 0)
+        self.row = max(0, min(self.row, len(items) - 1))
+        self.here = items[self.row]
+        return self.here[:2]
+
+    def go_group(self, package):
+        """Select PACKAGE's header (unfolded) and scroll the list so the group starts at the top."""
+        self.collapsed.discard(package['package'])
+        rows = self.rows()
+        header = next(r for r in rows if r[0] is package and r[2] == -1)
+        self.row, self.top = self.selectable(rows).index(header), rows.index(header)
 
     def next_group(self, step):
-        """Select the first command of the next (STEP 1) or previous (-1) package group, wrapping."""
-        commands = [r for r in self.rows() if r[1]]
-        if not commands:
+        """Go to the next (STEP 1) or previous (-1) package header, wrapping."""
+        items = self.selectable(self.rows())
+        headers = [i for i, r in enumerate(items) if r[2] == -1]
+        if not headers:
             return
-        starts = [i for i, r in enumerate(commands) if not i or r[0] is not commands[i - 1][0]]
-        here = max(i for i in starts if i <= self.row)
-        self.row = starts[(starts.index(here) + step) % len(starts)]
-        self.top = next(i for i, r in enumerate(self.rows()) if r[0] is commands[self.row][0] and r[2] == -1)
+        row = self.row or 0
+        after = [i for i in headers if (i > row if step > 0 else i < row)]
+        target = (after[0] if step > 0 else after[-1]) if after else headers[0 if step > 0 else -1]
+        self.go_group(items[target][0])
 
     def values_for(self, package, command):
         return self.values.setdefault((package['package'], command['name']), {})
@@ -696,12 +732,13 @@ class Browser:
         left, bottom = min(34, w // 3), h - 4 - max(len(shown_line), 1)
         count = sum(len(p['commands']) for p in self.packages)
         frame = self.style('dim')
-        groups = ', '.join(dict.fromkeys(r[0]['package'] for r in rows))
-        title = f' astro help{g["sep"]}{count} commands'
-        if len(title) + len(groups) + 30 < w:
-            title += f' in {groups}'
-        title += f'{g["sep"]}filter: {self.word}' if self.word else ''
-        title += f'{g["sep"]}? for keys '
+        groups = ', '.join(r[3] for r in rows if r[2] == -1)
+        tail = (f'{g["sep"]}filter: {self.word}' if self.word else '') + f'{g["sep"]}? for keys '
+        # The group names first: the count, then the keys hint, go when they do not fit.
+        for title in (f' astro help{g["sep"]}{count} commands in {groups}{tail}',
+                      f' astro help{g["sep"]}{groups}{tail}', f' astro help{g["sep"]}{groups} '):
+            if len(title) <= w - 4:
+                break
         self.put(0, 0, g['tl'] + g['h'] + g['h'] * (w - 3) + g['tr'], frame)
         self.put(0, 2, title, curses.A_BOLD)
         for y in range(1, h - 2):
@@ -721,6 +758,8 @@ class Browser:
             self.draw_keys(left + 3, w - left - 5, bottom - 1)
         elif command:
             self.draw_detail(package, command, left + 3, w - left - 5, bottom - 1)
+        elif package:
+            self.draw_group(package, left + 3, w - left - 5, bottom - 1)
         if command:
             for y, part in enumerate(shown_line, bottom + 1):
                 self.put(y, 2, part, curses.A_BOLD, w - 4)
@@ -733,6 +772,19 @@ class Browser:
                 self.put(h - 1, x + len(key) + 1, label, curses.A_DIM)
                 x += len(key) + len(label) + 3
             x += 2                                               # a wider gap between the groups
+
+    def draw_group(self, package, x, width, height):
+        """A package's name, summary and command names, with what Enter and Tab do here."""
+        index, n = self.here[2] == -3, self.counts.get(package['package'], 0)
+        enter = 'Enter goes to it' if index else f'Enter {"unfolds" if self.folded(package) else "folds"} it'
+        lines = [(package['package'], curses.A_BOLD)] + [(s, 0) for s in wrap(package['summary'], width)]
+        lines += [('', 0), (f'{n} command{"s" * (n != 1)}{self.g["sep"]}{enter}{self.g["sep"]}Tab next group',
+                            self.style('dim')), ('', 0)]
+        commands = [c for c in package['commands']
+                    if (matches(package, c, self.word) if self.word else c['level'] in self.levels)]
+        lines += [('  ' * depth + label, 0 if cmd else self.style('dim')) for cmd, depth, label in tree(commands)]
+        for y, (line, attr) in enumerate(lines[:height], 1):
+            self.put(y, x, line, attr, width)
 
     def draw_keys(self, x, width, height):
         """Every key and what it does, in the right pane (? shows it, any key closes it)."""
@@ -750,27 +802,39 @@ class Browser:
                 y += 1
 
     def draw_list(self, rows, command, width, height):
-        index = next((i for i, r in enumerate(rows) if r[1] is command), 0)
-        top = max(min(self.top, index), index - height + 1, 0)
+        """The group index, then each package header (bold, its command count dim, 'folded' when folded)
+        and its commands indented by noun; the cursor row marked and bold, in the accent while here."""
+        index = next((i for i, r in enumerate(rows) if r is self.here), 0)
+        top = max(min(self.top, index, len(rows) - height), index - height + 1, 0)
         if top != self.top:
             # Repaint whole when the list scrolls: curses would scroll the full screen width (the right
             # pane too) and terminals that get those sequences wrong keep stale text.
             self.screen.clearok(True)
         self.top = top
-        for y, (package, cmd, depth, label) in enumerate(rows[self.top:self.top + height], 1):
-            x = 2 + 2 * (depth + 1)
+        here = curses.A_BOLD | (self.style('accent') if self.focus == 'list' else 0)
+        for y, row in enumerate(rows[self.top:self.top + height], 1):
+            package, cmd, depth, label = row
+            chosen = row is self.here
+            x = 6 + 2 * depth
             if depth == -2:
                 continue
-            if depth < 0:
-                self.put(y, 2, label, curses.A_BOLD, width - 1)
+            if depth == -4:
+                self.put(y, 2, label, self.style('dim'), width - 1)
+                continue
+            if depth in (-3, -1):
+                x = 4
+                attr = here if chosen else (curses.A_BOLD if depth == -1 else 0)
+                more = f'  {self.counts.get(package["package"], 0)}'
+                more += f' {self.g["more"]}' if depth == -1 and self.folded(package) else ''   # folded
+                self.put(y, x, label, attr, width - x - 1)
+                if x + len(label) < width:
+                    self.put(y, x + len(label), more, self.style('dim'), width - x - len(label) - 1)
             elif cmd is None:                                   # a noun with no entry of its own
-                self.put(y, x - 2, f'  {label}', self.style('dim'), width - x + 1)
-            elif cmd is command:                                # the marker and bold; the accent while here
-                self.put(y, x - 2, style.mark(True, self.g is UNICODE), curses.A_BOLD)
-                self.put(y, x, label, curses.A_BOLD | (self.style('accent') if self.focus == 'list' else 0),
-                         width - x - 1)
+                self.put(y, x, label, self.style('dim'), width - x - 1)
             else:
-                self.put(y, x - 2, f'  {label}', 0, width - x + 1)
+                self.put(y, x, label, here if chosen else 0, width - x - 1)
+            if chosen:
+                self.put(y, x - 2, style.mark(True, self.g is UNICODE), curses.A_BOLD)
 
     def fields(self, package, command, width):
         """[(line segments, field index)] of the param form: per field its name, value and a short hint in
@@ -943,16 +1007,27 @@ class Browser:
                 self.keys = not self.keys
                 continue
             if key == '\x1b' and self.focus == 'list' and self.word:
-                self.word = ''  # Esc clears the filter first, then quits
+                self.word, self.row = '', None  # Esc clears the filter first, then quits
                 continue
             if key in ('q', '\x1b'):
                 if self.focus == 'params':
                     self.focus = 'list'
                     continue
                 return None
-            if command is None:
-                if key == '/':
-                    self.word = self.ask('/', self.word) or ''
+            if command is None:                # a group row (or nothing listed)
+                if key in (curses.KEY_UP, 'k', curses.KEY_DOWN, 'j'):
+                    self.row += -1 if key in (curses.KEY_UP, 'k') else 1
+                elif key in ('\t', curses.KEY_BTAB):
+                    self.next_group(1 if key == '\t' else -1)
+                elif package and key in (curses.KEY_RIGHT, 'l', '\n', '\r', curses.KEY_ENTER, ' '):
+                    if self.here[2] == -3:       # an index row: go to its group
+                        self.go_group(package)
+                    else:                        # a header: fold or unfold its group
+                        self.collapsed ^= {package['package']}
+                elif key == '/':
+                    entered = self.ask('/', self.word)
+                    if entered is not None:
+                        self.word, self.row = entered, None
                 continue
             params = command['params']
             if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
@@ -988,7 +1063,7 @@ class Browser:
             elif key == '/':
                 entered = self.ask('/', self.word)
                 if entered is not None:
-                    self.word, self.row, self.focus = entered, 0, 'list'
+                    self.word, self.row, self.focus = entered, None, 'list'
             elif key == 'x':
                 self.examples, self.focus = not self.examples, 'list'
             elif key == 'r':
