@@ -659,13 +659,46 @@ def dispatch(argv):
                 argv_, env = remote.local_words(vessel, spec['container'], line, tty)
             else:
                 argv_, env = remote.ssh_command(vessel, host, spec, [line], tty), None
-            return subprocess.call(argv_, env=env)
+            return run_logged(command['name'], argv_, env)
         except config.Error as error:
             print(f'astro {command["name"]}: {error}', file=sys.stderr)
             return 1
         except KeyboardInterrupt:
             return 130
-    return subprocess.call(['bash', '-c', line], env=dispatch_env())
+    return run_logged(command['name'], ['bash', '-c', line], dispatch_env())
+
+
+def run_logged(name, argv, env=None):
+    """Run a help.yaml command with everything it prints also kept in <data>/<date>/logs/NAME-HHMMSS.log (a
+    pty through `script`, so colours, redraws and Ctrl-C behave as before), and say where in the day's log.
+    Without `script` or a writable data dir it runs unlogged."""
+    import shutil
+    try:
+        root = config.Vessel().data_root()
+    except config.Error:
+        root = Path.home() / '.local' / 'state' / 'astro'
+    try:
+        directory = log.day_dir(root) / 'logs'
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f'{name.replace(" ", "-")}-{datetime.datetime.now():%H%M%S}.log'
+        log.write(root, 'cmd', f'{name} -> logs/{path.name}', echo=False)
+    except OSError:
+        path = None
+    try:
+        if path and shutil.which('script') and sys.stdout.isatty():
+            return subprocess.call(['script', '-qefc', shlex.join(argv), str(path)], env=env)
+        if path:
+            with open(path, 'w') as out:
+                process = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                for text in process.stdout:
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+                    out.write(text)
+                    out.flush()
+                return process.wait()
+        return subprocess.call(argv, env=env)
+    except KeyboardInterrupt:
+        return 130
 
 
 def parser():
