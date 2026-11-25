@@ -1222,20 +1222,23 @@ def quality(ctx, runner, cover, o):
     problems, score = [], 100
     need = int(o['levels'])
     # odometry while the boat sat still (neutral for rest_s): GPS-derived velocity wanders without RTK
-    speeds = [math.hypot(r[1], r[2]) for t0, t1 in cover.rests for r in runner.window(t0 + o['rest_s'] / 2, t1)]
+    speeds = [math.hypot(r[1], r[2]) for t0, t1 in cover.rests for r in runner.window(t0 + o['rest_s'], t1)]
     p90 = sorted(speeds)[int(0.9 * (len(speeds) - 1))] if speeds else None
+    gps = getattr(runner, 'gps', None) or []
+    rtk = sum(1 for _, fix in gps if fix >= 5) / len(gps) if gps else None
     if p90 is not None and p90 > 0.05:
         cost = 15 if p90 <= 0.15 else 35
         score -= cost
-        problems.append(dict(cost=cost, what=f'odometry moves {p90:.2f} m/s (p90) while the boat sits still',
-                             fix='get RTK (astro rtk base on the laptop, wait for float) before driving'))
-    gps = getattr(runner, 'gps', None) or []
+        problems.append(dict(cost=cost, what=f'odometry moves {p90:.2f} m/s (p90) after {o["rest_s"]:g} s let go',
+                             fix='get RTK (astro rtk base on the laptop, wait for float) before driving'
+                             if not rtk or rtk < 0.5 else
+                             'RTK was on: the boat may still glide or bob (let go longer), or the odometry velocity '
+                             'does not use the RTK fix (check /odom/mavros)'))
     shares = {}
     if gps:
         for _, fix in gps:
             shares[GPS_FIX.get(fix, str(fix))] = shares.get(GPS_FIX.get(fix, str(fix)), 0) + 1
         shares = {k: round(v / len(gps), 3) for k, v in shares.items()}
-        rtk = sum(1 for _, fix in gps if fix >= 5) / len(gps)
         if rtk < 0.5:
             score -= 20
             problems.append(dict(cost=20, what=f'no RTK for {100 * (1 - rtk):.0f}% of the run (mostly {max(shares, key=shares.get)})',
