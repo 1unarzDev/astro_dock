@@ -442,7 +442,7 @@ class Watch(unittest.TestCase):
             tests.write_text(yaml.safe_dump({
                 'topics': {'applied': '/a', 'odom': '/o'}, 'axes': AXES, 'rotational': 'yaw',
                 'tests': {'watch': {'type': 'watch', 'max_s': 300, 'max_turn': 1.0, 'upstream': ['decoupling'],
-                                    'cross': {'key': 'decoupling', 'rows': ['yaw'], 'probe': 0.004},
+                                    'cross': {'key': 'decoupling', 'rows': ['yaw'], 'probe': 0.004, 'min_quality': 0},
                                     'apply': {'key': 'c'}}}}))
             state = Path(tmp, 'state.yaml')
             state.write_text(yaml.safe_dump({'decoupling': [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0]}))
@@ -665,6 +665,7 @@ class Stacks(unittest.TestCase):
         states = {'sensors': (False, {}), 'camera': (True, {}), 'drive': (False, {})}
         out = io.StringIO()
         with mock.patch.object(stacks, 'states_of', return_value=states), \
+                mock.patch.object(stacks, 'outside', return_value=('down', {})), \
                 mock.patch.object(stacks, 'down') as down, mock.patch.object(stacks, 'up', return_value=0) as up, \
                 contextlib.redirect_stdout(out):
             self.assertEqual(stacks.ensure(vessel, '/d', 'trial', ['drive+controller'], [{'camera': 'it holds X'}]), 0)
@@ -672,7 +673,7 @@ class Stacks(unittest.TestCase):
                                                        'starting sensors (needed by trial)',
                                                        'starting drive (needed by trial)'])
         down.assert_called_once_with(vessel, '/d', ['camera'])
-        up.assert_called_once_with(vessel, '/d', ['sensors', 'drive'], ['controller'])
+        up.assert_called_once_with(vessel, '/d', ['sensors', 'drive'], ['controller'], force=True)
 
     def test_inside_a_container_on_the_stacks_host_it_runs_here_and_unreached_hosts_are_skipped(self):
         import contextlib
@@ -702,6 +703,66 @@ class Stacks(unittest.TestCase):
         self.assertEqual(states, {'sensors': (False, {}), 'drive': (True, {}), 'camera': None})
         self.assertEqual(out.getvalue(), 'cam not reached: skipping camera\n')
         self.assertEqual(stacks.plan(found, ['camera', 'drive'], ['camera'], states)[:2], ([], ['sensors']))
+
+    def test_a_stack_whose_ready_topics_publish_without_its_process_is_used_not_started_twice(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from astro import stacks
+        hand = {'/odom': ['/ekf_local']}
+        self.assertEqual(stacks.classify(False, hand), 'external')
+        self.assertEqual(stacks.classify(False, {'/odom': []}), 'down')
+        self.assertEqual(stacks.classify(True, hand), 'up')
+        self.assertEqual(stacks.duplicates(hand), [])
+        self.assertEqual(stacks.duplicates({'/odom': ['/ekf_local', '/ekf_local'], '/x': ['/a', '/b']}),
+                         ['DUPLICATE: /odom has 2 publishers (ekf_local x2)', 'DUPLICATE: /x has 2 publishers (a, b)'])
+        vessel = mock.Mock(astro=self.SECTION)
+        states = {'sensors': (False, {}), 'camera': (False, {}), 'drive': (False, {})}
+        where = {'sensors': ('external', hand), 'drive': ('down', {})}
+        out = io.StringIO()
+        with mock.patch.object(stacks, 'states_of', return_value=states), \
+                mock.patch.object(stacks, 'outside', side_effect=lambda v, s: where[s.name]), \
+                mock.patch.object(stacks, 'up', return_value=0) as up, contextlib.redirect_stdout(out):
+            self.assertEqual(stacks.ensure(vessel, '/d', 'trial', ['drive']), 0)
+        self.assertEqual(out.getvalue().splitlines(), ['sensors already running (started outside astro); using it',
+                                                       'starting drive (needed by trial)'])
+        up.assert_called_once_with(vessel, '/d', ['drive'], [], force=True)
+        out = io.StringIO()                                 # astro up refuses it unless --force
+        with mock.patch.object(stacks, 'outside', return_value=('external', hand)), \
+                mock.patch.object(stacks, 'run_on') as run_on, mock.patch.object(stacks, 'host_of', return_value='h'), \
+                mock.patch.object(stacks.log, 'write'), contextlib.redirect_stdout(out):
+            self.assertEqual(stacks.up(vessel, '/d', ['sensors'], []), 0)
+        self.assertEqual(out.getvalue(), 'sensors already running (started outside astro); using it\n')
+        run_on.assert_not_called()
+
+    def test_status_shows_external_and_duplicate_publishers(self):
+        from unittest import mock
+        from astro import stacks
+        vessel = mock.Mock(astro={'stacks': {'loc': self.SECTION['stacks']['sensors']}})
+        two = {'/odom': 211.0, '_dead': False, '_pubs': {'/odom': ['/ekf_local', '/ekf_local']}}
+        with mock.patch.object(stacks, 'run_on', return_value=(0, ['astro-ps loc down - - -'])), \
+                mock.patch.object(stacks, 'host_of', return_value='h'), \
+                mock.patch.object(stacks, 'outside', return_value=('external', {})), \
+                mock.patch.object(stacks, 'probe', return_value=two):
+            found = stacks.rows(vessel)
+        self.assertEqual(found[0][1], 'up (external)')
+        lines = stacks.table(found)
+        self.assertIn('/odom 211Hz (2 pubs)', lines[0])
+        self.assertEqual(lines[1], 'DUPLICATE: /odom has 2 publishers (ekf_local x2)')
+
+    def test_stale_fast_dds_files_go_and_held_ones_stay(self):
+        import subprocess
+        import time
+        from astro import stacks
+        script = stacks.SHM_SCRIPT.replace('/dev/shm/', '{d}/')      # the same script on a scratch directory
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ('fastrtps_dead', 'sem.fastrtps_dead', 'fastrtps_held', 'other'):
+                Path(tmp, name).write_text('x')
+                os.utime(Path(tmp, name), (time.time() - 60,) * 2)
+            with open(Path(tmp, 'fastrtps_held')):
+                out = subprocess.run(['bash', '-c', script.replace('{d}', tmp)], capture_output=True, text=True).stdout
+            self.assertEqual(out.split()[-1], '2')
+            self.assertEqual(sorted(os.listdir(tmp)), ['fastrtps_held', 'other'])
 
     def test_profile_errors_name_the_stack(self):
         from astro import config, stacks

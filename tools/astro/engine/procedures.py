@@ -1248,8 +1248,14 @@ def cross_terms(ctx, runner, cover, o, test, state, defaults, force=None):
     force = force or {}
     plus = force.get(key) or [float(v) for v in applying.current(state, defaults, key)]
     minus = (force.get(signed) if signed else None) or plus
+    # earlier watch runs whose (entry, response) points the secant may use: not marked `exclude`, a quality score
+    # of at least `min_quality` and a heading that matched the track (a bent compass or a duplicate localization
+    # spoils the turn and speed readings)
+    floor = float(cfg.get('min_quality', 60))
     history = [r for r in results.load_all(ctx.data_root)
-               if r.get('type') == 'watch' and r.get('status') == 'done']
+               if r.get('type') == 'watch' and r.get('status') == 'done' and not r.get('exclude')
+               and (r.get('quality') or {}).get('score', 0) >= floor
+               and ((r.get('quality') or {}).get('heading_off_deg') or 0) <= 30]
     changes, measured, parts = [], {'in_force': {key: plus, **({signed: minus} if signed else {})}}, []
     columns = {}                     # (target key, j) -> column
     for row in cfg.get('rows') or []:
