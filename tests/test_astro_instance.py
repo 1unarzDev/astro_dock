@@ -10,7 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 
-from astro import config, remote  # noqa: E402
+from astro import cli, config, remote, stacks  # noqa: E402
 
 
 class Instance(unittest.TestCase):
@@ -87,6 +87,44 @@ class Instance(unittest.TestCase):
         self.assertEqual(config.instance_path('~/.config/x/hw_sim.yaml', 2), '~/.config/x/hw_sim.i2.yaml')
         self.assertEqual(config.instance_path('/a.b/state', 1), '/a.b/state.i1')
         self.assertEqual(config.instance_path('s.yaml', 0), 's.yaml')
+
+
+    def test_stack_pid_and_state_files_live_in_the_instance_data_dir(self):
+        vessel, _, _ = self.vessel('2')
+        data = stacks.vessel_data(vessel)
+        self.assertEqual(data, str(self.dir / 'data' / 'i2'))
+        self.assertIn(f's="$d/stacks"', stacks.prelude(data))
+        self.assertIn(str(self.dir / 'data' / 'i2'), stacks.start_script('drive', 'true', data))
+        self.assertEqual(stacks.data_expr({'data': 'bags/sim'}, 3), '"${ROS_WS:-$PWD}"/bags/sim/i3')
+        vessel0, _, _ = self.vessel('0')
+        self.assertEqual(stacks.vessel_data(vessel0), str(self.dir / 'data'))
+
+    def test_a_loopback_registry_host_is_this_machine(self):
+        vessel, _, _ = self.vessel('1')
+        host, spec = remote.place(vessel, 'computer')
+        self.assertTrue(remote.is_here(host, spec, me=''))            # this_host() is '' on a sim profile
+        self.assertTrue(remote.is_here('world', {'address': 'localhost'}, me='station'))
+        self.assertFalse(remote.is_here('boat', {'address': '10.0.0.2'}, me='station'))
+        entry = {'name': 'trial', 'run': 'ros2 run p trial', 'host': 'computer', 'params': []}
+        self.assertIsNone(cli.entry_host(vessel, entry, False, '', True))       # inside its container: run here
+        self.assertEqual(cli.entry_host(vessel, entry, False, '', False)[0], 'localhost')
+
+    def test_a_forwarded_command_on_this_machine_execs_into_the_instance_container_with_its_data(self):
+        vessel, _, _ = self.vessel('1')
+        pkg = {'name': 'p', 'commands': [{'name': 'trial', 'run': 'ros2 run p trial', 'host': 'computer',
+                                          'params': [], 'needs': [], 'conflicts': []}]}
+        with mock.patch.object(config, 'Vessel', return_value=vessel), \
+                mock.patch.object(config, 'this_host', return_value=''), \
+                mock.patch.object(remote, 'in_container', return_value=False), \
+                mock.patch.object(cli, 'run_logged', return_value=0) as run, \
+                mock.patch.object(cli, 'help_module') as module, \
+                mock.patch('sys.stderr'):
+            module.return_value.discover.return_value = ([pkg], None)
+            self.assertEqual(cli.dispatch(['trial', 'home']), 0)
+        argv = run.call_args[0][1]
+        self.assertEqual(argv[0], 'docker')                     # never ssh to localhost
+        self.assertIn('world_ros_1', argv)
+        self.assertIn(f'export ASTRO_DATA={self.dir / "data" / "i1"}; ros2 run p trial home', argv[-1])
 
 
 if __name__ == '__main__':

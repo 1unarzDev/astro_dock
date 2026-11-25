@@ -151,6 +151,16 @@ def local_words(vessel, container, cmd, tty):
     return words + [container, 'bash'] + (['-c', cmd] if cmd else []), None
 
 
+LOCAL_ADDRESSES = ('127.0.0.1', 'localhost', '::1')
+
+
+def is_here(host, spec, me=None):
+    """True when registry HOST is this machine: this machine's own registry name (ME, else config.this_host()),
+    the name localhost, or an address that is the loopback (a sim profile's one host)."""
+    me = config.this_host() if me is None else me
+    return bool(host) and (host == me or host == 'localhost' or str(spec.get('address') or '') in LOCAL_ADDRESSES)
+
+
 def place(vessel, host):
     """(name, spec) of HOST in the vessel's registry: a host name, else the one host with that role."""
     hosts = vessel.hosts()

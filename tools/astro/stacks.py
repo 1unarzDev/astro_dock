@@ -102,16 +102,22 @@ def command(stack, options=()):
 
 # ---- the shell run on the stack's host -------------------------------------------------------------
 
-def data_expr(section):
+def data_expr(section, instance=0):
     """The data root as the host's shell sees it: astro.data (workspace-relative: under $ROS_WS), else
-    $ASTRO_DATA, else ~/.local/state/astro."""
+    $ASTRO_DATA, else ~/.local/state/astro. A sim instance N >= 1 has its own <astro.data>/iN (as
+    config.Vessel.data_root), so its stacks' pid and state files never mix with another world's."""
     data = section.get('data')
     if not data:
         return '"${ASTRO_DATA:-$HOME/.local/state/astro}"'
-    data = str(data)
+    data = str(data) + (f'/i{instance}' if instance else '')
     if data.startswith('~/'):
         return '"$HOME"/' + shlex.quote(data[2:])
     return shlex.quote(data) if data.startswith('/') else '"${ROS_WS:-$PWD}"/' + shlex.quote(data)
+
+
+def vessel_data(vessel):
+    """data_expr of VESSEL's astro section and sim instance."""
+    return data_expr(vessel.astro, getattr(vessel, 'instance', 0))
 
 
 def prelude(data):
@@ -219,7 +225,7 @@ def run_on(vessel, stack, script, stdin=None, tag='astro-', quiet=False):
     that host (or a container without docker), else ssh + docker exec. Its stderr is shown only when no line
     carries TAG (the host was not reached, or the script broke), unless QUIET."""
     host, spec = remote.place(vessel, stack.host)
-    if remote.in_container() and (host == config.this_host() or not spec['ssh'] and not shutil.which('docker')):
+    if remote.in_container() and (remote.is_here(host, spec) or not spec['ssh'] and not shutil.which('docker')):
         argv, env = ['bash', '-c', script], dict(os.environ, **remote.local_env(vessel, True))
     else:
         argv, env = remote.words(vessel, host, spec, script)
@@ -273,7 +279,7 @@ def duplicates(pubs):
 def outside(vessel, stack):
     """(classify(...) or 'unreachable', {topic: [node]}, [name, up|down, pid, epoch, log]) of the stack on
     its host, in one call."""
-    _, lines = run_on(vessel, stack, outside_script(stack.name, stack.ready, data_expr(vessel.astro), SETTLE_S),
+    _, lines = run_on(vessel, stack, outside_script(stack.name, stack.ready, vessel_data(vessel), SETTLE_S),
                       PROBE.read_text())
     row = tagged(lines, 'astro-ps')
     if not row:
@@ -303,7 +309,7 @@ def probe(vessel, stack, timeout, window=2.0):
     """{topic: hz, '_dead': bool} measured on the stack's host."""
     if not stack.ready:
         return {}
-    _, lines = run_on(vessel, stack, probe_script(stack.name, stack.ready, data_expr(vessel.astro), timeout, window),
+    _, lines = run_on(vessel, stack, probe_script(stack.name, stack.ready, vessel_data(vessel), timeout, window),
                       PROBE.read_text())
     found = tagged(lines, 'astro-rates')
     return json.loads(found[-1]) if found else {}
@@ -335,7 +341,7 @@ def up(vessel, root, names, options, force=False):
             clean_shm(vessel, stack)
         if stack.run:
             line = command(stack, options)
-            code, lines = run_on(vessel, stack, start_script(stack.name, line, data_expr(vessel.astro)))
+            code, lines = run_on(vessel, stack, start_script(stack.name, line, vessel_data(vessel)))
             state = (tagged(lines, 'astro-stack') or ['failed'])[-1].split()[0]
             tail = tagged(lines, 'astro-log')
             how = state
@@ -345,7 +351,7 @@ def up(vessel, root, names, options, force=False):
             rates = probe(vessel, stack, READY_S)
             ok = not rates.get('_dead') and all(rates.get(t) for t in stack.ready)
             if not ok and stack.run:
-                _, lines = run_on(vessel, stack, prelude(data_expr(vessel.astro))
+                _, lines = run_on(vessel, stack, prelude(vessel_data(vessel))
                                   + f'alive {shlex.quote(stack.name)}; [ -n "$l" ] && tail -n 5 "$l" | sed "s/^/astro-log /"')
                 tail = tagged(lines, 'astro-log')
         text = rate_text(rates)
@@ -377,7 +383,7 @@ def down(vessel, root, names):
         chosen = [s for s in stacks.values() if s in chosen]
     for stack in reversed(chosen):
         host = host_of(vessel, stack)
-        _, lines = run_on(vessel, stack, stop_script(stack.name, data_expr(vessel.astro)))
+        _, lines = run_on(vessel, stack, stop_script(stack.name, vessel_data(vessel)))
         how = (tagged(lines, 'astro-stack') or ['unreachable'])[-1].split()[0]
         print(f'{stack.name}  {how}  {host}')
         if how != 'down':
@@ -427,7 +433,7 @@ def logs(vessel, name, follow):
         raise config.Error(f'no stack {name!r} (stacks: {", ".join(stacks)})')
     stack = stacks[name]
     host, spec = remote.place(vessel, stack.host)
-    argv, env = remote.words(vessel, host, spec, logs_script(name, data_expr(vessel.astro), follow))
+    argv, env = remote.words(vessel, host, spec, logs_script(name, vessel_data(vessel), follow))
     try:
         return subprocess.call(argv, env=env)
     except KeyboardInterrupt:
@@ -477,7 +483,7 @@ def plan(stacks, needs, conflicts, states):
 
 def states_of(vessel, stacks, options):
     """{name: (up, {option: in its running command})} for STACKS, one ssh per host."""
-    data, out = data_expr(vessel.astro), {}
+    data, out = vessel_data(vessel), {}
     by_host = {}
     for stack in stacks:
         if stack.run:

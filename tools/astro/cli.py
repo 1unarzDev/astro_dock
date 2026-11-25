@@ -561,7 +561,7 @@ def entry_host(vessel, command, here, me, inside):
     if here or not command.get('host'):
         return None
     host, spec = remote.place(vessel, command['host'])
-    return None if host == me and inside else (host, spec)
+    return None if remote.is_here(host, spec, me) and inside else (host, spec)
 
 
 def fill(module, command, args, pick=None):
@@ -659,11 +659,13 @@ def dispatch(argv):
     line = command['run'] + ''.join(' ' + shlex.quote(a) for a in rest)
     if target:
         host, spec = target
+        # the container's own view of this vessel's (and sim instance's) data dir, e.g. for trial home
+        line = f'export ASTRO_DATA={stacks.vessel_data(vessel)}; {line}'
         dim = sys.stderr.isatty() and 'NO_COLOR' not in os.environ
         print(f'\033[2m(on {host})\033[0m' if dim else f'(on {host})', file=sys.stderr)
         tty = remote._tty()
         try:
-            if host == config.this_host():           # this machine, outside its container: exec into it
+            if remote.is_here(host, spec):           # this machine, outside its container: exec into it
                 argv_, env = remote.local_words(vessel, spec['container'], line, tty)
             else:
                 argv_, env = remote.ssh_command(vessel, host, spec, [line], tty), None
