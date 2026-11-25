@@ -674,8 +674,8 @@ def run_logged(name, argv, env=None):
     Without `script` or a writable data dir it runs unlogged."""
     import shutil
     try:
-        root = config.Vessel().data_root()
-    except config.Error:
+        root = Path(config.Vessel().data_root())
+    except Exception:                     # no vessel (or a stand-in without a data dir): the user's state dir
         root = Path.home() / '.local' / 'state' / 'astro'
     try:
         directory = log.day_dir(root) / 'logs'
@@ -687,15 +687,9 @@ def run_logged(name, argv, env=None):
     try:
         if path and shutil.which('script') and sys.stdout.isatty():
             return subprocess.call(['script', '-qefc', shlex.join(argv), str(path)], env=env)
-        if path:
-            with open(path, 'w') as out:
-                process = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                for text in process.stdout:
-                    sys.stdout.write(text)
-                    sys.stdout.flush()
-                    out.write(text)
-                    out.flush()
-                return process.wait()
+        if path:                          # no terminal: tee, keeping the command's exit status
+            return subprocess.call(['bash', '-c', f'{shlex.join(argv)} 2>&1 | tee -a {shlex.quote(str(path))}; '
+                                    'exit ${PIPESTATUS[0]}'], env=env)
         return subprocess.call(argv, env=env)
     except KeyboardInterrupt:
         return 130

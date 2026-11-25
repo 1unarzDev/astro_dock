@@ -85,8 +85,12 @@ class HostForwarding(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(cli.dispatch(['thrusters', 'free', '--check']), 0)
         argv = call.call_args[0][0]
-        self.assertEqual(argv[:4], ['ssh', '-o', 'ConnectTimeout=8', 'crew@10.0.0.2'])
-        self.assertIn("ros2 run hw free --check", argv[-1])
+        if argv[:2] == ['bash', '-c']:            # kept in a log through tee: the forwarded command is inside
+            self.assertIn('ssh -o ConnectTimeout=8 crew@10.0.0.2', argv[2])
+            self.assertIn('ros2 run hw free --check', argv[2])
+        else:
+            self.assertEqual(argv[:4], ['ssh', '-o', 'ConnectTimeout=8', 'crew@10.0.0.2'])
+            self.assertIn("ros2 run hw free --check", argv[-1])
         self.assertIn('(on boat-main)', err.getvalue())
 
     def test_a_noun_alone_lists_its_subcommands(self):
