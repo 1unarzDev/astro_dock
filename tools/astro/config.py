@@ -15,6 +15,7 @@ else this machine's registry host. Its `astro:` section points at team files and
       state_env: VAR                    # optional: `on`/`sim` export the state path as VAR (and ASTRO_STATE)
       env: {VAR: value}                 # optional: more variables for `on`/`sim`
       sim: CMD                          # optional (sim profiles): the world backend, `CMD up|down|status`
+      instance_env: VAR                 # optional (sim profiles): the backend's instance variable (see below)
       sim_time: false                   # optional: test runs follow /clock (use_sim_time)
       stacks: {NAME: {host, run, ready, needs, default, with}}   # optional: astro up/down/status (stacks.py)
       field: {repo: OWNER/NAME, url: GIT_URL, dir: PATH, auto: true}  # optional: check/issue/sync/show (field.py)
@@ -22,6 +23,12 @@ else this machine's registry host. Its `astro:` section points at team files and
       bundle_next: 'TEXT {bundle}'      # optional: printed after `astro bundle`, {bundle} = the file
       test_needs: [NAME]                # optional: stacks `astro test` starts first when down; a test's own
                                         # `needs` in the tests file replaces it for that test
+
+Parallel sims: ASTRO_SIM_INSTANCE=N (default 0) on a sim profile (one with astro.sim) gives every verb its own
+world. Instance N exports ASTRO_SIM_INSTANCE=N (and instance_env's VAR=N) to the backend and the containers,
+uses ROS_DOMAIN_ID = the profile's domain + N, and for N >= 1 the registry containers NAME_N, the data dir
+<data>/iN and the state file NAME.iN.EXT (copied from the base state the first time). Instance 0 is the
+profile as written.
 """
 import datetime
 import importlib.util
@@ -29,6 +36,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 
 import yaml
@@ -67,6 +75,25 @@ def profiles_root():
         return Path(root).expanduser()
     local = WS / 'profiles'
     return local if any(local.glob('*/profile.yaml')) else None
+
+
+def sim_instance():
+    """ASTRO_SIM_INSTANCE as an int (default 0)."""
+    raw = os.environ.get('ASTRO_SIM_INSTANCE', '').strip() or '0'
+    if not raw.isdigit():
+        raise Error(f'ASTRO_SIM_INSTANCE={raw!r}: expected a whole number (0 = the default instance)')
+    return int(raw)
+
+
+def instance_path(path, n):
+    """PATH with .iN before its suffix (N >= 1): state.yaml -> state.i3.yaml; PATH itself for 0."""
+    if not n:
+        return path
+    text = str(path)
+    stem, dot, ext = text.rpartition('.')
+    if not dot or '/' in ext:
+        return type(path)(f'{text}.i{n}')
+    return type(path)(f'{stem}.i{n}.{ext}')
 
 
 def _assignments(lines):
@@ -113,6 +140,8 @@ class Vessel:
         self.network_env = meta['network_env'] or ''
         self.registry = meta['registry'] or ''
         self.network = profile.network(self.network_env) if self.network_env else {}
+        self.is_sim = bool(self.astro.get('sim'))
+        self.instance = sim_instance() if self.is_sim else 0
 
     def need(self, key):
         value = self.astro.get(key)
@@ -124,26 +153,55 @@ class Vessel:
     def hosts(self):
         if not self.registry:
             return {}
-        return profile.hosts(self.registry, self.network)
+        hosts = profile.hosts(self.registry, self.network)
+        if self.instance:                 # a parallel sim instance runs in its own containers: NAME_N
+            for spec in hosts.values():
+                if spec.get('container'):
+                    spec['container'] = f'{spec["container"]}_{self.instance}'
+        return hosts
 
     def path(self, key):
         return find(self.need(key))
 
+    def state_raw(self):
+        """The state path as written (~ kept), with this sim instance's .iN."""
+        return instance_path(str(self.need('state')), self.instance)
+
     def state(self):
-        return Path(os.path.expanduser(str(self.need('state'))))
+        """The state file; a sim instance's own copy starts from the base state the first time."""
+        path = Path(os.path.expanduser(self.state_raw()))
+        if self.instance and not path.exists():
+            base = Path(os.path.expanduser(str(self.need('state'))))
+            if base.is_file():
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(base, path)
+                except OSError:
+                    pass
+        return path
 
     def data_root(self):
         data = self.astro.get('data')
         if data:
             data = Path(os.path.expanduser(str(data)))
-            return data if data.is_absolute() else WS / data
-        return Path(os.environ.get('ASTRO_DATA') or WS / 'bags')
+            root = data if data.is_absolute() else WS / data
+        elif self.instance and os.environ.get('ASTRO_DATA'):
+            # an exported ASTRO_DATA may already be this instance's own dir
+            root = Path(os.environ['ASTRO_DATA'])
+            return root if root.name == f'i{self.instance}' else root / f'i{self.instance}'
+        else:
+            root = Path(os.environ.get('ASTRO_DATA') or WS / 'bags')
+        return root / f'i{self.instance}' if self.instance else root
 
     def env(self):
         """The variables `astro on NAME` / `astro sim` export for this vessel."""
         out = {'ASTRO_VESSEL': self.name}
         if self.network.get('ROS_DOMAIN_ID'):
-            out['ROS_DOMAIN_ID'] = self.network['ROS_DOMAIN_ID']
+            out['ROS_DOMAIN_ID'] = str(int(self.network['ROS_DOMAIN_ID']) + self.instance)
+        if self.is_sim:
+            out['ASTRO_SIM_INSTANCE'] = str(self.instance)
+            if self.astro.get('instance_env'):
+                out[str(self.astro['instance_env'])] = str(self.instance)
         subnet = self.network.get('LAN_SUBNET', '')
         if subnet.startswith('127.'):
             out['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'LOCALHOST'

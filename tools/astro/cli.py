@@ -821,7 +821,8 @@ def main(argv=None):
                 return forward(s.vessel, str(home), argv,
                                env={'ASTRO_NO_AUTOSTART': '1'} if s.no_autostart else None)
         if verb in HEADER and not (verb == 'test' and args.name == 'list'):
-            print(f'astro {verb} · vessel {s.vessel.name} · state {s.vessel.state()} · data {s.root}')
+            inst = f' · instance {s.vessel.instance}' if getattr(s.vessel, 'is_sim', False) else ''
+            print(f'astro {verb} · vessel {s.vessel.name}{inst} · state {s.vessel.state()} · data {s.root}')
         if verb == 'on':
             return remote.on(args.host or choose('Pick a host to open a shell on:', choices(s, 'on'),
                                                  config.this_host()), args.cmd)

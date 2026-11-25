@@ -32,9 +32,11 @@ HERE = 'here'
 def data_expr(vessel):
     """The data root as the dev container's shell sees it (config.Vessel.data_root inside the container)."""
     data = vessel.astro.get('data')
+    n = getattr(vessel, 'instance', 0)
+    sub = f'/i{n}' if n else ''
     if not data:
-        return '"${ASTRO_DATA:-${ROS_WS:-$PWD}/bags}"'
-    data = str(data)
+        return '"${ASTRO_DATA:-${ROS_WS:-$PWD}/bags}"' + sub
+    data = str(data) + sub
     if data.startswith('~/'):
         return '"$HOME"/' + shlex.quote(data[2:])
     return shlex.quote(data) if data.startswith('/') else '"${ROS_WS:-$PWD}"/' + shlex.quote(data)

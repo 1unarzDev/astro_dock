@@ -75,7 +75,8 @@ def stacks_block(lines):
 
 
 def page(vessel, spec, rows_next, lines=6, stack_lines=()):
-    out = [f'vessel {vessel.name}  data {vessel.data_root()}  {time.strftime("%H:%M:%S")}']
+    inst = f'  instance {vessel.instance}' if getattr(vessel, 'is_sim', False) else ''
+    out = [f'vessel {vessel.name}{inst}  data {vessel.data_root()}  {time.strftime("%H:%M:%S")}']
     out += stacks_block(list(stack_lines))
     if config.have_ros() and spec:
         topics = [t for t in dict.fromkeys(spec.topics.values()) if isinstance(t, str)]

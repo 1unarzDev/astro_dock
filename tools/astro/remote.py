@@ -121,10 +121,10 @@ def local_env(vessel, inside):
     env = vessel.env()
     if not inside:
         env.pop('ASTRO_DATA', None)               # the container resolves its own data root from the profile
-        raw = vessel.astro.get('state')
+        raw = vessel.state_raw() if vessel.astro.get('state') else ''
         for key in ('ASTRO_STATE', str(vessel.astro.get('state_env') or '')):
             if key in env and raw:
-                env[key] = str(raw)
+                env[key] = raw
     return env
 
 
