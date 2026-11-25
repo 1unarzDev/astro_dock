@@ -171,22 +171,22 @@ class GroupingTest(unittest.TestCase):
 
     def test_group_index_tab_fold_and_filter_by_group(self):
         browser = self.browser([self.package('astro', 'help', 'hot', 'profile', 'profile env'),
-                                self.package('mhseals_hardware', 'drive', 'thrusters', 'thrusters mix'),
-                                self.package('mhseals_nav', 'task')])
+                                self.package('team_hw', 'drive', 'thrusters', 'thrusters mix'),
+                                self.package('team_nav', 'task')])
         rows = browser.rows()
-        self.assertEqual([r[3] for r in rows if r[2] == -3], ['astro', 'mhseals_hardware', 'mhseals_nav'])
+        self.assertEqual([r[3] for r in rows if r[2] == -3], ['astro', 'team_hw', 'team_nav'])
         self.assertEqual(browser.selected(rows)[1]['name'], 'help')       # starts on the first command
         browser.next_group(1)
         self.assertEqual(browser.selected(browser.rows()), (browser.packages[1], None))
         browser.next_group(-1)
         self.assertEqual(browser.selected(browser.rows())[0]['package'], 'astro')
-        browser.collapsed.add('mhseals_hardware')
+        browser.collapsed.add('team_hw')
         self.assertFalse([r for r in browser.rows() if r[1] and r[1]['name'] == 'drive'])
-        browser.row = 1                                                  # the index row of mhseals_hardware
+        browser.row = 1                                                  # the index row of team_hw
         browser.go_group(browser.selected(browser.rows())[0])
-        self.assertNotIn('mhseals_hardware', browser.collapsed)
-        self.assertEqual(browser.selected(browser.rows())[0]['package'], 'mhseals_hardware')
-        for word, want in (('mhseals', {'drive', 'thrusters', 'thrusters mix', 'task'}),
+        self.assertNotIn('team_hw', browser.collapsed)
+        self.assertEqual(browser.selected(browser.rows())[0]['package'], 'team_hw')
+        for word, want in (('team', {'drive', 'thrusters', 'thrusters mix', 'task'}),
                            ('thrusters', {'thrusters', 'thrusters mix'})):
             browser.word = word
             self.assertEqual({r[1]['name'] for r in browser.rows() if r[1]}, want)
