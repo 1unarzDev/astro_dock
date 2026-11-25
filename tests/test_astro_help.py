@@ -118,11 +118,22 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(astro_help.synopsis(mosfet), '<file> [--seconds N] {a|b} [port] [--check] [names...]')
         self.assertEqual(astro_help.build(mosfet, {'file': 'x', 'side': 'a', 'port': 'auto'}), 'mosfet x a')
         port, seconds, file = (next(p for p in mosfet['params'] if p['name'] == n) for n in ('port', '--seconds', 'file'))
-        self.assertEqual(astro_help.placeholder(port, '/dev/ttyACM0'), '(auto: /dev/ttyACM0)')
-        self.assertEqual(astro_help.placeholder(port), '(auto)')
-        self.assertEqual(astro_help.placeholder(seconds), '(not set)')
-        self.assertEqual(astro_help.placeholder(file), '(required)')
-        self.assertRegex(astro_help.text([astro_help.parse(astro_help.OWN)]), r'\n  rec fetch \[bags\.\.\.\] .* +Find ')
+        side, check = (next(p for p in mosfet['params'] if p['name'] == n) for n in ('side', '--check'))
+        self.assertEqual(astro_help.placeholder(port, '/dev/ttyACM0'), 'auto: /dev/ttyACM0')
+        self.assertEqual(astro_help.placeholder(port), 'auto (finds it)')
+        self.assertEqual(astro_help.placeholder(seconds), 'not set')
+        self.assertEqual(astro_help.placeholder(file), 'required \u2014 type it')
+        self.assertEqual(astro_help.placeholder(side), 'required \u2014 pick one')
+        self.assertEqual(astro_help.placeholder(dict(seconds, default=0.5)), 'default: 0.5')
+        self.assertEqual(astro_help.value_text(check), '[ ] off')
+        self.assertEqual(astro_help.value_text(check, True, True), '[x] on')
+        self.assertEqual(astro_help.value_text(seconds, '2', True), '2')
+        self.assertEqual([astro_help.type_text(p) for p in mosfet['params']],
+                         ['file', 'number', 'one of a/b', 'text', 'on/off', 'text, several'])
+        self.assertEqual(astro_help.field_hint(side, focused=True), 'Enter to change')
+        self.assertEqual(astro_help.choice_rows([('a', 'one'), ('bb', '')], current='a'),
+                         [('a (current)', 'one'), ('bb'.ljust(11), '')])
+        self.assertRegex(astro_help.text([astro_help.parse(astro_help.OWN)]), r'\n  rec fetch \[bags\.\.\.\] ')
 
     def test_text_lists_and_details(self):
         packages = [astro_help.parse(astro_help.OWN)]

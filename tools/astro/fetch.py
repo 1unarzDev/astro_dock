@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import sys
 
-from . import bagscan, config, remote
+from . import bagscan, config, remote, style
 from .engine import log
 
 TIMEOUT = 25          # seconds one host's search may take
@@ -319,8 +319,13 @@ def select(items, dest, title):
     picked = set()
     pickable = lambda i: state(items[i], dest) in ('new', 'copied')
 
+    utf = 'utf' in (os.environ.get('LC_ALL') or os.environ.get('LC_CTYPE') or os.environ.get('LANG') or '').lower()
+
     def run(screen):
         curses.curs_set(0)
+        if curses.has_colors():
+            curses.start_color()
+            curses.use_default_colors()      # the terminal's own background
         row = next((r for r, i in enumerate(rowmap) if i is not None), 0)
         while True:
             h, w = screen.getmaxyx()
@@ -337,10 +342,12 @@ def select(items, dest, title):
                         screen.addstr(y, 0, lines[r][:w - 1], curses.A_BOLD)
                         continue
                     mark = '[x]' if i in picked else ('[ ]' if pickable(i) else ' - ')
-                    text = f'{">" if r == row else " "}{mark}{lines[r][1:]}'
-                    attr = curses.A_REVERSE if r == row else (0 if pickable(i) else curses.A_DIM)
+                    text = f'{style.mark(r == row, utf)}{mark}{lines[r][1:]}'
+                    attr = curses.A_BOLD if r == row else (0 if pickable(i) else curses.A_DIM)
                     screen.addstr(y, 0, text[:w - 1], attr)
-                screen.addstr(h - 1, 0, ' up/down move  space pick  a all new  Enter copy  Esc/q cancel'[:w - 1],
+                screen.addstr(h - 1, 0, ' \u2191\u2193 move \u00b7 Space pick \u00b7 a all new \u00b7 Enter copy'
+                              ' \u00b7 Esc/q cancel'[:w - 1] if utf else
+                              ' up/down move - Space pick - a all new - Enter copy - Esc/q cancel'[:w - 1],
                               curses.A_DIM)
             except curses.error:
                 pass

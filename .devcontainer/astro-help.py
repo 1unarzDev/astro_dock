@@ -55,12 +55,15 @@ AMENT_PREFIX_PATH entry. A confirmed command runs in bash, or, when ASTRO_HELP_O
 file, is written there for the calling shell to run (so it keeps the shell's functions).
 """
 import curses
+import importlib.util
 import locale
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
+import types
 from pathlib import Path
 
 import yaml
@@ -77,6 +80,31 @@ EXTRA = []                 # more help.yaml paths, set by the caller (astro: the
 def workspace():
     """$ROS_WS, else derived as dev.bashrc does: the directory holding this .devcontainer."""
     return os.environ.get('ROS_WS') or str(OWN.parent).removesuffix('/.devcontainer')
+
+
+def load_style():
+    """astro's shared look (tools/astro/style.py) from the workspace; a plain fallback where it is absent
+    (the image copies this file alone)."""
+    for root in (workspace(), str(OWN.parent.parent)):
+        path = Path(root, 'tools', 'astro', 'style.py')
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('astro_style', path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    ansi = {'bold': '1', 'dim': '2', 'accent': '36', 'title': '1;36'}
+    return types.SimpleNamespace(
+        MARK='›', MARK_ASCII='>', CURRENT='(current)', SEP=' · ', SEP_ASCII=' - ', ANSI=ansi,
+        paint=lambda name, text, on=True: f'\033[{ansi[name]}m{text}\033[0m' if on and text else text,
+        mark=lambda selected, utf=True: ('› ' if utf else '> ') if selected else '  ',
+        box=lambda on: '[x]' if on else '[ ]',
+        type_name=lambda kind, choices=(): ('one of ' + '/'.join(map(str, choices)) if len(choices) <= 4
+                                            else 'pick from a list') if choices else {
+            'str': 'text', 'int': 'whole number', 'float': 'number', 'bool': 'on/off', 'path': 'file',
+            'list': 'text, several'}.get(str(kind), str(kind)))
+
+
+style = load_style()
 
 
 def candidates(ws=None, prefixes=None):
@@ -212,6 +240,16 @@ def kind(param):
     return 'switch' if param['form'] == 'switch' else param['type']
 
 
+def type_text(param):
+    """What a field takes, in plain words: number, whole number, on/off, file, text, one of A/B/C, or pick
+    from a list (choices found when opened)."""
+    if param.get('choices_from') and not param.get('choices'):
+        return 'pick from a list'
+    if kind(param) == 'switch' or param['type'] == 'bool':
+        return 'on/off'
+    return style.type_name(param['type'], param.get('choices') or ())
+
+
 def synopsis(command):
     """The args part of a usage line, from the params: <file> [--seconds N] {a|b} [names...]."""
     words = []
@@ -280,19 +318,27 @@ def run_choices(command, env=None, timeout=30):
     return parse_choices(done.stdout)
 
 
+def choice_rows(choices, current=None):
+    """[(value column, about)] of a picker: each value, the CURRENT one followed by (current), padded to
+    one width so the descriptions line up."""
+    heads = [f'{v} {style.CURRENT}' if v == current else str(v) for v, _ in choices]
+    width = max(len(h) for h in heads)
+    return [(f'{h:<{width}}', about) for h, (_, about) in zip(heads, choices)]
+
+
 def pick(title, choices, stream=None, current=None):
     """The chosen value from [(value, about)]: an arrow-key list on a terminal (a numbered one without
-    curses), the CURRENT value marked *; None when cancelled. Without a terminal it prints the choices
-    and returns None."""
+    curses), the CURRENT value marked (current); None when cancelled. Without a terminal it prints the
+    choices and returns None."""
     stream = stream or sys.stderr
     if not choices:
         print(f'{title} nothing to choose from', file=stream)
         return None
-    width = max(len(v) for v, _ in choices)
+    rows = choice_rows(choices, current)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print(f'{title} give one of', file=stream)
-        for value, about in choices:
-            print(f'  {"*" if value == current else " "} {value:<{width}}  {about}'.rstrip())
+        for head, about in rows:
+            print(f'  {head}  {about}'.rstrip())
         return None
     try:
         locale.setlocale(locale.LC_ALL, '')
@@ -301,8 +347,8 @@ def pick(title, choices, stream=None, current=None):
     except curses.error:
         pass
     print(title, file=stream)
-    for i, (value, about) in enumerate(choices, 1):
-        print(f'{i:>3}) {"*" if value == current else " "} {value:<{width}}  {about}'.rstrip(), file=stream)
+    for i, (head, about) in enumerate(rows, 1):
+        print(f'{i:>3}) {head}  {about}'.rstrip(), file=stream)
     try:
         entered = input(f'number or name [1-{len(choices)}, empty cancels]: ').strip()
     except EOFError:
@@ -312,17 +358,34 @@ def pick(title, choices, stream=None, current=None):
     return next((v for v, _ in choices if v == entered), None)
 
 
-MENU_KEYS = {True: '↑↓ move  Enter choose  Esc/q cancel  * current',
-             False: 'up/down move  Enter choose  Esc/q cancel  * current'}
+MENU_KEYS = {True: '↑↓ move · Enter choose · Esc/q cancel',
+             False: 'up/down move - Enter choose - Esc/q cancel'}
 
 
-def menu(screen, y, x, h, w, title, choices, row=0, attr=0, current=None, utf=True):
+def colours():
+    """{'accent': attr} once curses colours are set up (the terminal's own background kept); {} with
+    NO_COLOR or a terminal without colours."""
+    if not curses.has_colors():
+        return {}
+    try:
+        curses.start_color()
+        curses.use_default_colors()       # also without colours: else curses paints its own black background
+        if 'NO_COLOR' in os.environ:
+            return {}
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+    except curses.error:
+        return {}
+    return {'accent': curses.color_pair(1)}
+
+
+def menu(screen, y, x, h, w, title, choices, row=0, attr=0, current=None, utf=True, rule=False):
     """Draw and run an arrow-key list in the box (y, x, h, w): the title, one row per choice with its
-    description (the CURRENT index marked *, the cursor row > and reversed), the keys; the chosen index or
-    None (Esc, q)."""
-    width = max(len(v) for v, _ in choices)
+    dim description (the CURRENT index marked (current); the cursor row marked › and bold, its value in
+    the accent ATTR), the keys (and, with RULE, a line closing the box); the chosen index or None (Esc, q)."""
+    values = [v for v, _ in choices]
+    rows = choice_rows(choices, values[current] if current is not None else None)
     while True:
-        room = max(h - 2, 1)
+        room = max(h - 2 - rule, 1)
         top = max(0, min(row - room // 2, len(choices) - room))
         for i in range(h):
             try:
@@ -330,14 +393,18 @@ def menu(screen, y, x, h, w, title, choices, row=0, attr=0, current=None, utf=Tr
             except curses.error:
                 pass
         try:
-            screen.addstr(y, x, f' {title} '[:w - 1], curses.A_BOLD | attr)
-            for i, (value, about) in enumerate(choices[top:top + room], 1):
+            screen.addstr(y, x, f' {title}'[:w - 1], curses.A_BOLD)
+            for i, (head, about) in enumerate(rows[top:top + room], 1):
                 index = top + i - 1
-                line = f'{">" if index == row else " "} {"*" if index == current else " "} {value:<{width}}  {about}'
-                screen.addstr(y + i, x, line[:w - 1].ljust(w - 1) if index == row else line[:w - 1],
-                              curses.A_REVERSE if index == row else 0)
+                chosen = index == row
+                screen.addstr(y + i, x, f' {style.mark(chosen, utf)}'[:w - 1], curses.A_BOLD if chosen else 0)
+                screen.addstr(y + i, x + 3, head[:max(w - 4, 0)], (curses.A_BOLD | attr) if chosen else 0)
+                if about and x + 5 + len(head) < x + w - 1:
+                    screen.addstr(y + i, x + 5 + len(head), about[:w - 6 - len(head)], curses.A_DIM)
             more = f'  ({row + 1}/{len(choices)})' if len(choices) > room else ''
-            screen.addstr(y + h - 1, x, f' {MENU_KEYS[utf]}{more}'[:w - 1], curses.A_DIM)
+            screen.addstr(y + h - 1 - rule, x, f' {MENU_KEYS[utf]}{more}'[:w - 1], curses.A_DIM)
+            if rule:
+                screen.addstr(y + h - 1, x, ('─' if utf else '-') * (w - 1), curses.A_DIM)
         except curses.error:
             pass
         key = screen.get_wch()
@@ -364,21 +431,38 @@ class Picker:
         self.screen, self.title, self.choices = screen, title, choices
         values = [v for v, _ in choices]
         self.current = values.index(current) if current in values else None
+        self.accent = colours().get('accent', 0)
         curses.curs_set(0)
 
     def run(self):
         h, w = self.screen.getmaxyx()
         self.screen.erase()
         index = menu(self.screen, 0, 0, min(h, len(self.choices) + 2), w, self.title, self.choices,
-                     self.current or 0, current=self.current, utf=utf8())
+                     self.current or 0, self.accent, current=self.current, utf=utf8())
         return None if index is None else self.choices[index][0]
 
 
 # ---- plain text -------------------------------------------------------------------------
 
-def details(command, paint=lambda code, s: s):
-    """The full description of one command: its command line(s), ros equivalent, notes, params, examples,
-    then its technical details."""
+def text_width():
+    """The width plain text wraps to: the terminal's, at most 100 (80 without a terminal)."""
+    return max(min(shutil.get_terminal_size((80, 24)).columns, 100), 40)
+
+
+def state_text(param):
+    """A param's unset state in plain text: default: X, auto (finds it), required or optional."""
+    if 'default' in param:
+        default = param['default']
+        if shown(default) == 'auto' and 'auto' not in [str(c) for c in param.get('choices') or []]:
+            return 'auto (finds it)'
+        return f'default: {onoff(default) if type_text(param) == "on/off" else shown(default, param)}'
+    return 'required' if is_required(param) else 'optional'
+
+
+def details(command, paint=lambda code, s: s, width=None):
+    """The full description of one command: its command line(s), ros equivalent, notes, params (name, type
+    in plain words and state, the description wrapped under them), examples, then its technical details."""
+    width = (width or text_width()) - 4
     out = [paint('2', f'    $ {build(command, {})}')]
     if not command['run'].startswith('astro '):
         out.append(paint('2', f'    $ astro {command["name"]}{build(command, {})[len(command["run"]):]}'))
@@ -389,15 +473,22 @@ def details(command, paint=lambda code, s: s):
     if stacks_note(command):
         out.append(paint('2', f'    {stacks_note(command)}'))
     if command['notes']:
-        out.extend(paint('33', '    ' + line) for line in wrap(command['notes'], 88))
+        out.extend('    ' + line for line in wrap(command['notes'], width))
+    if command['params']:
+        out.append('')
+        name_w = min(max(len(p['name']) for p in command['params']), 18)
     for param in command['params']:
-        default = f' (default {shown(param["default"])})' if 'default' in param else ''
-        choices = f' [{"|".join(map(str, param["choices"]))}]' if param.get('choices') else ''
-        choices += f' [from: {param["choices_from"]}]' if param.get('choices_from') else ''
-        out.append(f'    {param["name"]:<22} {param["type"]:<6} '
-                   f'{param.get("description", "")}{choices}{paint("2", default)}')
+        about = param.get('description', '')
+        name = paint('1', f'{param["name"]:<{name_w}}')
+        out.append(f'    {name}  {type_text(param)}'
+                   + paint('2', f'{style.SEP}{state_text(param)}'))
+        out.extend(paint('2', ' ' * (name_w + 6) + line) for line in wrap(about, width - name_w - 2))
+    if command['examples']:
+        out.append('')
     out.extend(paint('2', f'    e.g. {example}') for example in command['examples'])
-    out.extend(paint('2', '    ' + line) for line in wrap(command.get('details') or '', 88))
+    if command.get('details'):
+        out.append('')
+    out.extend(paint('2', '    ' + line) for line in wrap(command.get('details') or '', width))
     return out
 
 
@@ -416,7 +507,8 @@ def text(packages, word=None, color=False, exact=None, levels=('core',)):
     """Every command of LEVELS with its summary, or full details of the commands matching word (any level;
     or, with exact, the commands of that package whose name is exact or starts with it)."""
     def paint(code, s):
-        return f'\033[{code}m{s}\033[0m' if color else s
+        return f'\033[{code}m{s}\033[0m' if color and s else s
+    full = text_width()
     out = []
     for package in packages:
         if exact:
@@ -429,13 +521,26 @@ def text(packages, word=None, color=False, exact=None, levels=('core',)):
             continue
         out.append(paint('1;36', package['package']) + paint('2', f' · {package["summary"]}'))
         ordered = [c for c, _, _ in tree(commands) if c]            # sub-entries right after their noun
-        heads = {c['name']: f'{c["name"]} {synopsis(c)}'.rstrip() for c in ordered}
-        width = min(max(len(h) for h in heads.values()), 40)
+        heads = {c['name']: synopsis(c) for c in ordered}
+        width = min(max(len(f'{c["name"]} {heads[c["name"]]}'.rstrip()) for c in ordered), 30)
         for command in ordered:
-            head = heads[command['name']]
-            out.append(f'  {head:<{width}}  {command["summary"]}')   # one line per entry, long usages too
+            # The name (bold) and its usage (dim), then the summary in a column wrapped to the terminal;
+            # a usage longer than the column puts the summary on the lines below, at the column.
+            name, usage = command['name'], heads[command['name']]
+            head = f'{name} {usage}'.rstrip()
+            painted = paint('1', name) + (' ' + paint('2', usage) if usage else '')
+            lines = wrap(command['summary'], full - width - 4) or ['']
+            if len(head) <= width:
+                out.append(f'  {painted}{" " * (width - len(head))}  {lines[0]}'.rstrip())
+                lines = lines[1:]
+            else:
+                out.extend(' ' * (len(name) + 3) + paint('2', part) if i else '  ' + paint('1', name) + ' ' + paint('2', part)
+                           for i, part in enumerate(textwrap.wrap(usage, full - len(name) - 3,
+                                                                  break_on_hyphens=False)))
+            out.extend(' ' * (width + 4) + line for line in lines)
             if word or exact:
                 out.extend(details(command, paint))
+                out.append('')
         out.append('')
     return '\n'.join(out).rstrip() + '\n' if out else f'No command matches {word or exact[1]!r}.\n'
 
@@ -443,13 +548,27 @@ def text(packages, word=None, color=False, exact=None, levels=('core',)):
 # ---- browser ----------------------------------------------------------------------------
 
 UNICODE = dict(tl='╭', tr='╮', bl='╰', br='╯', h='─', v='│', lt='├', rt='┤', bt='┴', tt='┬',
-               sep=' · ', move='↑↓', enter='Enter', left='◂', right='▸', more='…')
+               sep=' · ', move='↑↓', enter='Enter', more='…', dash='—')
 ASCII = dict(tl='+', tr='+', bl='+', br='+', h='-', v='|', lt='+', rt='+', bt='+', tt='+',
-             sep=' - ', move='up/down', enter='Enter', left='<', right='>', more='~')
-HINTS = {'list': [('move', 'move'), ('enter', 'fill in'), ('/', 'filter'), ('x', 'examples'),
-                  ('r', 'run'), ('q', 'quit')],
-         'params': [('move', 'move'), ('enter', 'edit/pick'), ('Tab', 'next'), ('Del', 'default'),
-                    ('r', 'run'), ('q', 'back')]}
+             sep=' - ', move='up/down', enter='Enter', more='~', dash='-')
+# The key line under the screen: groups of (key, what it does), split by meaning (moving, acting).
+HINTS = {'list': [[('move', 'move'), ('enter', 'open'), ('/', 'filter'), ('x', 'examples')],
+                  [('r', 'run'), ('q', 'quit'), ('?', 'keys')]],
+         'params': [[('move', 'move'), ('enter', 'change'), ('Tab', 'next'), ('Del', 'default')],
+                    [('r', 'run'), ('q', 'back'), ('?', 'keys')]]}
+# Every key, shown by ? in the right pane.
+KEYS = [('↑↓ / j k', 'move in the list or the form'),
+        ('Enter / →', 'open the command: its form'),
+        ('Enter / Space', 'in the form: change the field (pick, type, or switch on/off)'),
+        ('Tab / Shift-Tab', 'next / previous field'),
+        ('Del / d', 'back to its default'),
+        ('← / h', 'back to the list'),
+        ('/', 'filter by a word (Esc clears)'),
+        ('x', 'examples instead of the form'),
+        ('PgUp / PgDn', 'scroll a long command line'),
+        ('r', 'run the line shown at the bottom'),
+        ('q / Esc', 'back, then quit'),
+        ('?', 'this list (any key closes it)')]
 
 
 def invocation(command, values):
@@ -464,18 +583,38 @@ def is_set(param, values):
     return param['name'] in values and shown(values[param['name']], param) not in ('', shown(param.get('default'), param))
 
 
-def placeholder(param, detected=None):
-    """What an unset field shows: (auto: FOUND), (default X), (required) or (not set)."""
+def placeholder(param, detected=None, dash='—'):
+    """What an unset field shows: auto: FOUND, auto (finds it), default: X, required — pick one (a choice;
+    else required — type it) or not set."""
     default = param.get('default')
     if shown(default) == 'auto' and 'auto' not in [str(c) for c in param.get('choices') or []]:
-        return f'(auto: {detected})' if detected else '(auto)'
+        return f'auto: {detected}' if detected else 'auto (finds it)'
     if 'default' in param:
-        return f'(default {onoff(default) if kind(param) == "switch" else shown(default, param)})'
-    return '(required)' if is_required(param) else '(not set)'
+        return f'default: {onoff(default) if kind(param) == "switch" else shown(default, param)}'
+    if is_required(param):
+        return f'required {dash} {"pick one" if kind(param) == "choice" else "type it"}'
+    return 'not set'
 
 
 def onoff(value):
     return 'on' if shown(value).lower() in TRUE else 'off'
+
+
+def value_text(param, value=None, set_=False, detected=None, dash='—'):
+    """A field's value as the form shows it: the value set, else its unset state (placeholder); on/off as
+    [x] on / [ ] off."""
+    if kind(param) == 'switch' or (param['type'] == 'bool' and not param.get('choices')):
+        return f'{style.box(onoff(value if set_ else param.get("default")) == "on")} ' \
+               f'{onoff(value if set_ else param.get("default"))}'
+    return shown(value, param) if set_ else placeholder(param, detected, dash)
+
+
+def field_hint(param, focused=False):
+    """The short hint after a field's value: its type in plain words; a focused choice says Enter
+    changes it."""
+    if focused and kind(param) == 'choice':
+        return 'Enter to change'
+    return type_text(param)
 
 
 class Browser:
@@ -483,17 +622,11 @@ class Browser:
         self.screen, self.packages, self.levels = screen, packages, levels
         self.values, self.word, self.status, self.focus = {}, '', '', 'list'
         self.row = self.param = self.top = self.cmd_top = 0
-        self.examples = False
+        self.examples = self.keys = False
         self.opened = None                    # the entry Enter opened (its details show), when it has no params
         self.detected = {}                    # (package, command, param) -> what auto finds ('' none)
         self.g = UNICODE if utf8() else ASCII
-        self.color = {}
-        if curses.has_colors() and 'NO_COLOR' not in os.environ:
-            curses.use_default_colors()
-            for i, (name, fg) in enumerate((('accent', curses.COLOR_CYAN), ('note', curses.COLOR_YELLOW),
-                                            ('value', curses.COLOR_GREEN), ('kind', curses.COLOR_MAGENTA)), 1):
-                curses.init_pair(i, fg, -1)
-                self.color[name] = curses.color_pair(i)
+        self.color = colours()
         curses.curs_set(0)
 
     def style(self, name):
@@ -509,12 +642,15 @@ class Browser:
                 pass
 
     def rows(self):
-        """[(package, command or None, depth, label)]: each package, then its commands grouped by noun."""
+        """[(package, command or None, depth, label)]: each package, then its commands grouped by noun; a
+        blank row (depth -2) between packages."""
         out = []
         for package in self.packages:
             commands = [c for c in package['commands']
                         if (matches(package, c, self.word) if self.word else c['level'] in self.levels)]
             if commands:
+                if out:
+                    out.append((package, None, -2, ''))
                 out.append((package, None, -1, package['package']))
                 out.extend((package, c, depth, label) for c, depth, label in tree(commands))
         return out
@@ -545,98 +681,118 @@ class Browser:
         self.cmd_top = max(0, min(self.cmd_top, len(parts) - room))
         shown_line = parts[self.cmd_top:self.cmd_top + room]
         left, bottom = min(34, w // 3), h - 4 - max(len(shown_line), 1)
-        count, n = sum(len(p['commands']) for p in self.packages), len(self.packages)
-        title = f'{g["h"]} help{g["sep"]}{n} package{"s" * (n != 1)}{g["sep"]}{count} commands'
-        title += f'{g["sep"]}/{self.word} ' if self.word else ' '
-        self.put(0, 0, g['tl'] + title + g['h'] * (w - len(title) - 2) + g['tr'], self.style('accent'))
+        count = sum(len(p['commands']) for p in self.packages)
+        frame = self.style('dim')
+        title = f' astro help{g["sep"]}{count} commands'
+        title += f'{g["sep"]}filter: {self.word}' if self.word else ''
+        title += f'{g["sep"]}? for keys '
+        self.put(0, 0, g['tl'] + g['h'] + g['h'] * (w - 3) + g['tr'], frame)
+        self.put(0, 2, title, curses.A_BOLD)
         for y in range(1, h - 2):
-            self.put(y, 0, g['v'], self.style('accent'))
-            self.put(y, w - 1, g['v'], self.style('accent'))
+            self.put(y, 0, g['v'], frame)
+            self.put(y, w - 1, g['v'], frame)
             if y < bottom:
-                self.put(y, left + 1, g['v'], self.style('dim'))
-        runs = ' runs ' if command else ''
-        self.put(bottom, 0, g['lt'] + g['h'] * left + g['bt'] + g['h'] * (w - left - 3) + g['rt'],
-                 self.style('accent'))
-        self.put(bottom, 2, runs, self.style('bold'))
+                self.put(y, left + 1, g['v'], frame)
+        self.put(bottom, 0, g['lt'] + g['h'] * left + g['bt'] + g['h'] * (w - left - 3) + g['rt'], frame)
+        if command:
+            self.put(bottom, 2, ' runs ', curses.A_BOLD)
         if len(parts) > room:
             where = f' lines {self.cmd_top + 1}-{self.cmd_top + room} of {len(parts)}, PgUp/PgDn '
-            self.put(bottom, w - len(where) - 2, where, self.style('note'))
-        self.put(h - 2, 0, g['bl'] + g['h'] * (w - 2) + g['br'], self.style('accent'))
+            self.put(bottom, w - len(where) - 2, where, curses.A_BOLD)
+        self.put(h - 2, 0, g['bl'] + g['h'] * (w - 2) + g['br'], frame)
         self.draw_list(rows, command, left, bottom - 1)
-        if command:
+        if self.keys:
+            self.draw_keys(left + 3, w - left - 5, bottom - 1)
+        elif command:
             self.draw_detail(package, command, left + 3, w - left - 5, bottom - 1)
+        if command:
             for y, part in enumerate(shown_line, bottom + 1):
-                self.put(y, 2, part, self.style('bold'), w - 4)
-        self.put(h - 3, 2, self.status, self.style('note'), w - 4)
+                self.put(y, 2, part, curses.A_BOLD, w - 4)
+        self.put(h - 3, 2, self.status, curses.A_BOLD, w - 4)
         x = 1
-        for key, label in HINTS[self.focus]:
-            key = g.get(key, key)
-            self.put(h - 1, x, key, self.style('accent') | curses.A_BOLD)
-            self.put(h - 1, x + len(key) + 1, label)
-            x += len(key) + len(label) + 3
+        for group in HINTS[self.focus]:
+            for key, label in group:
+                key = g.get(key, key)
+                self.put(h - 1, x, key, curses.A_BOLD)
+                self.put(h - 1, x + len(key) + 1, label, curses.A_DIM)
+                x += len(key) + len(label) + 3
+            x += 2                                               # a wider gap between the groups
+
+    def draw_keys(self, x, width, height):
+        """Every key and what it does, in the right pane (? shows it, any key closes it)."""
+        self.put(1, x, 'Keys', curses.A_BOLD, width)
+        key_w = max(len(k) for k, _ in KEYS)
+        y = 3
+        for key, about in KEYS:
+            lines = wrap(about, width - key_w - 2)
+            for i, part in enumerate(lines):
+                if y > height:
+                    return
+                if not i:
+                    self.put(y, x, key, curses.A_BOLD, width)
+                self.put(y, x + key_w + 2, part, 0, width - key_w - 2)
+                y += 1
 
     def draw_list(self, rows, command, width, height):
         index = next((i for i, r in enumerate(rows) if r[1] is command), 0)
         self.top = max(min(self.top, index), index - height + 1, 0)
         for y, (package, cmd, depth, label) in enumerate(rows[self.top:self.top + height], 1):
             x = 2 + 2 * (depth + 1)
+            if depth == -2:
+                continue
             if depth < 0:
-                self.put(y, 2, label, self.style('accent') | curses.A_BOLD, width - 1)
+                self.put(y, 2, label, curses.A_BOLD, width - 1)
             elif cmd is None:                                   # a noun with no entry of its own
                 self.put(y, x - 2, f'  {label}', self.style('dim'), width - x + 1)
-            elif cmd is command:
-                attr = curses.A_REVERSE | (curses.A_BOLD if self.focus == 'list' else 0)
-                self.put(y, x - 2, f'> {label}'.ljust(width - x + 1), attr, width - x + 1)
+            elif cmd is command:                                # the marker and bold; the accent while here
+                self.put(y, x - 2, style.mark(True, self.g is UNICODE), curses.A_BOLD)
+                self.put(y, x, label, curses.A_BOLD | (self.style('accent') if self.focus == 'list' else 0),
+                         width - x - 1)
             else:
                 self.put(y, x - 2, f'  {label}', 0, width - x + 1)
 
     def fields(self, package, command, width):
-        """[(line segments, field index)] of the param form: per field its name, value, type, then its
-        description (the focused field's whole, the others' first line)."""
+        """[(line segments, field index)] of the param form: per field its name, value and a short hint in
+        columns, then its description, dim and indented under it (the focused field's whole, the others'
+        first two lines)."""
         g, values, params = self.g, self.values_for(package, command), command['params']
         name_w = min(max(len(p['name']) for p in params), width // 3)
-        type_w = max(len(kind(p)) for p in params)
-        room = max(width - name_w - type_w - 7, 8)
         texts = [self.value_text(package, command, p, values) for p in params]
-        value_w = min(max(len(t) for t in texts), room)
+        hint_w = max(len(field_hint(p, True)) for p in params)
+        value_w = max(min(max(len(t) for t in texts), width - name_w - hint_w - 6), 8)
         out = []
         for i, (param, text) in enumerate(zip(params, texts)):
             focused = self.focus == 'params' and i == self.param
             if len(text) > value_w:
                 text = text[:value_w - 1] + g['more']
-            vstyle = self.style('value') if is_set(param, values) else self.style('dim')
-            head = [(f'{">" if focused else " "} {param["name"][:name_w]:<{name_w}}  ', curses.A_BOLD),
-                    (f'{text:<{value_w}}  ', vstyle), (f'{kind(param):<{type_w}}', self.style('kind'))]
-            if focused:                                           # unmistakable: > and reverse video
-                head = [(t, a | curses.A_REVERSE) for t, a in head]
-            out.append((head, i))
-            about = param.get('description', '') or '-'
-            if focused:
-                lines = wrap(about, width - 4)
+            set_ = is_set(param, values)
+            if set_:
+                vstyle = curses.A_BOLD
+            elif is_required(param) and 'default' not in param:
+                vstyle = 0
             else:
-                lines = wrap(about, width - 4)[:1]
-                if len(wrap(about, width - 4)) > 1:
-                    lines = [lines[0][:width - 5] + g['more']]
-            out.extend(([('    ' + s, curses.A_NORMAL if focused else self.style('dim'))], i) for s in lines)
+                vstyle = curses.A_DIM
+            head = [(style.mark(focused, g is UNICODE), curses.A_BOLD),
+                    (f'{param["name"][:name_w]:<{name_w}}  ',
+                     (curses.A_BOLD | self.style('accent')) if focused else 0),
+                    (f'{text:<{value_w}}  ', vstyle), (field_hint(param, focused), curses.A_DIM)]
+            out.append((head, i))
+            about = wrap(param.get('description', '') or '-', width - 4)
+            if not focused and len(about) > 2:
+                about = about[:1] + [about[1][:width - 5] + g['more']]
+            out.extend(([('    ' + s, curses.A_DIM)], i) for s in about)
         return out
 
     def value_text(self, package, command, param, values):
-        """A field's value as the form shows it: the value set, else (auto: X), (default X), (required) or
-        (not set); a switch as [x] on / [ ] off, a choice between arrows."""
+        """A field's value as the form shows it (value_text)."""
         found = self.detected.get((package['package'], command['name'], param['name']))
-        text = shown(values[param['name']], param) if is_set(param, values) else placeholder(param, found)
-        if kind(param) == 'switch':
-            on = onoff(values.get(param['name'], param.get('default')))
-            return f'[{"x" if on == "on" else " "}] {on}' + ('' if is_set(param, values) else ' (default)')
-        if kind(param) == 'choice':
-            return f'{self.g["left"]} {text} {self.g["right"]}'
-        return text
+        return value_text(param, values.get(param['name']), is_set(param, values), found, self.g['dash'])
 
     def draw_detail(self, package, command, x, width, height):
         """Name and summary, the param form (scrolled to the focus), its notes; once opened, its details."""
         header = [([(command['name'], curses.A_BOLD)], None)] + \
             [([(s, 0)], None) for s in wrap(command['summary'], width)] + [([('', 0)], None)]
-        notes = [([(s, self.style('note'))], None) for s in wrap(command['notes'], width)]
+        notes = [([(s, 0)], None) for s in wrap(command['notes'], width)]
         opened = self.focus == 'params' or self.opened is command
         technical = ' '.join(filter(None, (command.get('details'), command['ros'] and 'ros: ' + command['ros'])))
         if technical and opened:              # the technical part only once the entry is opened
@@ -652,7 +808,8 @@ class Browser:
                 break_on_hyphens=False)]
         else:
             body = self.fields(package, command, width)
-        room = max(height - len(header) - len(notes), min(len(body), 4))
+        # In the form the fields come first (the notes get what is left); else the notes stay whole.
+        room = max(height - len(header) - (0 if self.focus == 'params' else len(notes)), min(len(body), 4))
         start = 0
         if self.focus == 'params' and len(body) > room:
             mine = [i for i, (_, f) in enumerate(body) if f == self.param]
@@ -725,10 +882,10 @@ class Browser:
         if current is None and unset and not is_set(param, values):
             current = 0
         h, w = self.screen.getmaxyx()
-        x = max(w // 3, 2)
-        index = menu(self.screen, 2, x, min(h - 6, len(rows) + 2), w - x - 2,
-                     f'{param["name"]}: pick one', rows, current or 0, self.style('accent'), current,
-                     utf=self.g is UNICODE)
+        x = min(34, w // 3) + 3                                  # the right pane, as drawn
+        index = menu(self.screen, 1, x, min(h - 6, len(rows) + 3), w - x - 1,
+                     f'Choose {param["name"]} for {command["name"]}', rows, current or 0, self.style('accent'),
+                     current, utf=self.g is UNICODE, rule=True)
         if index is None:
             return
         if unset and index == 0:
@@ -761,6 +918,9 @@ class Browser:
             package, command = self.selected(self.rows())
             key = self.screen.get_wch()
             self.status = ''
+            if self.keys or key == '?':       # ? shows every key; any key closes the list
+                self.keys = not self.keys
+                continue
             if key == '\x1b' and self.focus == 'list' and self.word:
                 self.word = ''  # Esc clears the filter first, then quits
                 continue
