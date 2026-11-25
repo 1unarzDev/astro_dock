@@ -285,7 +285,11 @@ def outside(vessel, stack):
 
 
 def clean_shm(vessel, stack):
-    """Remove the host's stale Fast DDS shared-memory files (in its container); one line with the count."""
+    """Remove the host's stale Fast DDS shared-memory files (in its container); one line with the count.
+    Never for a simulated vessel: its worlds share /dev/shm across containers (host IPC), so files another
+    container holds look unheld from here and removing them kills that world's DDS."""
+    if vessel.astro.get('sim') or os.environ.get('ASTRO_SIM_INSTANCE'):
+        return
     _, lines = run_on(vessel, stack, SHM_SCRIPT, tag='astro-shm')
     found = tagged(lines, 'astro-shm')
     if found and found[-1].isdigit():
