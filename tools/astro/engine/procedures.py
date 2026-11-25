@@ -139,6 +139,8 @@ def run(ctx, name, space='large', amp=None):
         runner.listen(listen)
         if topics.get('gps_status') and hasattr(runner, 'listen_gps'):
             runner.listen_gps(topics['gps_status'])
+        if topics.get('single') and hasattr(runner, 'listen_single'):
+            runner.listen_single(topics['single'])
     try:
         if not runner.wait_ready():
             raise Abort(f'no odometry on {topics["odom"]} (or no /clock with sim time)')
@@ -828,6 +830,7 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
     show = Display(ctx, cover, axes, ctx.spec.rotational, test.get('max'), test.get('keyboard'))
     start = runner.now()
     ended, finished = 'complete', set()
+    singles, seen_single = [], set()
     try:
         while True:
             runner.hold(None, 0.5)
@@ -852,6 +855,20 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
                 if cover.pair(j, sign) == int(o['levels']) and pair not in finished:
                     finished.add(pair)
                     show.emit(f'{show.name(j, sign)} done ({int(o["levels"])} levels)')
+            names = (test.get('thrusters') or {}).get('names') or [f'thruster {i + 1}' for i in range(8)]
+            expect = (test.get('thrusters') or {}).get('yaw')
+            for push in single_runs(getattr(runner, 'singles', None) or [], o):
+                if push[3] in seen_single or ctx.spec.rotational not in axes:
+                    continue
+                seen_single.add(push[3])
+                found = single_push(runner, push, axes.index(ctx.spec.rotational), o,
+                                    expect[push[0]] if expect and push[0] < len(expect) else None)
+                if found:
+                    singles.append(found)
+                    name = names[push[0]] if push[0] < len(names) else str(push[0])
+                    show.emit(f'thruster {name} {"fwd" if push[1] > 0 else "rev"} {push[2]:.2f} alone: yaw '
+                              f'{found["yaw"]:+.2f} rad/s, speed {found["speed"]:.2f} m/s'
+                              + (f', rise delay {found["delay"]:.2f} s tau {found["tau"]:.2f} s' if 'delay' in found else ''))
             last = done[-1] if done else None
             from_rest = bool(current and current['kind'] == 'hold' and last and last[0] == 'neutral'
                              and current['t0'] - last[5] <= EFFORT_GAP_S and last[5] - last[4] >= o['rest_s'])
@@ -889,6 +906,16 @@ def watch(ctx, runner, test, state, defaults, room, amplitude):
             outcome['summary'] += ' | ' + cross['summary']
         if cross['changes']:
             outcome['live'] = list(target.get('live') or [])
+    if singles:
+        names = (test.get('thrusters') or {}).get('names') or [f'thruster {i + 1}' for i in range(8)]
+        report = thruster_report(singles, names)
+        outcome['measured']['thrusters'] = dict(report, pushes=singles)
+        for verdict in report['verdicts']:
+            ctx.out(f'  thrusters: {verdict}')
+        if report['verdicts']:
+            outcome['summary'] += ' | thrusters: ' + '; '.join(report['verdicts'])
+        elif report['table']:
+            outcome['summary'] += ' | thrusters: matched within 15%'
     found = quality(ctx, runner, cover, o)
     outcome['quality'] = found
     outcome['summary'] = f'quality {found["score"]}/100 | ' + outcome['summary']
@@ -1380,6 +1407,83 @@ def plant(ctx, runner, cover, o, test, curves):
                     entry['added'] = round(best * force - float(own), 3)
         out[axis] = entry
     return out
+
+
+def single_runs(singles, o):
+    """One-thruster pushes from the test command (t, index, effort): (index, sign, level, t0, t1) where one
+    thruster held one effort (within steady_tol) for at least cross_min_s; a pause over EFFORT_GAP_S ends one."""
+    out, cur = [], None
+    for t, index, effort in singles:
+        same = cur and index == cur[0] and abs(effort - cur[1]) <= o['steady_tol'] and t - cur[3] <= EFFORT_GAP_S
+        if same:
+            cur[3] = t
+            continue
+        if cur and abs(cur[1]) >= o['min_effort'] and cur[3] - cur[2] >= o['cross_min_s']:
+            out.append((cur[0], 1 if cur[1] > 0 else -1, round(abs(cur[1]), 3), cur[2], cur[3]))
+        cur = [index, effort, t, t]
+    return out
+
+
+def single_push(runner, push, rotational, o, expect=None):
+    """What one thruster did alone: yaw rate (gyro), speed (heading-free size of the planar velocity) and
+    the fitted rise of the yaw rate (delay + tau), signed so the thruster's own yaw direction is positive
+    when ``expect`` (its yaw sign per forward effort) is known."""
+    from . import fit
+    index, sign, level, t0, t1 = push
+    rows = runner.window(t0 + o['cross_skip_s'], t1)
+    if len(rows) < 3:
+        return None
+    wz = sum(r[1 + rotational] for r in rows) / len(rows)
+    speed = sum(math.hypot(r[1], r[2]) for r in rows) / len(rows)
+    direction = (expect or 1) * sign
+    span = runner.window(t0, t1)
+    found = fit.first_order([r[0] for r in span], [direction * r[1 + rotational] for r in span], t0,
+                            delays=tuple(round(0.05 * k, 2) for k in range(13)))
+    out = dict(thruster=index, sign=sign, level=level, yaw=round(wz, 4), speed=round(speed, 4),
+               yaw_own=round(direction * wz, 4))
+    if found and found[0] > 0:
+        out.update(delay=round(found[2], 2), tau=round(found[1], 3))
+    return out
+
+
+def thruster_report(pushes, names):
+    """Each thruster against the others at the same effort and direction: weak (yaw and speed both low),
+    lever or orientation (yaw off while speed matches), late (rise delay well above the others)."""
+    groups = {}
+    for p in pushes:
+        groups.setdefault((p['sign'], round(p['level'] * 20) / 20), []).append(p)
+    table, verdicts = {}, []
+    for (sign, level), items in sorted(groups.items()):
+        per = {}
+        for p in items:
+            per.setdefault(p['thruster'], []).append(p)
+        if len(per) < 2:
+            continue
+        mean = {k: statistics.median(statistics.median(x[k] for x in ps) for ps in per.values())
+                for k in ('yaw_own', 'speed')}
+        delays = [statistics.median(x['delay'] for x in ps if 'delay' in x) for ps in per.values()
+                  if any('delay' in x for x in ps)]
+        for index, ps in sorted(per.items()):
+            name = names[index] if index < len(names) else str(index)
+            yaw = statistics.median(x['yaw_own'] for x in ps)
+            speed = statistics.median(x['speed'] for x in ps)
+            d = [x['delay'] for x in ps if 'delay' in x]
+            delay = statistics.median(d) if d else None
+            ry = yaw / mean['yaw_own'] if mean['yaw_own'] else None
+            rs = speed / mean['speed'] if mean['speed'] else None
+            key = f'{name} {"fwd" if sign > 0 else "rev"} {level:g}'
+            table[key] = dict(n=len(ps), yaw=round(yaw, 3), speed=round(speed, 3), delay=delay,
+                              yaw_ratio=None if ry is None else round(ry, 2),
+                              speed_ratio=None if rs is None else round(rs, 2))
+            if ry is not None and rs is not None and ry < 0.85 and rs < 0.85:
+                verdicts.append(f'{key}: weak (yaw {ry:.0%}, speed {rs:.0%} of the others): check its ESC '
+                                f'calibration and prop')
+            elif ry is not None and rs is not None and abs(ry - 1) > 0.15 and abs(rs - 1) <= 0.1:
+                verdicts.append(f'{key}: same push, different turn (yaw {ry:.0%}, speed {rs:.0%}): its angle or '
+                                f'lever arm differs (mounting), not its strength')
+            if delay is not None and len(delays) >= 2 and delay > statistics.median(delays) + 0.1:
+                verdicts.append(f'{key}: starts late (rise delay {delay:.2f} s against {statistics.median(delays):.2f} s)')
+    return dict(table=table, verdicts=verdicts)
 
 
 GPS_FIX = {0: 'no GPS', 1: 'no fix', 2: '2D', 3: '3D', 4: 'DGPS', 5: 'RTK float', 6: 'RTK fixed'}

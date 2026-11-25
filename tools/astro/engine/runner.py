@@ -112,6 +112,17 @@ class Runner:
             self.efforts.append((self.now(), msg.linear.x, msg.linear.y, msg.angular.z))
         self.node.create_subscription(self.Twist, topic, effort, 20)
 
+    def listen_single(self, topic):
+        """Record the one-thruster test command (std_msgs/Float32MultiArray [index, effort]): self.singles
+        gets (t, index, effort)."""
+        from std_msgs.msg import Float32MultiArray
+        self.singles = []
+
+        def single(msg):
+            if len(msg.data) == 2:
+                self.singles.append((self.now(), int(msg.data[0]), float(msg.data[1])))
+        self.node.create_subscription(Float32MultiArray, topic, single, 20)
+
     def listen_gps(self, topic):
         """Record the GPS fix type (mavros_msgs/GPSRAW, MAVLink GPS_RAW_INT: 4 DGPS, 5 RTK float, 6 RTK fixed):
         self.gps gets (t, fix_type). Without mavros_msgs nothing is recorded."""

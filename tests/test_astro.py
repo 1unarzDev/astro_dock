@@ -491,6 +491,23 @@ class Watch(unittest.TestCase):
         self.assertAlmostEqual(found[0], a, delta=0.05)
         self.assertAlmostEqual(found[1], b, delta=0.15)
 
+    def test_one_thruster_pushes_and_the_weak_late_one(self):
+        procedures = procedures_module()
+        o = procedures.watch_options({})
+        singles = [(t * 0.04, 1, 0.3) for t in range(60)] + [(2.6 + t * 0.04, 1, 0.0) for t in range(10)]
+        self.assertEqual(procedures.single_runs(singles + [(9.0, 2, 0.3)], o), [(1, 1, 0.3, 0.0, 2.36)])
+        def push(i, yaw, speed, delay):
+            return dict(thruster=i, sign=1, level=0.3, yaw_own=yaw, speed=speed, delay=delay)
+        names = ['FL', 'FR', 'RR', 'RL']
+        weak = [push(0, 0.40, 0.20, 0.20), push(1, 0.25, 0.13, 0.45), push(2, 0.41, 0.21, 0.2), push(3, 0.40, 0.20, 0.2)]
+        text = ' '.join(procedures.thruster_report(weak, names)['verdicts'])
+        self.assertIn('FR fwd 0.3: weak', text)
+        self.assertIn('FR fwd 0.3: starts late', text)
+        self.assertNotIn('FL', text)
+        mounted = [push(0, 0.40, 0.20, 0.2), push(1, 0.40, 0.20, 0.2), push(2, 0.41, 0.20, 0.2), push(3, 0.30, 0.20, 0.2)]
+        text = ' '.join(procedures.thruster_report(mounted, names)['verdicts'])
+        self.assertIn('RL fwd 0.3: same push, different turn', text)      # speed matches, yaw off: mounting
+
     def test_mixed_commands_are_not_holds(self):
         procedures = procedures_module()
         o = procedures.watch_options({})
