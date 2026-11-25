@@ -30,6 +30,7 @@ spatio_temporal_voxel_layer
 nmea_msgs
 py_trees  # behaviour trees for robot tasks
 rmw_cyclonedds_cpp
+rmw_fastrtps_cpp  # the RMW run_env.py selects; images built without it fail every ros2 command
 robot_localization
 ros2_control
 ros2_controllers
