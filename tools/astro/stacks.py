@@ -34,7 +34,7 @@ from .engine import log
 PROBE = Path(__file__).with_name('probe.py')
 KEYS = {'host', 'run', 'ready', 'needs', 'default', 'with'}
 READY_S = 60.0
-SETTLE_S = 2.0                # discovery time for a topic's publishers to show
+SETTLE_S = 5.0                # at most this long for discovery to show a topic's publishers
 USING = '{} already running (started outside astro); using it'
 
 
@@ -176,12 +176,12 @@ echo "astro-stack $how $p $t $l"
 
 
 def outside_script(name, topics, data, settle):
-    """Shell: `astro-ps NAME up` when NAME's own process group runs, else `astro-ps NAME down` and the probe's
-    (stdin) publishers of TOPICS."""
+    """Shell: ps_script's `astro-ps NAME up|down PID EPOCH LOG` line; when NAME's own process group is down,
+    also the probe's (stdin) publishers of TOPICS."""
     n, words = shlex.quote(name), ' '.join(shlex.quote(t) for t in topics)
     pubs = f'python3 - pubs {settle:g} {words} || echo "astro-pubs {{}}"' if topics else 'echo "astro-pubs {}"'
-    return prelude(data) + (f'if alive {n}; then echo "astro-ps {name} up"; '
-                            f'else echo "astro-ps {name} down"; {pubs}; fi\n')
+    return prelude(data) + (f'if alive {n}; then echo "astro-ps {name} up $p $t $l"; '
+                            f'else echo "astro-ps {name} down - - ${{l:--}}"; {pubs}; fi\n')
 
 
 # Fast DDS files that no process holds open or mapped (fd and maps; fuser too where it exists), older than 10 s
@@ -264,22 +264,24 @@ def duplicates(pubs):
     out = []
     for topic, nodes in pubs.items():
         if len(nodes) > 1:
-            counts = Counter(n.rsplit('/', 1)[-1] for n in nodes)
+            counts = Counter('?' if 'UNKNOWN' in n else n.rsplit('/', 1)[-1] for n in nodes)
             who = ', '.join(f'{n} x{c}' if c > 1 else n for n, c in sorted(counts.items()))
             out.append(f'DUPLICATE: {topic} has {len(nodes)} publishers ({who})')
     return out
 
 
 def outside(vessel, stack):
-    """(classify(...) or 'unreachable', {topic: [node]}) of the stack on its host."""
+    """(classify(...) or 'unreachable', {topic: [node]}, [name, up|down, pid, epoch, log]) of the stack on
+    its host, in one call."""
     _, lines = run_on(vessel, stack, outside_script(stack.name, stack.ready, data_expr(vessel.astro), SETTLE_S),
                       PROBE.read_text())
     row = tagged(lines, 'astro-ps')
     if not row:
-        return 'unreachable', {}
+        return 'unreachable', {}, [stack.name, 'unreachable', '-', '-', '-']
     found = tagged(lines, 'astro-pubs')
     pubs = json.loads(found[-1]) if found else {}
-    return classify(row[-1].split()[1] == 'up', pubs), pubs
+    fields = (row[-1].split() + ['-'] * 5)[:5]
+    return classify(fields[1] == 'up', pubs), pubs, fields
 
 
 def clean_shm(vessel, stack):
@@ -386,13 +388,12 @@ def rows(vessel):
         host = host_of(vessel, stack)
         state, since, logfile = 'external', '', ''
         if stack.run:
-            _, lines = run_on(vessel, stack, ps_script([stack.name], data_expr(vessel.astro)))
-            row = (tagged(lines, 'astro-ps') or [f'{stack.name} unreachable - - -'])[-1].split()
+            how, _, row = outside(vessel, stack)
             state, epoch, logfile = row[1], row[3], row[4] if row[4] != '-' else ''
             if state == 'up' and epoch.isdigit():
                 since = str(datetime.timedelta(seconds=int(time.time()) - int(epoch)))
-        if state == 'down' and stack.ready and outside(vessel, stack)[0] == 'external':
-            state = 'up (external)'
+            if how == 'external':
+                state = 'up (external)'
         rates = probe(vessel, stack, 3.0) if state in ('up', 'external', 'up (external)') else {}
         pubs = rates.get('_pubs') or {}
         if state == 'external':

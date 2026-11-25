@@ -4,7 +4,7 @@ and `astro status` send this file as the stdin of `python3 - TIMEOUT WINDOW PID 
 Waits (at most TIMEOUT s, or until process group PID is gone; 0 = none) until every topic has published,
 then counts messages for WINDOW s, and prints one line: `astro-rates {"topic": hz, ..., "_dead": bool, "_pubs":
 {"topic": [node, ...]}}`. `python3 - pubs SETTLE TOPIC...` only lists each topic's publishing nodes (the most
-seen within SETTLE s of discovery): `astro-pubs {"topic": [node, ...]}`."""
+seen within SETTLE s of discovery, sooner once every topic has one): `astro-pubs {"topic": [node, ...]}`."""
 import json
 import os
 import sys
@@ -38,6 +38,8 @@ def publishers(topics, settle):
                 found = names(node, topic)
                 if len(found) > len(seen[topic]):
                     seen[topic] = found
+            if all(seen.values()):        # every topic has one: enough to tell it runs
+                break
             rclpy.spin_once(node, timeout_sec=0.1)
         return seen
     finally:

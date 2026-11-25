@@ -491,6 +491,23 @@ class Watch(unittest.TestCase):
         self.assertAlmostEqual(found[0], a, delta=0.05)
         self.assertAlmostEqual(found[1], b, delta=0.15)
 
+    def test_one_thruster_pushes_and_the_weak_late_one(self):
+        procedures = procedures_module()
+        o = procedures.watch_options({})
+        singles = [(t * 0.04, 1, 0.3) for t in range(60)] + [(2.6 + t * 0.04, 1, 0.0) for t in range(10)]
+        self.assertEqual(procedures.single_runs(singles + [(9.0, 2, 0.3)], o), [(1, 1, 0.3, 0.0, 2.36)])
+        def push(i, yaw, speed, delay):
+            return dict(thruster=i, sign=1, level=0.3, yaw_own=yaw, speed=speed, delay=delay)
+        names = ['FL', 'FR', 'RR', 'RL']
+        weak = [push(0, 0.40, 0.20, 0.20), push(1, 0.25, 0.13, 0.45), push(2, 0.41, 0.21, 0.2), push(3, 0.40, 0.20, 0.2)]
+        text = ' '.join(procedures.thruster_report(weak, names)['verdicts'])
+        self.assertIn('FR fwd 0.3: weak', text)
+        self.assertIn('FR fwd 0.3: starts late', text)
+        self.assertNotIn('FL', text)
+        mounted = [push(0, 0.40, 0.20, 0.2), push(1, 0.40, 0.20, 0.2), push(2, 0.41, 0.20, 0.2), push(3, 0.30, 0.20, 0.2)]
+        text = ' '.join(procedures.thruster_report(mounted, names)['verdicts'])
+        self.assertIn('RL fwd 0.3: same push, different turn', text)      # speed matches, yaw off: mounting
+
     def test_mixed_commands_are_not_holds(self):
         procedures = procedures_module()
         o = procedures.watch_options({})
@@ -665,7 +682,7 @@ class Stacks(unittest.TestCase):
         states = {'sensors': (False, {}), 'camera': (True, {}), 'drive': (False, {})}
         out = io.StringIO()
         with mock.patch.object(stacks, 'states_of', return_value=states), \
-                mock.patch.object(stacks, 'outside', return_value=('down', {})), \
+                mock.patch.object(stacks, 'outside', return_value=('down', {}, [])), \
                 mock.patch.object(stacks, 'down') as down, mock.patch.object(stacks, 'up', return_value=0) as up, \
                 contextlib.redirect_stdout(out):
             self.assertEqual(stacks.ensure(vessel, '/d', 'trial', ['drive+controller'], [{'camera': 'it holds X'}]), 0)
@@ -718,7 +735,7 @@ class Stacks(unittest.TestCase):
                          ['DUPLICATE: /odom has 2 publishers (ekf_local x2)', 'DUPLICATE: /x has 2 publishers (a, b)'])
         vessel = mock.Mock(astro=self.SECTION)
         states = {'sensors': (False, {}), 'camera': (False, {}), 'drive': (False, {})}
-        where = {'sensors': ('external', hand), 'drive': ('down', {})}
+        where = {'sensors': ('external', hand, []), 'drive': ('down', {}, [])}
         out = io.StringIO()
         with mock.patch.object(stacks, 'states_of', return_value=states), \
                 mock.patch.object(stacks, 'outside', side_effect=lambda v, s: where[s.name]), \
@@ -728,7 +745,7 @@ class Stacks(unittest.TestCase):
                                                        'starting drive (needed by trial)'])
         up.assert_called_once_with(vessel, '/d', ['drive'], [], force=True)
         out = io.StringIO()                                 # astro up refuses it unless --force
-        with mock.patch.object(stacks, 'outside', return_value=('external', hand)), \
+        with mock.patch.object(stacks, 'outside', return_value=('external', hand, [])), \
                 mock.patch.object(stacks, 'run_on') as run_on, mock.patch.object(stacks, 'host_of', return_value='h'), \
                 mock.patch.object(stacks.log, 'write'), contextlib.redirect_stdout(out):
             self.assertEqual(stacks.up(vessel, '/d', ['sensors'], []), 0)
@@ -740,9 +757,8 @@ class Stacks(unittest.TestCase):
         from astro import stacks
         vessel = mock.Mock(astro={'stacks': {'loc': self.SECTION['stacks']['sensors']}})
         two = {'/odom': 211.0, '_dead': False, '_pubs': {'/odom': ['/ekf_local', '/ekf_local']}}
-        with mock.patch.object(stacks, 'run_on', return_value=(0, ['astro-ps loc down - - -'])), \
-                mock.patch.object(stacks, 'host_of', return_value='h'), \
-                mock.patch.object(stacks, 'outside', return_value=('external', {})), \
+        with mock.patch.object(stacks, 'host_of', return_value='h'), \
+                mock.patch.object(stacks, 'outside', return_value=('external', {}, ['loc', 'down', '-', '-', '-'])), \
                 mock.patch.object(stacks, 'probe', return_value=two):
             found = stacks.rows(vessel)
         self.assertEqual(found[0][1], 'up (external)')
