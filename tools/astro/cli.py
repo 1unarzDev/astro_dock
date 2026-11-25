@@ -308,6 +308,8 @@ def cmd_test(s, args):
         recording = bool(preset) and not rec.running(s.root)
         if recording:
             rec.start(s.vessel, [str(preset), name])
+        bag = (rec.running(s.root) or (None, None))[1]       # the bag this test lands in, started here or not
+        path = None
         try:
             path = procedures.run(ctx, name, args.space, args.amp)
             done = config.load_yaml(path) or {}
@@ -323,6 +325,12 @@ def cmd_test(s, args):
         finally:
             if recording:
                 rec.stop(s.vessel)
+            if bag and path:                  # the result's quality problems go into the bag's ISSUES.yaml
+                done = config.load_yaml(path) or {}
+                quality = done.get('quality') or {}
+                rec.note_issues(bag, f'astro test {name}', [dict(what=p['what'], fix=p['fix'])
+                                                            for p in quality.get('problems') or []],
+                                result=str(path), quality=quality.get('score'), summary=done.get('summary'))
     if waiting:                           # what this run measured comes first: apply it before anything else
         print(f'next: astro apply {waiting[-1][0]}')
         return 0

@@ -90,7 +90,30 @@ def stop(vessel):
     else:
         os.killpg(pid, signal.SIGTERM)
     pid_file(root).unlink(missing_ok=True)
+    if not (Path(directory) / 'metadata.yaml').exists():
+        note_issues(directory, 'rec stop', [dict(what='the recorder did not close the bag (no metadata.yaml): the '
+                                                     'last file is cut off', fix='read it with a streaming mcap reader')])
     return 0
+
+
+ISSUES = 'ISSUES.yaml'     # in each bag directory: what was wrong with that recording, for people and agents
+
+
+def note_issues(directory, source, problems, **facts):
+    """Add what was wrong with a bag to its ISSUES.yaml (the convention: `issues:` a list of {what, fix, source,
+    at}, plus facts such as the result file and quality score). Never fails the caller."""
+    path = Path(directory) / ISSUES
+    try:
+        data = config.load_yaml(path) if path.exists() else {}
+        data = data if isinstance(data, dict) else {}
+        data.setdefault('bag', Path(directory).name)
+        at = datetime.datetime.now().astimezone().isoformat(timespec='seconds')
+        data.setdefault('issues', []).extend(dict(p, source=source, at=at) for p in problems)
+        data.update({k: v for k, v in facts.items() if v is not None})
+        import yaml
+        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    except (OSError, ValueError):
+        pass
 
 
 def span(directory):
