@@ -384,9 +384,12 @@ def menu(screen, y, x, h, w, title, choices, row=0, attr=0, current=None, utf=Tr
     the accent ATTR), the keys (and, with RULE, a line closing the box); the chosen index or None (Esc, q)."""
     values = [v for v, _ in choices]
     rows = choice_rows(choices, values[current] if current is not None else None)
+    top = None
     while True:
         room = max(h - 2 - rule, 1)
-        top = max(0, min(row - room // 2, len(choices) - room))
+        last, top = top, max(0, min(row - room // 2, len(choices) - room))
+        if last is not None and top != last:
+            screen.clearok(True)                 # repaint whole when it scrolls (see Browser.draw_list)
         for i in range(h):
             try:
                 screen.addstr(y + i, x, ' ' * (w - 1))
@@ -552,18 +555,18 @@ UNICODE = dict(tl='╭', tr='╮', bl='╰', br='╯', h='─', v='│', lt='├
 ASCII = dict(tl='+', tr='+', bl='+', br='+', h='-', v='|', lt='+', rt='+', bt='+', tt='+',
              sep=' - ', move='up/down', enter='Enter', more='~', dash='-')
 # The key line under the screen: groups of (key, what it does), split by meaning (moving, acting).
-HINTS = {'list': [[('move', 'move'), ('enter', 'open'), ('/', 'filter'), ('x', 'examples')],
+HINTS = {'list': [[('move', 'move'), ('enter', 'open'), ('Tab', 'group'), ('/', 'filter'), ('x', 'examples')],
                   [('r', 'run'), ('q', 'quit'), ('?', 'keys')]],
          'params': [[('move', 'move'), ('enter', 'change'), ('Tab', 'next'), ('Del', 'default')],
                     [('r', 'run'), ('q', 'back'), ('?', 'keys')]]}
 # Every key, shown by ? in the right pane.
 KEYS = [('↑↓ / j k', 'move in the list or the form'),
-        ('Enter / →', 'open the command: its form'),
+        ('Enter / →', 'open the command: its form; on a group: go to it, or fold and unfold it'),
+        ('Tab / Shift-Tab', 'in the list: next / previous group; in the form: next / previous field'),
         ('Enter / Space', 'in the form: change the field (pick, type, or switch on/off)'),
-        ('Tab / Shift-Tab', 'next / previous field'),
         ('Del / d', 'back to its default'),
         ('← / h', 'back to the list'),
-        ('/', 'filter by a word (Esc clears)'),
+        ('/', 'filter by a word, also a group name (Esc clears)'),
         ('x', 'examples instead of the form'),
         ('PgUp / PgDn', 'scroll a long command line'),
         ('r', 'run the line shown at the bottom'),
@@ -662,6 +665,16 @@ class Browser:
         self.row = max(0, min(self.row, len(commands) - 1))
         return commands[self.row][:2]
 
+    def next_group(self, step):
+        """Select the first command of the next (STEP 1) or previous (-1) package group, wrapping."""
+        commands = [r for r in self.rows() if r[1]]
+        if not commands:
+            return
+        starts = [i for i, r in enumerate(commands) if not i or r[0] is not commands[i - 1][0]]
+        here = max(i for i in starts if i <= self.row)
+        self.row = starts[(starts.index(here) + step) % len(starts)]
+        self.top = next(i for i, r in enumerate(self.rows()) if r[0] is commands[self.row][0] and r[2] == -1)
+
     def values_for(self, package, command):
         return self.values.setdefault((package['package'], command['name']), {})
 
@@ -683,7 +696,10 @@ class Browser:
         left, bottom = min(34, w // 3), h - 4 - max(len(shown_line), 1)
         count = sum(len(p['commands']) for p in self.packages)
         frame = self.style('dim')
+        groups = ', '.join(dict.fromkeys(r[0]['package'] for r in rows))
         title = f' astro help{g["sep"]}{count} commands'
+        if len(title) + len(groups) + 30 < w:
+            title += f' in {groups}'
         title += f'{g["sep"]}filter: {self.word}' if self.word else ''
         title += f'{g["sep"]}? for keys '
         self.put(0, 0, g['tl'] + g['h'] + g['h'] * (w - 3) + g['tr'], frame)
@@ -735,7 +751,12 @@ class Browser:
 
     def draw_list(self, rows, command, width, height):
         index = next((i for i, r in enumerate(rows) if r[1] is command), 0)
-        self.top = max(min(self.top, index), index - height + 1, 0)
+        top = max(min(self.top, index), index - height + 1, 0)
+        if top != self.top:
+            # Repaint whole when the list scrolls: curses would scroll the full screen width (the right
+            # pane too) and terminals that get those sequences wrong keep stale text.
+            self.screen.clearok(True)
+        self.top = top
         for y, (package, cmd, depth, label) in enumerate(rows[self.top:self.top + height], 1):
             x = 2 + 2 * (depth + 1)
             if depth == -2:
@@ -946,7 +967,9 @@ class Browser:
                     self.row += 1
                 else:
                     self.param = min(len(params) - 1, self.param + 1)
-            elif self.focus == 'list' and key in (curses.KEY_RIGHT, 'l', '\n', '\r', curses.KEY_ENTER, '\t'):
+            elif self.focus == 'list' and key in ('\t', curses.KEY_BTAB):
+                self.next_group(1 if key == '\t' else -1)
+            elif self.focus == 'list' and key in (curses.KEY_RIGHT, 'l', '\n', '\r', curses.KEY_ENTER):
                 if params:
                     self.focus, self.param, self.examples = 'params', 0, False
                     self.detect(package, command)
