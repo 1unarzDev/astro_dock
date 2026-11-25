@@ -407,18 +407,27 @@ def short(value, width=24):
 
 
 def undo_rows(entries):
-    """[(value, about)]: one row per apply, newest first; the value its time and test (unique)."""
+    """[(value, about)]: one row per apply, newest first; the value its test name then its time (unique),
+    the about the keys it changed and how many."""
     out, seen = [], set()
     for entry in entries:
-        value = f'{when(entry)}  {entry.get("test") or "?"}'
+        value = f'{entry.get("test") or "?"}  {when(entry)}'
         while value in seen:
             value += "'"
         seen.add(value)
         keys = [f'{k["label"]} {short(k["old"])} \u2192 {short(k["new"])}' for k in entry['keys']]
-        about = keys[0] + (f'  (+{len(keys) - 1} more)' if len(keys) > 1 else '')
+        about = keys[0] + (f'  (+{len(keys) - 1} more)' if len(keys) > 1 else '') if keys else ''
+        about += f'  ({len(keys)} key{"s" if len(keys) != 1 else ""})'
         out.append((value, about + (f'  [undone {when(dict(entry, time=entry["undone"]))}]'
                                     if entry.get('undone') else '')))
     return out
+
+
+def applied_at(entry, today=None):
+    """When an apply was made, in words: 14:12 today, else 2026-11-23 14:12."""
+    day, _, clock_time = entry['time'].partition(' ')
+    return f'{clock_time[:5]} today' if day == f'{today or datetime.date.today():%Y-%m-%d}' \
+        else f'{day} {clock_time[:5]}'
 
 
 def ask(question):
@@ -450,10 +459,13 @@ def cmd_undo(s, args):
         entry = pending[[v for v, _ in rows].index(picked)]
     defaults = s.spec.defaults()
     name, at = entry.get('test') or '?', when(entry)
-    print(f'undo {name} ({at}) restores:')
+    result = f' (result {entry["result"]})' if entry.get('result') else ''
+    print(f'Undo: {name}, applied {applied_at(entry)}{result}')
     skip = []
-    for item, now, later in applying.plan(state_path, entry, defaults):
-        print(f'  {item["label"]}: {shown(now)} \u2192 {shown(item["old"])}')
+    planned = applying.plan(state_path, entry, defaults)
+    width = max((len(item['label']) for item, _, _ in planned), default=0)
+    for item, now, later in planned:
+        print(f'  {item["label"]:<{width}}   now {shown(now)}  \u2192  back to {shown(item["old"])}')
         if now == item['new']:
             continue
         since = ', '.join(f'{o.get("test") or "?"} ({when(o)})' for o in later) or 'a hand edit'
@@ -464,22 +476,23 @@ def cmd_undo(s, args):
         elif not ask('    restore it anyway?'):
             print('    skipped')
             skip.append(item['label'])
-    if not args.last and not ask(f'write these to {state_path.name}?'):
+    if not args.last and not ask(f'Restore these values on the robot ({state_path.name})?'):
         print('nothing changed')
         return 1
     try:
         done = applying.revert(state_path, entry, defaults, s.vessel.astro.get('check'), skip)
     except applying.Refused as error:
-        log.write(s.root, 'apply', f'undo {name} ({at})  refused by the check, state unchanged', s.events)
+        log.write(s.root, 'apply', f'not undone: {name} (applied {at})  refused by the check, state unchanged',
+                  s.events)
         raise config.Error(str(error)) from None
     if not done:
         print('  nothing to restore: the state already holds those values')
         return 0
     keys = '; '.join(f'{label} \u2192 {shown(value)}' for label, _, value in done)
-    log.write(s.root, 'apply', f'undo {name} ({at}): {keys}', s.events)
+    log.write(s.root, 'apply', f'undone: {name} (applied {at}): {keys}', s.events)
     if not skip:
         results.unmark_applied(s.root, entry['backup'])
-    print(f'  restored in {state_path}')
+    print(f'undone: {name} (applied {applied_at(entry).removesuffix(" today")}), restored in {state_path}')
     live = entry.get('live') or []
     for line in applying.set_live(live, state_path, defaults) if config.have_ros() else (
             ['not live: no ROS here; applies at the next launch'] if live else []):

@@ -220,18 +220,19 @@ class Apply(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), unittest.mock.patch.object(cli.config, 'have_ros', lambda: False):
             self.assertEqual(cli.cmd_undo(session, args), 0)
-        self.assertIn('undo second', out.getvalue())
-        self.assertIn('y: 5 \u2192 unset', out.getvalue())
+        self.assertRegex(out.getvalue(), r'^Undo: second, applied \d\d:\d\d today\n')
+        self.assertIn('  y   now 5  \u2192  back to unset', out.getvalue())
+        self.assertRegex(out.getvalue(), r'\nundone: second \(applied \d\d:\d\d\), restored in ')
         self.assertEqual(yaml.safe_load(self.state.read_text()), {'other': 1, 'x': 1})
         self.assertRegex((self.dir / 'data').glob('*/log.txt').__next__().read_text(),
-                         r'apply +undo second \(\d\d:\d\d:\d\d\): y \u2192 unset')
+                         r'apply +undone: second \(applied \d\d:\d\d:\d\d\): y \u2192 unset')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(cli.cmd_undo(session, SimpleNamespace(last=False, listing=True)), 0)
         lines = out.getvalue().splitlines()
-        self.assertIn('second', lines[0])
+        self.assertTrue(lines[0].lstrip().startswith('second  '))
         self.assertIn('[undone', lines[0])
-        self.assertIn('x unset \u2192 1', lines[1])
+        self.assertIn('x unset \u2192 1  (1 key)', lines[1])
 
 
 class Log(unittest.TestCase):
