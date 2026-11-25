@@ -5,8 +5,8 @@ reversed full-width line; descriptions are dim; nothing else is coloured. The me
 colour (NO_COLOR, or a terminal without colours): the marker and bold carry it. The colours are the
 terminal's own palette entries, so they follow its theme, light or dark.
 
-.devcontainer/astro-help.py loads this file from the workspace; mhseals_hardware's thrusters screen mirrors
-these constants (it cannot import astro_dock).
+.devcontainer/astro-help.py loads this file from the workspace; a team package's own screens mirror these
+constants (they cannot import astro_dock).
 """
 import os
 
