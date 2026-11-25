@@ -722,6 +722,7 @@ def parser():
     u = sub.add_parser('up', add_help=False)
     u.add_argument('names', nargs='*')
     u.add_argument('--with', dest='options', action='append', default=[])
+    u.add_argument('--force', action='store_true')    # start even when it runs outside astro
     sub.add_parser('down', add_help=False).add_argument('names', nargs='*')
     g = sub.add_parser('logs', add_help=False)
     g.add_argument('name', nargs='?')

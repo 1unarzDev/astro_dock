@@ -9,7 +9,13 @@ stops one. The vessel profile's `astro.stacks` is an ordered map:
 ready topics); `with` names extra arguments `astro up --with OPTION` appends. On its host a stack runs in
 the dev container in a private tmux server (`tmux -L astro`, session NAME) when tmux is there, else under
 setsid; either way its process group is in DATA/stacks/NAME.pid (`PID EPOCH LOG`) and its output in
-DATA/DATE/stacks/NAME.log."""
+DATA/DATE/stacks/NAME.log.
+
+A stack whose own process is down but whose ready topics already have publishers was started outside astro:
+up and a command's needs use it rather than start a second copy (`astro up --force` starts one anyway), and
+status shows it `up (external)`. Before up starts a stack on a host it removes the Fast DDS shared-memory
+files (/dev/shm/fastrtps_*) that no live process holds, left by dead ROS processes."""
+from collections import Counter
 from dataclasses import dataclass, field
 import datetime
 import json
@@ -28,6 +34,8 @@ from .engine import log
 PROBE = Path(__file__).with_name('probe.py')
 KEYS = {'host', 'run', 'ready', 'needs', 'default', 'with'}
 READY_S = 60.0
+SETTLE_S = 2.0                # discovery time for a topic's publishers to show
+USING = '{} already running (started outside astro); using it'
 
 
 @dataclass
@@ -167,6 +175,30 @@ echo "astro-stack $how $p $t $l"
 '''
 
 
+def outside_script(name, topics, data, settle):
+    """Shell: `astro-ps NAME up` when NAME's own process group runs, else `astro-ps NAME down` and the probe's
+    (stdin) publishers of TOPICS."""
+    n, words = shlex.quote(name), ' '.join(shlex.quote(t) for t in topics)
+    pubs = f'python3 - pubs {settle:g} {words} || echo "astro-pubs {{}}"' if topics else 'echo "astro-pubs {}"'
+    return prelude(data) + (f'if alive {n}; then echo "astro-ps {name} up"; '
+                            f'else echo "astro-ps {name} down"; {pubs}; fi\n')
+
+
+# Fast DDS files that no process holds open or mapped (fd and maps; fuser too where it exists), older than 10 s
+SHM_SCRIPT = r'''held=$( { find /proc/[0-9]*/fd -maxdepth 1 -type l -printf '%l\n' 2>/dev/null | grep '^/dev/shm/'
+  grep -ho '/dev/shm/[^ ]*' /proc/[0-9]*/maps 2>/dev/null; } | sort -u)
+n=0; now=$(date +%s)
+for f in /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*; do
+  [ -f "$f" ] || continue
+  printf '%s\n' "$held" | grep -qxF -- "$f" && continue
+  command -v fuser >/dev/null 2>&1 && fuser -s "$f" 2>/dev/null && continue
+  [ $(( now - $(stat -c %Y "$f" 2>/dev/null || echo "$now") )) -ge 10 ] || continue
+  rm -f -- "$f" 2>/dev/null; [ -e "$f" ] || n=$((n+1))
+done
+echo "astro-shm $n"
+'''
+
+
 def ps_script(names, data):
     body = ''.join(f'if alive {shlex.quote(n)}; then echo "astro-ps {n} up $p $t $l"; '
                    f'else echo "astro-ps {n} down - - ${{l:--}}"; fi\n' for n in names)
@@ -205,10 +237,58 @@ def tagged(lines, tag):
     return [line[len(tag) + 1:] for line in lines if line.startswith(tag + ' ')]
 
 
-def rate_text(rates):
+def rate_text(rates, pubs=None):
+    """`topic 30Hz ...`, with each topic's publisher count when PUBS ({topic: [node]}) is given."""
     def hz(value):
         return 'none' if not value else f'{value:.0f}Hz' if value >= 1 else f'{value:.1f}Hz'
-    return ' '.join(f'{t} {hz(v)}' for t, v in rates.items() if not t.startswith('_'))
+
+    def count(topic):
+        if pubs is None:
+            return ''
+        n = len(pubs.get(topic) or [])
+        return f' ({n} pub{"" if n == 1 else "s"})'
+    return ' '.join(f'{t} {hz(v)}{count(t)}' for t, v in rates.items() if not t.startswith('_'))
+
+
+def classify(own_up, pubs):
+    """'up' when the stack's own process runs, 'external' when it does not but one of its ready topics has a
+    publisher (started outside astro), else 'down'. PUBS: {topic: [node]}."""
+    if own_up:
+        return 'up'
+    return 'external' if any(pubs.values()) else 'down'
+
+
+def duplicates(pubs):
+    """A DUPLICATE line per ready topic with more than one publisher (a ready topic has one source; two mean
+    two copies of a stack, e.g. one started by hand and one by astro)."""
+    out = []
+    for topic, nodes in pubs.items():
+        if len(nodes) > 1:
+            counts = Counter(n.rsplit('/', 1)[-1] for n in nodes)
+            who = ', '.join(f'{n} x{c}' if c > 1 else n for n, c in sorted(counts.items()))
+            out.append(f'DUPLICATE: {topic} has {len(nodes)} publishers ({who})')
+    return out
+
+
+def outside(vessel, stack):
+    """(classify(...) or 'unreachable', {topic: [node]}) of the stack on its host."""
+    _, lines = run_on(vessel, stack, outside_script(stack.name, stack.ready, data_expr(vessel.astro), SETTLE_S),
+                      PROBE.read_text())
+    row = tagged(lines, 'astro-ps')
+    if not row:
+        return 'unreachable', {}
+    found = tagged(lines, 'astro-pubs')
+    pubs = json.loads(found[-1]) if found else {}
+    return classify(row[-1].split()[1] == 'up', pubs), pubs
+
+
+def clean_shm(vessel, stack):
+    """Remove the host's stale Fast DDS shared-memory files (in its container); one line with the count."""
+    _, lines = run_on(vessel, stack, SHM_SCRIPT, tag='astro-shm')
+    found = tagged(lines, 'astro-shm')
+    if found and found[-1].isdigit():
+        n = int(found[-1])
+        print(f'{host_of(vessel, stack)}: removed {n} stale Fast DDS shared-memory file{"" if n == 1 else "s"}')
 
 
 def probe(vessel, stack, timeout, window=2.0):
@@ -225,17 +305,26 @@ def host_of(vessel, stack):
     return remote.place(vessel, stack.host)[0]
 
 
-def up(vessel, root, names, options):
+def up(vessel, root, names, options, force=False):
+    """Start NAMES (none: the default stacks) and their needs; a stack already running outside astro is used,
+    not started again, unless FORCE."""
     stacks = parse(vessel.astro)
     chosen = select(stacks, names)
     unknown = [o for o in options if not any(o in s.options for s in chosen)]
     if unknown:
         raise config.Error(f'--with {", ".join(unknown)}: no chosen stack has that option '
                            f'({", ".join(sorted({o for s in stacks.values() for o in s.options})) or "none"})')
-    width, failed = max(len(s.name) for s in chosen), 0
+    width, failed, cleaned = max(len(s.name) for s in chosen), 0, set()
     for stack in chosen:
         host = host_of(vessel, stack)
         how, tail = 'external', []
+        if stack.run and not force and outside(vessel, stack)[0] == 'external':
+            print(USING.format(stack.name))
+            log.write(root, 'stack', f'outside {stack.name}  {host}', vessel.astro.get('events'), echo=False)
+            continue
+        if stack.run and host not in cleaned:
+            cleaned.add(host)
+            clean_shm(vessel, stack)
         if stack.run:
             line = command(stack, options)
             code, lines = run_on(vessel, stack, start_script(stack.name, line, data_expr(vessel.astro)))
@@ -289,8 +378,9 @@ def down(vessel, root, names):
 
 
 def rows(vessel):
-    """[(name, state, host, uptime, rates text, log path)] of every stack, measured on its host: state is up,
-    down or unreachable, with * when the stack is started outside astro (run: null: its ready topics only)."""
+    """[(name, state, host, uptime, rates text, log path, DUPLICATE lines)] of every stack, measured on its
+    host: state is up, up (external) (its ready topics publish but its own process does not run), down or
+    unreachable, with * when the stack is started outside astro (run: null: its ready topics only)."""
     out = []
     for stack in parse(vessel.astro).values():
         host = host_of(vessel, stack)
@@ -301,10 +391,14 @@ def rows(vessel):
             state, epoch, logfile = row[1], row[3], row[4] if row[4] != '-' else ''
             if state == 'up' and epoch.isdigit():
                 since = str(datetime.timedelta(seconds=int(time.time()) - int(epoch)))
-        rates = probe(vessel, stack, 3.0) if state in ('up', 'external') else {}
+        if state == 'down' and stack.ready and outside(vessel, stack)[0] == 'external':
+            state = 'up (external)'
+        rates = probe(vessel, stack, 3.0) if state in ('up', 'external', 'up (external)') else {}
+        pubs = rates.get('_pubs') or {}
         if state == 'external':
             state = ('up' if all(rates.get(t) for t in stack.ready) else 'down') + '*'
-        out.append((stack.name, state, host, since, rate_text(rates), logfile))
+        out.append((stack.name, state, host, since, rate_text(rates, pubs if '_pubs' in rates else None), logfile,
+                    duplicates(pubs)))
     return out
 
 
@@ -313,9 +407,10 @@ def table(found):
     width = max((len(r[0]) for r in found), default=0)
     wide = max((len(r[1]) for r in found), default=0)
     lines = [f'{name:<{width}}  {state:<{wide}} {host}  {since:>8}  {rates}  {logfile}'.rstrip()
-             for name, state, host, since, rates, logfile in found]
+             for name, state, host, since, rates, logfile, *_ in found]
     if any(r[1].endswith('*') for r in found):
         lines.append('* started outside astro (run: null): its ready topics only')
+    lines += [warning for r in found for warning in (r[6] if len(r) > 6 else [])]
     return lines
 
 
@@ -426,16 +521,21 @@ def ensure(vessel, root, by, needs=(), conflicts=()):
     for name in restart:
         print(f'restarting {name} with {", ".join(o for o in options if o in stacks[name].options)} (needed by {by})')
         down(vessel, root, [name])
+    for name in list(start):          # one started outside astro is used, never started a second time
+        if outside(vessel, stacks[name])[0] == 'external':
+            print(USING.format(name))
+            start.remove(name)
     for name in start:
         print(f'starting {name} (needed by {by})')
     if not start and not restart:
         return 0
-    return up(vessel, root, start + restart, options)
+    return up(vessel, root, start + restart, options, force=True)     # start: just checked
 
 
 def main_up(vessel, root, args):
     try:
-        return up(vessel, root, args.names, [o for words in args.options for o in words.split(',') if o])
+        return up(vessel, root, args.names, [o for words in args.options for o in words.split(',') if o],
+                  args.force)
     except KeyboardInterrupt:
         print('\ninterrupted: started stacks keep running (astro status, astro down)', file=sys.stderr)
         return 130
