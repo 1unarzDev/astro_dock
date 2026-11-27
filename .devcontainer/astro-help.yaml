@@ -34,8 +34,9 @@ commands:
     details: >-
       The container is this checkout's dev service (ASTRO_CONTAINER, .devcontainer/.env, else the one Compose
       labels as this checkout's). A running one opens as it is and a stopped one is started as it is (docker
-      start); neither is rebuilt or recreated. Only with none at all is one created: prebuild.sh first without
-      .devcontainer/docker-compose.override.yml, then devcontainer up, else docker compose up -d --no-recreate dev.
+      start); neither is rebuilt or recreated. Only with none at all is one created: prebuild.sh first (the
+      vessel's ROS domain, names and config dir from the profile), then devcontainer up, else docker compose up
+      -d --no-recreate dev.
       The shell gets the vessel profile's environment, as astro on does.
     examples:
       - astro start

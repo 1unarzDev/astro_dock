@@ -15,9 +15,11 @@ USER_HOME = str(Path(WS).parent)               # the container user's home
 
 
 def names(dev):
-    """(container name, the base hostname alias, the operator config mount target) of a rendered dev service."""
-    config = [v['target'] for v in dev['volumes'] if v['target'].startswith(USER_HOME + '/.config/')]
-    return dev['container_name'], dev['extra_hosts'][0], config[0]
+    """(container name, the base hostname alias, astro's config dir under the mounted ~/.config) of a rendered
+    dev service; the user's whole ~/.config is the one config mount."""
+    assert [v['target'] for v in dev['volumes'] if v['target'].startswith(USER_HOME + '/.config')] == \
+        [USER_HOME + '/.config']
+    return dev['container_name'], dev['extra_hosts'][0], dev['environment']['ASTRO_CONFIG_DIR']
 
 
 class RunEnvTest(unittest.TestCase):
@@ -49,7 +51,7 @@ class RunEnvTest(unittest.TestCase):
             dev = json.loads(result.stdout)['services']['dev']
             values = dev['environment']
             # No profile: docker-compose.yml's generic names (prebuild names the hostname after the device).
-            self.assertEqual(names(dev), ('astro_dev', 'astro=127.0.1.1', USER_HOME + '/.config/astro'))
+            self.assertEqual(names(dev), ('astro_dev', 'astro=127.0.1.1', 'astro'))
             self.assertTrue((root / '.config/astro').is_dir())
             self.assertEqual(values['ROS_DOMAIN_ID'], '73')
             self.assertEqual(values['ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
@@ -138,7 +140,7 @@ class RunEnvTest(unittest.TestCase):
             self.assertEqual(domain({'ASTRO_VESSEL': 'a'}), '7')
             self.assertNotIn('WARNING', warnings[-1])
             # The profile's container names (hosts.yaml container:) through .devcontainer/.env; the environment wins.
-            self.assertEqual(config('names'), ('fixture_dev', 'fixture=127.0.1.1', USER_HOME + '/.config/fixture'))
+            self.assertEqual(config('names'), ('fixture_dev', 'fixture=127.0.1.1', 'fixture'))
             self.assertTrue((root / '.config/fixture').is_dir())
             self.assertEqual(config('names', ASTRO_CONTAINER='mine')[0], 'mine')
             # ASTRO_ALIAS names the alias; ASTRO_HOSTNAME (this machine's name) leaves it alone.

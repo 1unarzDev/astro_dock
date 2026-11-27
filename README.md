@@ -36,13 +36,14 @@ tools/bin/astro start               # sets up and starts the dev container, then
 `--non-interactive --yes` runs unattended). On Windows or macOS use `setup.windows.bat` or `./setup.mac.sh`
 with Docker Desktop running. `astro start` opens a shell in this checkout's dev container. A stopped one is started as
 it is (`docker start`), never rebuilt; only with none at all is one created (`devcontainer up`, else `docker compose up
--d --no-recreate dev`). The first time it also runs `.devcontainer/prebuild.sh`,
+-d --no-recreate dev`), always after `.devcontainer/prebuild.sh`,
 which picks this host's Compose adapter, writes `.devcontainer/.env` and pulls a newer dev image; run that again
 yourself to pick up a newer image later.
 
 The container's `dev` service runs as `roboboat` in `/home/roboboat/roboboat_ws`, with this repository
-mounted as the workspace. `~/.config/$ASTRO_CONFIG_DIR` (default `astro`; a profile's `container:` can
-rename it) is mounted too, so operator config survives a rebuild.
+mounted as the workspace. Your `~/.config` is mounted too, at the same paths: astro's own files
+(`~/.config/$ASTRO_CONFIG_DIR`, default `astro`, holds `run.yaml`; a profile's `container:` can rename it) and
+any team's (the vessel profile's state file) survive a rebuild, and a new container never misses them.
 On the host, `setup.linux.sh --components devtools` links `astro` into `~/.local/bin`, so it runs outside the
 container too.
 

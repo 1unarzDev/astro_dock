@@ -26,14 +26,18 @@ services:
       ROS_DOMAIN_ID: ${ASTRO_ROS_DOMAIN_ID:-0}     # ROS 2's default; prebuild injects the vessel's (its profile)
       ROS_WS: /home/roboboat/roboboat_ws
       ASTRO_DATA: /home/roboboat/roboboat_ws/bags   # the data root (run.yaml data.root)
+      # astro's own directory under the mounted ~/.config (run.yaml); a profile's container: config_dir renames it.
+      ASTRO_CONFIG_DIR: ${ASTRO_CONFIG_DIR:-astro}
       # Non-interactive bash (docker exec ... bash -c) sources the same ROS and DDS setup.
       BASH_ENV: /home/roboboat/roboboat_ws/.devcontainer/dev.bashrc
       FASTRTPS_DEFAULT_PROFILES_FILE: /home/roboboat/roboboat_ws/config/fastdds.xml
       FASTDDS_DEFAULT_PROFILES_FILE: /home/roboboat/roboboat_ws/config/fastdds.xml
     volumes:
       - ..:/home/roboboat/roboboat_ws
-      # Operator config survives container rebuilds; prebuild.sh creates the host directory.
-      - ${HOME}/.config/${ASTRO_CONFIG_DIR:-astro}:/home/roboboat/.config/${ASTRO_CONFIG_DIR:-astro}
+      # The user's whole config directory, at the same paths as on the host: astro's (profiles.env,
+      # secrets.env, run.yaml) and any team's (a vessel profile's state file, e.g. astro.state) survive
+      # container rebuilds, and a new container never misses one a profile names. prebuild.sh creates it.
+      - ${HOME}/.config:/home/roboboat/.config
       # Worktrees at their host paths, testable in place (hw.sh overlay, hw.sh pyenv); prebuild also
       # mounts this workspace at its host path so their .git links resolve. prebuild creates both.
       - ${HOME}/worktrees:${HOME}/worktrees

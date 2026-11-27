@@ -66,14 +66,16 @@ class Start(unittest.TestCase):
         assert self.ran == [[str(self.root / '.devcontainer' / 'prebuild.sh')],
                             ['devcontainer', 'up', '--workspace-folder', str(self.root)]]
         assert remote.os.execvp.call_args[0][1][-2:] == ['abc123', 'bash']
-        # set up already (the override exists) and no devcontainer CLI: compose creates it, never recreating one
+        # an old override exists and no devcontainer CLI: prebuild still runs first (the vessel's domain and
+        # config dir come from it), then compose creates it, never recreating one
         (self.root / '.devcontainer' / 'docker-compose.override.yml').write_text('')
         self.ran.clear()
         patch, run = self.docker('none')
         with patch, mock.patch.object(remote.shutil, 'which', return_value=None):
             remote.start(self.root, run)
-        assert len(self.ran) == 1 and self.ran[0][:2] == ['docker', 'compose']
-        assert self.ran[0][-4:] == ['up', '-d', '--no-recreate', 'dev']
+        assert self.ran[0] == [str(self.root / '.devcontainer' / 'prebuild.sh')]
+        assert len(self.ran) == 2 and self.ran[1][:2] == ['docker', 'compose']
+        assert self.ran[1][-4:] == ['up', '-d', '--no-recreate', 'dev']
 
     def test_a_failed_start_stops_and_inside_a_container_nothing_runs(self):
         with mock.patch.object(config, 'dev_container', return_value=''), \

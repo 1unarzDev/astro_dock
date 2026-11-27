@@ -292,9 +292,10 @@ def on(name, cmd):
 def start(root=config.WS, run=subprocess.call):
     """`astro start`: a shell in this checkout's dev container, in this terminal with the vessel's environment
     (as `astro on` gives one). A running container opens as it is and a stopped one is started as it is
-    (`docker start`): neither is rebuilt or recreated. Only with no container at all is one created (prebuild.sh
-    once, when the Compose override is missing; then `devcontainer up`, else `docker compose up -d
-    --no-recreate dev`)."""
+    (`docker start`): neither is rebuilt or recreated. Only with no container at all is one created: prebuild.sh
+    first, every time (it writes the vessel's ROS domain, container name and config dir from the profile; an
+    old override or a missing .env would give Compose's generic defaults), then `devcontainer up`, else
+    `docker compose up -d --no-recreate dev`."""
     if in_container():
         print('astro start: already inside a container (astro on HOST opens one of the robot\'s)')
         return 0
@@ -310,11 +311,10 @@ def start(root=config.WS, run=subprocess.call):
             raise config.Error(f'the dev container {stopped} did not start (docker logs {stopped} says why)')
     if not container:
         dev = Path(root) / '.devcontainer'
-        if not (dev / 'docker-compose.override.yml').exists():
-            print('astro start: first start on this machine, picking its Compose adapter (prebuild.sh)')
-            code = run([str(dev / 'prebuild.sh')])
-            if code:
-                return code
+        print('astro start: no dev container yet; prebuild.sh writes its settings from the vessel profile first')
+        code = run([str(dev / 'prebuild.sh')])
+        if code:
+            return code
         up = (['devcontainer', 'up', '--workspace-folder', str(root)] if shutil.which('devcontainer') else
               ['docker', 'compose', '-f', str(dev / 'docker-compose.yml'), '-f',
                str(dev / 'docker-compose.override.yml'), 'up', '-d', '--no-recreate', 'dev'])
