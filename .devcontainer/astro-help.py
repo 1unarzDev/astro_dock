@@ -38,6 +38,8 @@ help.yaml schema (unknown keys are ignored):
             choices_from: 'CMD' # shell command, run here: one choice per line, optionally VALUE<TAB>about;
                                 # a missing required one is picked from that list on a terminal
                                 # (with default: auto, its first line is what auto finds)
+            list: true          # optional: the details page lists choices_from's choices and their about
+                                # (for a short list that explains the command, such as a launch's parts)
             description: one line   # what the value means in real terms; core entries: at least 8 words
                                 # and, unless a bool or choice, e.g. VALUE
             free: why it is typed   # a str with no choices: why it cannot be picked (issue text, a label)
@@ -65,6 +67,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import threading
 import types
 from pathlib import Path
 
@@ -489,12 +492,30 @@ def details(command, paint=lambda code, s: s, width=None):
         out.append(f'    {name}  {type_text(param)}'
                    + paint('2', f'{style.SEP}{state_text(param)}'))
         out.extend(paint('2', ' ' * (name_w + 6) + line) for line in wrap(about, width - name_w - 2))
+        out.extend(listed(param, name_w, width, paint))
     if command['examples']:
         out.append('')
     out.extend(paint('2', f'    e.g. {example}') for example in command['examples'])
     if command.get('details'):
         out.append('')
     out.extend(paint('2', '    ' + line) for line in wrap(command.get('details') or '', width))
+    return out
+
+
+def listed(param, name_w, width, paint):
+    """The lines of a `list: true` param's choices on the details page: each value, its about wrapped beside it."""
+    if not (param.get('list') and param.get('choices_from')):
+        return []
+    choices = run_choices(param['choices_from'], timeout=15)
+    if not choices:
+        return [' ' * (name_w + 6) + paint('2', f'({param["choices_from"]}: no choices here)')]
+    indent = name_w + 8
+    value_w = min(max(len(v) for v, _ in choices), 18)
+    out = []
+    for value, about in choices:
+        lines = wrap(about, width - indent - value_w - 2) or ['']
+        out.append(' ' * indent + paint('1', f'{value:<{value_w}}') + '  ' + paint('2', lines[0]))
+        out.extend(' ' * (indent + value_w + 2) + paint('2', line) for line in lines[1:])
     return out
 
 
@@ -634,6 +655,7 @@ class Browser:
         self.examples = self.keys = False
         self.opened = None                    # the entry Enter opened (its details show), when it has no params
         self.detected = {}                    # (package, command, param) -> what auto finds ('' none)
+        self.pending = set()                  # those keys still being detected, in the background
         self.g = UNICODE if utf8() else ASCII
         self.color = colours()
         curses.curs_set(0)
@@ -870,7 +892,8 @@ class Browser:
 
     def value_text(self, package, command, param, values):
         """A field's value as the form shows it (value_text)."""
-        found = self.detected.get((package['package'], command['name'], param['name']))
+        key = (package['package'], command['name'], param['name'])
+        found = 'detecting…' if key in self.pending else self.detected.get(key)
         return value_text(param, values.get(param['name']), is_set(param, values), found, self.g['dash'])
 
     def draw_detail(self, package, command, x, width, height):
@@ -930,16 +953,18 @@ class Browser:
         return None if text is None else ''.join(text)
 
     def detect(self, package, command):
-        """Run each auto field's choices_from once: its first line is what auto finds."""
+        """Run each auto field's choices_from once, in the background (the form stays usable and shows
+        detecting until it ends): its first line is what auto finds."""
+        def find(key, lister):
+            found = run_choices(lister, timeout=10)
+            self.detected[key] = found[0][0] if found else ''
+            self.pending.discard(key)
         for param in command['params']:
             key = (package['package'], command['name'], param['name'])
-            if shown(param.get('default')) == 'auto' and param.get('choices_from') and key not in self.detected:
-                self.status = f'detecting {param["name"]} ...'
-                self.draw()
-                self.screen.refresh()
-                found = run_choices(param['choices_from'], timeout=10)
-                self.detected[key] = found[0][0] if found else ''
-        self.status = ''
+            if (shown(param.get('default')) == 'auto' and param.get('choices_from')
+                    and key not in self.detected and key not in self.pending):
+                self.pending.add(key)
+                threading.Thread(target=find, args=(key, param['choices_from']), daemon=True).start()
 
     def choose(self, package, command, param, values):
         """The picker of a choice field: the unset row (auto, default or not set) first unless the field is
@@ -1001,7 +1026,13 @@ class Browser:
         while True:
             self.draw()
             package, command = self.selected(self.rows())
-            key = self.screen.get_wch()
+            self.screen.timeout(250 if self.pending else -1)   # redraw while detections run
+            try:
+                key = self.screen.get_wch()
+            except curses.error:                # no key within the timeout: draw what was detected
+                continue
+            finally:
+                self.screen.timeout(-1)
             self.status = ''
             if self.keys or key == '?':       # ? shows every key; any key closes the list
                 self.keys = not self.keys

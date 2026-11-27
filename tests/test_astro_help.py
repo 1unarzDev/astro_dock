@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -301,6 +302,33 @@ class EntryQualityTest(unittest.TestCase):
         self.assertEqual(cmd['needs'], ['nav', 'drive+controller'])
         self.assertIn('starts first if down: nav, drive+controller; stops first if up: drive (--here skips this)',
                       '\n'.join(astro_help.details(cmd)))
+
+    def test_a_listed_param_shows_its_choices_on_the_details_page(self):
+        lister = "printf 'alpha\\tthe first part\\nbeta\\tthe second part\\n'"
+        listed = command(name='x', params=[{'name': 'only', 'choices_from': lister, 'list': True}])
+        page = '\n'.join(astro_help.details(listed))
+        self.assertRegex(page, r'alpha +the first part') and self.assertRegex(page, r'beta +the second part')
+        picked = command(name='x', params=[{'name': 'only', 'choices_from': lister}])   # no list: picker only
+        self.assertNotIn('the first part', '\n'.join(astro_help.details(picked)))
+        broken = command(name='x', params=[{'name': 'only', 'choices_from': 'false', 'list': True}])
+        self.assertIn('(false: no choices here)', '\n'.join(astro_help.details(broken)))
+
+    def test_auto_detection_runs_in_the_background_and_fills_the_form_when_done(self):
+        browser = object.__new__(astro_help.Browser)
+        browser.detected, browser.pending, browser.g = {}, set(), astro_help.ASCII
+        port = {'name': 'port', 'default': 'auto', 'type': 'str', 'form': 'positional',
+                'choices_from': "sleep 0.5; printf '/dev/ttyACM0\\n'"}
+        cmd, package = {'name': 'x', 'params': [port]}, {'package': 'p'}
+        started = time.monotonic()
+        browser.detect(package, cmd)
+        self.assertLess(time.monotonic() - started, 0.2)   # never waits for the command
+        self.assertEqual(browser.value_text(package, cmd, port, {}), 'auto: detecting…')
+        for _ in range(50):
+            if not browser.pending:
+                break
+            time.sleep(0.05)
+        self.assertEqual(browser.value_text(package, cmd, port, {}), 'auto: /dev/ttyACM0')
+
 
 if __name__ == '__main__':
     unittest.main()

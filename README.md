@@ -84,7 +84,8 @@ A `help.yaml` entry may say `level: setup` (shown only with `astro help --all`),
 there: from anywhere else, or from that host outside its container, astro forwards it as `astro on`, printing
 `(on HOST)`; `--here` runs it here), and on a param `choices_from: 'CMD'` (a shell command run here, one
 choice per line, optionally `VALUE<TAB>about`): a missing required one is picked from that list, and the help
-browser offers it as a drop-down.
+browser offers it as a drop-down. With `list: true` as well, the entry's details page lists those choices and
+what each is (for a short list that explains the command, such as a launch file's parts).
 
 ### Where things are
 
