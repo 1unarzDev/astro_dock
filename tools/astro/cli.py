@@ -15,7 +15,7 @@ from . import clock, config, fetch, field, rec, remote, stacks, status
 from .engine import apply as applying
 from .engine import log, procedures, results
 
-VERBS = ('docs', 'on', 'up', 'down', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
+VERBS = ('docs', 'start', 'on', 'up', 'down', 'logs', 'status', 'rec', 'mark', 'log', 'test', 'apply', 'undo', 'bundle', 'sim',
          'check', 'issue', 'sync', 'show', 'clock', 'help')
 HEADER = ('up', 'down', 'status', 'rec', 'test', 'apply', 'undo', 'bundle', 'show')   # one context line
 # Hidden: `_choices KIND` prints a picker's choices (help.yaml choices_from).
@@ -718,6 +718,7 @@ def run_logged(name, argv, env=None, plain=False):
 def parser():
     p = argparse.ArgumentParser(prog='astro', add_help=False)
     sub = p.add_subparsers(dest='verb')
+    sub.add_parser('start', add_help=False)
     on = sub.add_parser('on', add_help=False)
     on.add_argument('host', nargs='?')
     on.add_argument('cmd', nargs=argparse.REMAINDER)
@@ -826,6 +827,8 @@ def main(argv=None):
         if verb in HEADER and not (verb == 'test' and args.name == 'list'):
             inst = f' · instance {s.vessel.instance}' if getattr(s.vessel, 'is_sim', False) else ''
             print(f'astro {verb} · vessel {s.vessel.name}{inst} · state {s.vessel.state()} · data {s.root}')
+        if verb == 'start':
+            return remote.start()
         if verb == 'on':
             return remote.on(args.host or choose('Pick a host to open a shell on:', choices(s, 'on'),
                                                  config.this_host()), args.cmd)

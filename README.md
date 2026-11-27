@@ -29,14 +29,15 @@ subcommands. `astro docs` prints where everything lives.
 ```bash
 git clone --recurse-submodules https://github.com/1unarzDev/astro_dock.git && cd astro_dock
 ./setup.linux.sh --dry-run          # preview the stages, then run without --dry-run
-.devcontainer/prebuild.sh
-devcontainer up --workspace-folder .
-devcontainer exec --workspace-folder . bash
+tools/bin/astro start               # sets up and starts the dev container, then opens a shell in it
 ```
 
 `setup.linux.sh` asks before each stage (`--components clock,docker,devices,compose` picks some,
 `--non-interactive --yes` runs unattended). On Windows or macOS use `setup.windows.bat` or `./setup.mac.sh`
-with Docker Desktop running. `prebuild.sh` picks this host's Compose adapter and writes `.devcontainer/.env`.
+with Docker Desktop running. `astro start` opens a shell in this checkout's dev container, starting it when it is
+down (`devcontainer up`, else `docker compose up -d dev`). The first time it also runs `.devcontainer/prebuild.sh`,
+which picks this host's Compose adapter, writes `.devcontainer/.env` and pulls a newer dev image; run that again
+yourself to pick up a newer image later.
 
 The container's `dev` service runs as `roboboat` in `/home/roboboat/roboboat_ws`, with this repository
 mounted as the workspace. `~/.config/$ASTRO_CONFIG_DIR` (default `astro`; a profile's `container:` can
@@ -60,6 +61,7 @@ team's files (tests, bag presets, state file, stacks, field repo).
 | --- | --- |
 | `up [NAMES] [--with OPT]`, `down [NAMES]`, `logs [NAME] [-f]` | Start, stop and tail the vessel's stacks. Each runs on its host in the dev container (private `tmux -L astro`, else `setsid`), so an ssh drop never stops it |
 | `status [--watch]` | Each stack (host, up/down, uptime, ready rates, log), then nodes, the latest message on each test topic, recording, last log lines, next test |
+| `start` | A shell in this computer's dev container, started first when it is down |
 | `on [HOST] [cmd]` | A shell or one command in a host's dev container (ssh + `docker exec`) |
 | `rec start [PRESET] [LABEL]`, `rec stop`, `rec ls`, `rec fetch [BAG...] [--from H] [--to H] [--new\|--date D] [--list [--json]]` | Record a bag (mcap, 300 s splits); list today's bags with the log lines inside each; find the bags on this machine and every registry host and copy the picked ones (resumable rsync, never a bag still recording) to this machine or another host |
 | `mark TEXT`, `log [-n N]` | Add to, or print, the day's log |

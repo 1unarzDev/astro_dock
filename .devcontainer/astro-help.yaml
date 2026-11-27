@@ -26,6 +26,18 @@ commands:
       - astro help --list
       - astro help rec
 
+  - name: start
+    run: astro start
+    summary: Open a terminal in this computer's development container, starting it first when it is down. Run it from your own terminal.
+    notes: The first start on a computer also sets it up and can take a few minutes; after that it opens at once. Exit the terminal and the container keeps running.
+    ros: devcontainer up --workspace-folder ROOT; docker exec -it CONTAINER bash
+    details: >-
+      The container is this checkout's dev service (ASTRO_CONTAINER, .devcontainer/.env). Without
+      .devcontainer/docker-compose.override.yml it runs prebuild.sh first; without the devcontainer CLI it runs
+      docker compose up -d dev. The shell gets the vessel profile's environment, as astro on does.
+    examples:
+      - astro start
+
   - name: "on"
     run: astro on
     summary: Open a terminal on one of the robot's computers (or run one command there), from wherever you are.

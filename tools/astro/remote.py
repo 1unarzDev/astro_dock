@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -285,6 +286,42 @@ def on(name, cmd):
         return subprocess.call(argv)
     vessel, host, spec = find_host(name)
     return subprocess.call(ssh_command(vessel, host, spec, cmd, tty))
+
+
+def start(root=config.WS, run=subprocess.call):
+    """`astro start`: this checkout's dev container, started first when it is down (prebuild.sh once, when the
+    Compose override is missing; then `devcontainer up`, else `docker compose up -d dev`), then a shell in it
+    in this terminal with the vessel's environment, as `astro on` gives one."""
+    if in_container():
+        print('astro start: already inside a container (astro on HOST opens one of the robot\'s)')
+        return 0
+    container = config.dev_container(root)
+    if not container:
+        dev = Path(root) / '.devcontainer'
+        if not (dev / 'docker-compose.override.yml').exists():
+            print('astro start: first start on this machine, picking its Compose adapter (prebuild.sh)')
+            code = run([str(dev / 'prebuild.sh')])
+            if code:
+                return code
+        up = (['devcontainer', 'up', '--workspace-folder', str(root)] if shutil.which('devcontainer') else
+              ['docker', 'compose', '-f', str(dev / 'docker-compose.yml'), '-f',
+               str(dev / 'docker-compose.override.yml'), 'up', '-d', 'dev'])
+        print(f'astro start: starting the dev container ({shlex.join(up[:2])})')
+        code = run(up)
+        if code:
+            return code
+        container = config.dev_container(root)
+        if not container:
+            raise config.Error('the dev container did not come up (docker ps shows what runs)')
+    try:
+        vessel = config.Vessel()
+    except config.Error:
+        vessel = None                     # no profile set yet: a plain shell, no vessel environment
+    if vessel is None:
+        argv = ['docker', 'exec', '-it' if _tty() else '-i', container, 'bash']
+    else:
+        argv, _ = local_words(vessel, container, '', _tty())
+    os.execvp(argv[0], argv)
 
 
 VAR = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)')
