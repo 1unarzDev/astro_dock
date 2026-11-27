@@ -49,7 +49,9 @@ jobs:
       - name: Validate the DDS address choice
         run: .github/scripts/test-ros-net.sh
       - name: Run every unit test (fakes only)
-        run: python3 -m unittest discover -s tests
+        run: |
+          sudo apt-get install -y -qq python3-numpy python3-yaml >/dev/null   # the engine tests (test_astro) need numpy
+          python3 -m unittest discover -s tests
       - name: Validate the boat revert
         run: if [ -f tests/test_boat_revert.sh ]; then bash tests/test_boat_revert.sh; fi
       - name: Check dependency locks, Compose and Jetson image policy

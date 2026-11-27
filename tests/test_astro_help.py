@@ -234,8 +234,7 @@ class ConventionTest(unittest.TestCase):
     never a param, and a noun lists all of them."""
 
     def test_no_subcommand_params_and_every_noun_lists_its_entries(self):
-        packages, _ = astro_help.discover(list(astro_help.candidates(prefixes=[])))
-        self.assertGreater(len(packages), 1)
+        packages = workspace_packages(self)
         for package in packages:
             names = [c['name'] for c in package['commands']]
             for command in package['commands']:
@@ -261,13 +260,20 @@ class ConventionTest(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith('Usage: ' + name), out.stdout)
 
 
+def workspace_packages(test):
+    """Every help.yaml in the workspace; skipped where only astro's own is here (the team's ROS repos under src/ are
+    separate checkouts: CI clones astro_dock alone)."""
+    packages, _ = astro_help.discover(list(astro_help.candidates(prefixes=[])))
+    if len(packages) <= 1:
+        test.skipTest('no workspace repos with a help.yaml here (src/ is not checked out)')
+    return packages
+
+
 class EntryQualityTest(unittest.TestCase):
     """Every workspace help.yaml: no duplicate entries, and the core ones never leave a field to bare typing."""
 
     def packages(self):
-        packages, _ = astro_help.discover(list(astro_help.candidates(prefixes=[])))
-        self.assertGreater(len(packages), 1)
-        return packages
+        return workspace_packages(self)
 
     def test_no_two_entries_of_a_level_run_the_same_command(self):
         seen = {}
