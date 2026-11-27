@@ -251,10 +251,11 @@ def today(root):
     return day
 
 
-def dev_container(local_root=WS):
-    """This checkout's running dev container (devices/lib.sh hw_dev_container), or ''."""
-    run = subprocess.run(['bash', '-c', 'source "$1/devices/lib.sh"; hw_dev_container "$1"', '_', str(local_root)],
-                         capture_output=True, text=True)
+def dev_container(local_root=WS, stopped=False):
+    """This checkout's running dev container (devices/lib.sh hw_dev_container), or ''; with STOPPED, one that
+    exists but is stopped counts too."""
+    run = subprocess.run(['bash', '-c', 'source "$1/devices/lib.sh"; hw_dev_container "$1" "$2"', '_', str(local_root),
+                          '--all' if stopped else ''], capture_output=True, text=True)
     return run.stdout.strip()
 
 

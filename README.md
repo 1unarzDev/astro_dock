@@ -34,8 +34,9 @@ tools/bin/astro start               # sets up and starts the dev container, then
 
 `setup.linux.sh` asks before each stage (`--components clock,docker,devices,compose` picks some,
 `--non-interactive --yes` runs unattended). On Windows or macOS use `setup.windows.bat` or `./setup.mac.sh`
-with Docker Desktop running. `astro start` opens a shell in this checkout's dev container, starting it when it is
-down (`devcontainer up`, else `docker compose up -d dev`). The first time it also runs `.devcontainer/prebuild.sh`,
+with Docker Desktop running. `astro start` opens a shell in this checkout's dev container. A stopped one is started as
+it is (`docker start`), never rebuilt; only with none at all is one created (`devcontainer up`, else `docker compose up
+-d --no-recreate dev`). The first time it also runs `.devcontainer/prebuild.sh`,
 which picks this host's Compose adapter, writes `.devcontainer/.env` and pulls a newer dev image; run that again
 yourself to pick up a newer image later.
 

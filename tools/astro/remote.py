@@ -289,13 +289,24 @@ def on(name, cmd):
 
 
 def start(root=config.WS, run=subprocess.call):
-    """`astro start`: this checkout's dev container, started first when it is down (prebuild.sh once, when the
-    Compose override is missing; then `devcontainer up`, else `docker compose up -d dev`), then a shell in it
-    in this terminal with the vessel's environment, as `astro on` gives one."""
+    """`astro start`: a shell in this checkout's dev container, in this terminal with the vessel's environment
+    (as `astro on` gives one). A running container opens as it is and a stopped one is started as it is
+    (`docker start`): neither is rebuilt or recreated. Only with no container at all is one created (prebuild.sh
+    once, when the Compose override is missing; then `devcontainer up`, else `docker compose up -d
+    --no-recreate dev`)."""
     if in_container():
         print('astro start: already inside a container (astro on HOST opens one of the robot\'s)')
         return 0
     container = config.dev_container(root)
+    stopped = '' if container else config.dev_container(root, stopped=True)
+    if stopped:
+        print(f'astro start: starting the stopped dev container as it is (docker start {stopped})')
+        code = run(['docker', 'start', stopped])
+        if code:
+            return code
+        container = config.dev_container(root)
+        if not container:
+            raise config.Error(f'the dev container {stopped} did not start (docker logs {stopped} says why)')
     if not container:
         dev = Path(root) / '.devcontainer'
         if not (dev / 'docker-compose.override.yml').exists():
@@ -305,8 +316,8 @@ def start(root=config.WS, run=subprocess.call):
                 return code
         up = (['devcontainer', 'up', '--workspace-folder', str(root)] if shutil.which('devcontainer') else
               ['docker', 'compose', '-f', str(dev / 'docker-compose.yml'), '-f',
-               str(dev / 'docker-compose.override.yml'), 'up', '-d', 'dev'])
-        print(f'astro start: starting the dev container ({shlex.join(up[:2])})')
+               str(dev / 'docker-compose.override.yml'), 'up', '-d', '--no-recreate', 'dev'])
+        print(f'astro start: no dev container yet, creating it ({shlex.join(up[:2])})')
         code = run(up)
         if code:
             return code

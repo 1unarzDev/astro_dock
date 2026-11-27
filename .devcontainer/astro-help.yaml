@@ -30,11 +30,13 @@ commands:
     run: astro start
     summary: Open a terminal in this computer's development container, starting it first when it is down. Run it from your own terminal.
     notes: The first start on a computer also sets it up and can take a few minutes; after that it opens at once. Exit the terminal and the container keeps running.
-    ros: devcontainer up --workspace-folder ROOT; docker exec -it CONTAINER bash
+    ros: docker start CONTAINER (when stopped); docker exec -it CONTAINER bash
     details: >-
-      The container is this checkout's dev service (ASTRO_CONTAINER, .devcontainer/.env). Without
-      .devcontainer/docker-compose.override.yml it runs prebuild.sh first; without the devcontainer CLI it runs
-      docker compose up -d dev. The shell gets the vessel profile's environment, as astro on does.
+      The container is this checkout's dev service (ASTRO_CONTAINER, .devcontainer/.env, else the one Compose
+      labels as this checkout's). A running one opens as it is and a stopped one is started as it is (docker
+      start); neither is rebuilt or recreated. Only with none at all is one created: prebuild.sh first without
+      .devcontainer/docker-compose.override.yml, then devcontainer up, else docker compose up -d --no-recreate dev.
+      The shell gets the vessel profile's environment, as astro on does.
     examples:
       - astro start
 

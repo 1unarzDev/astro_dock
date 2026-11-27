@@ -32,14 +32,16 @@ hw_dev_name() {
     printf '%s' "${name:-$(hw_compose_default "$1" "$var")}"
 }
 
-# hw_dev_container ROOT: the ID of the running dev container of the checkout ROOT (none when it is down):
-# by its name, else by the labels Compose gives it (ROOT's .devcontainer project, service dev), so one
-# created under an older default name is still this checkout's and is never started a second time.
+# hw_dev_container ROOT [--all]: the ID of the running dev container of the checkout ROOT (none when it is
+# down; --all: a stopped one too): by its name, else by the labels Compose gives it (ROOT's .devcontainer
+# project, service dev), so one created under an older default name is still this checkout's and is never
+# created a second time.
 hw_dev_container() {
-    local id real
-    id=$(${HW_DOCKER:-docker} ps -q --filter "name=^$(hw_dev_name "$1")\$" 2>/dev/null | head -n1)
+    local id real ps=(ps -q)
+    [[ ${2:-} != --all ]] || ps=(ps -aq)
+    id=$(${HW_DOCKER:-docker} "${ps[@]}" --filter "name=^$(hw_dev_name "$1")\$" 2>/dev/null | head -n1)
     if [[ -z $id ]] && real=$(cd -- "$1" 2>/dev/null && pwd -P); then
-        id=$(${HW_DOCKER:-docker} ps -q --filter "label=com.docker.compose.project.working_dir=$real/.devcontainer" \
+        id=$(${HW_DOCKER:-docker} "${ps[@]}" --filter "label=com.docker.compose.project.working_dir=$real/.devcontainer" \
             --filter label=com.docker.compose.service=dev 2>/dev/null | head -n1)
     fi
     printf '%s\n' "$id"
