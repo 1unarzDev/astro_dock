@@ -42,7 +42,8 @@ yourself to pick up a newer image later.
 The container's `dev` service runs as `roboboat` in `/home/roboboat/roboboat_ws`, with this repository
 mounted as the workspace. `~/.config/$ASTRO_CONFIG_DIR` (default `astro`; a profile's `container:` can
 rename it) is mounted too, so operator config survives a rebuild.
-On the host, put `tools/bin` on `PATH` to use `astro` outside the container.
+On the host, `setup.linux.sh --components devtools` links `astro` into `~/.local/bin`, so it runs outside the
+container too.
 
 Then point the machine at your team's profile set and check what it found:
 
@@ -163,7 +164,7 @@ directly; `./hw.sh KIND --help` shows a device kind's details. Its usage:
 
 ```text
 hw.sh [--vessel V] [--host H] KIND VERB [ARGS]   (KIND VERB --help for details)
-hw.sh whoami [--root|--registry] this machine's host and vessel, and how found (or the profile root or registry)
+hw.sh whoami [--root|--registry|--paths] this machine's host and vessel, and how found (or the profile root, the registry, or --paths: the network env and the registry, one per line, from one lookup)
 hw.sh env [KEY]                  the vessel's network env path, or one of its keys or role addresses (<ROLE>_IP)
 hw.sh profile show [NAME]        a merged profile (no secrets)
 hw.sh profile sync [URL [REF]]   check out your profile set at its ref (URL REF: record them first)

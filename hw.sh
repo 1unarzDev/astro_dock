@@ -31,7 +31,7 @@ verbs() { declare -F | sed -n 's/^declare -f driver_//p' | grep -vx usage | tr '
 # The commands besides KIND VERB, as usage prints them (usage|description, split at the last |);
 # `hw.sh COMMAND --help` prints its own line.
 HW_COMMANDS=(
-    "whoami [--root|--registry]|this machine's host and vessel, and how found (or the profile root or registry)"
+    "whoami [--root|--registry|--paths]|this machine's host and vessel, and how found (or the profile root, the registry, or --paths: the network env and the registry, one per line, from one lookup)"
     "env [KEY]|the vessel's network env path, or one of its keys or role addresses (<ROLE>_IP)"
     "profile show [NAME]|a merged profile (no secrets)"
     "profile sync [URL [REF]]|check out your profile set at its ref (URL REF: record them first)"
@@ -167,6 +167,9 @@ case ${1:-} in
         case ${2:-} in
             --root) printf '%s\n' "$HW_PROFILES_ROOT" ;;
             --registry) printf '%s\n' "${ASTRO_REGISTRY:-}" ;;
+            # dev.bashrc's one lookup per shell: the network env (empty unless readable, as env requires)
+            --paths) [[ -r ${ASTRO_NETWORK_ENV:-} ]] && printf '%s\n' "$ASTRO_NETWORK_ENV" || echo
+                     printf '%s\n' "${ASTRO_REGISTRY:-}" ;;
             *) whoami_report ;;
         esac
         exit 0

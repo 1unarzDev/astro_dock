@@ -3,6 +3,12 @@
 ASTRO_DIR="${BASH_SOURCE[0]%/*}"
 export ROS_WS="${ROS_WS:-${ASTRO_DIR%/.devcontainer}}"
 
+# hw.sh resolving the vessel for the shell loading this file (__astro_network_env below) is itself a bash
+# script, so BASH_ENV brings it here too. It reads profile files only: it needs no ROS, vessel or DDS pin,
+# and doing them again there made every container shell several seconds slower and stopped the shared
+# ros2 daemon (the child saw a different DDS address than its parent).
+[[ -z "${__ASTRO_NET_RESOLVING:-}" ]] || return 0
+
 # Load ROS, the image overlays and the built workspace. Later entries take
 # precedence: each overlay was built on the ones before it, and the workspace
 # overrides installed packages.
@@ -65,10 +71,10 @@ __astro_network_env() {
   local env registry
   if [[ -z "${ASTRO_NETWORK_ENV:-}" && -z "${__ASTRO_NET_RESOLVED:-}${__ASTRO_NET_RESOLVING:-}" ]]; then
     __ASTRO_NET_RESOLVED=1    # once per shell, not exported
-    env="$(__ASTRO_NET_RESOLVING=1 "$ROS_WS/hw.sh" env 2>/dev/null)" || env=
+    # One lookup for both (each hw.sh run resolves the vessel, about a second on a boat computer).
+    { read -r env; read -r registry; } < <(__ASTRO_NET_RESOLVING=1 "$ROS_WS/hw.sh" whoami --paths 2>/dev/null)
     if [[ -n "$env" ]]; then export ASTRO_NETWORK_ENV="$env"; else unset ASTRO_NETWORK_ENV; fi
     if [[ -z "${ASTRO_REGISTRY:-}" ]]; then
-      registry="$(__ASTRO_NET_RESOLVING=1 "$ROS_WS/hw.sh" whoami --registry 2>/dev/null)" || registry=
       if [[ -n "$registry" ]]; then export ASTRO_REGISTRY="$registry"; else unset ASTRO_REGISTRY; fi
     fi
   fi
