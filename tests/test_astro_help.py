@@ -329,6 +329,16 @@ class EntryQualityTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(browser.value_text(package, cmd, port, {}), 'auto: /dev/ttyACM0')
 
+    def test_needs_show_the_command_each_stack_runs_on_text_pages_only(self):
+        cmd = command(name='x', needs=['loc', 'drive+controller'])
+        found = {'stacks': {'loc': 'on boat: ros2 launch pkg loc.launch.py', 'drive': 'on boat: ros2 launch hw '
+                            'drive.launch.py  (not default)'}, 'options': {'controller': 'drive: controller:=true'}}
+        with mock.patch.dict(astro_help.STACK_RUNS, found, clear=True):
+            page = '\n'.join(astro_help.details(cmd))
+            self.assertIn('loc: on boat: ros2 launch pkg loc.launch.py', page)
+            self.assertIn('drive+controller: on boat: ros2 launch hw drive.launch.py controller:=true', page)
+            self.assertNotIn('ros2 launch', astro_help.stacks_note(cmd))    # the browser's form never looks them up
+
 
 if __name__ == '__main__':
     unittest.main()

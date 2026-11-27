@@ -203,8 +203,9 @@ def choices(s, kind):
             hosts = {}
         out = [(name, f'{spec["address"]}  {" ".join(spec["roles"])}') for name, spec in hosts.items() if spec['ssh']]
         return out + [(name, 'local vessel (here, with its environment)') for name in remote.local_vessels()]
-    if kind == 'stacks':
-        return [(st.name, f'on {st.host}' + ('' if st.default else '  (not default)'))
+    if kind == 'stacks':     # each with the command it runs (the profile's run:), as the help pages show it
+        return [(st.name, f'on {st.host}: {st.run or "started elsewhere (run: null)"}'
+                          + ('' if st.default else '  (not default)'))
                 for st in stacks.parse(s.vessel.astro).values()]
     if kind == 'options':
         return [(o, f'{st.name}: {args}') for st in stacks.parse(s.vessel.astro).values() for o, args in st.options.items()]

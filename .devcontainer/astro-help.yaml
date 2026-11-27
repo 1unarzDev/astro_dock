@@ -66,8 +66,8 @@ commands:
       publish without astro's own process (started by hand) is used, not started twice; before starting
       a part astro removes the host's Fast DDS shared-memory files no live process holds.
     params:
-      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', description: 'Only these parts of the software, e.g. drive nav; leave empty for the usual set. Parts they rely on start too.'}
-      - {name: --with, choices_from: 'astro _choices options', description: 'An optional extra for a part you start, e.g. controller to also start the speed controller with drive.'}
+      - {name: names, type: list, required: false, choices_from: 'astro _choices stacks', list: true, description: 'Only these parts of the software, e.g. drive nav; leave empty for the usual set. Parts they rely on start too.'}
+      - {name: --with, choices_from: 'astro _choices options', list: true, description: 'An optional extra for a part you start, e.g. controller to also start the speed controller with drive.'}
       - {name: --force, type: bool, description: 'Start a part even when it already runs outside astro (its ready topics publish), which makes a second copy.'}
     examples:
       - astro up

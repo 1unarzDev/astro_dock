@@ -479,8 +479,9 @@ def details(command, paint=lambda code, s: s, width=None):
         out.append(paint('2', f'    ros: {command["ros"]}'))
     if command['host']:
         out.append(paint('2', f'    runs on {command["host"]} (forwarded from elsewhere; --here runs it here)'))
-    if stacks_note(command):
-        out.append(paint('2', f'    {stacks_note(command)}'))
+    note = stacks_note(command, commands=True)
+    if note:
+        out.extend(paint('2', f'    {line}') for line in note.split('\n'))
     if command['notes']:
         out.extend('    ' + line for line in wrap(command['notes'], width))
     if command['params']:
@@ -519,15 +520,38 @@ def listed(param, name_w, width, paint):
     return out
 
 
-def stacks_note(command):
-    """One line: the stacks astro starts or stops before the command (needs/conflicts), or ''."""
-    parts = []
+STACK_RUNS = {}    # 'stacks' and 'options' -> astro _choices KIND as a dict, read once per process
+
+
+def stack_runs(kind='stacks'):
+    """What each of the vessel's stacks runs ("on HOST: COMMAND"), or each --with option's arguments ("STACK:
+    ARGS"), from the profile (astro _choices KIND); {} without one."""
+    if kind not in STACK_RUNS:
+        STACK_RUNS[kind] = dict(run_choices(f'astro _choices {kind}', timeout=10))
+    return STACK_RUNS[kind]
+
+
+def need_command(need, found, options):
+    """NEED (a stack, or STACK+OPTION) as the command it runs: the stack's, with the option's arguments."""
+    name, *extra = need.split('+')
+    line = found[name].replace('  (not default)', '')
+    return ' '.join([line] + [options[o].split(': ', 1)[-1] for o in extra if o in options])
+
+
+def stacks_note(command, commands=False):
+    """The stacks astro starts or stops before the command (needs/conflicts), or ''; then one line per need
+    with the command that stack runs (the vessel profile's), so the plain-ROS equivalent shows; only with
+    COMMANDS (the text pages: the browser never waits on astro for it)."""
+    parts, runs = [], []
     if command.get('needs'):
+        found, options = (stack_runs(), stack_runs('options')) if commands else ({}, {})
         parts.append('starts first if down: ' + ', '.join(command['needs']))
+        runs = [f'{need}: {need_command(need, found, options)}'
+                for need in command['needs'] if need.split('+')[0] in found]
     if command.get('conflicts'):
         parts.append('stops first if up: ' + ', '.join(next(iter(c)) if isinstance(c, dict) else c
                                                        for c in command['conflicts']))
-    return '; '.join(parts) + (' (--here skips this)' if parts else '')
+    return '; '.join(parts) + (' (--here skips this)' if parts else '') + ''.join('\n  ' + r for r in runs)
 
 
 def text(packages, word=None, color=False, exact=None, levels=('core',)):
