@@ -575,7 +575,7 @@ def fill(module, command, args, pick=None):
             continue
         if not (param.get('choices_from') and module.is_required(param)):
             break
-        options = module.run_choices(param['choices_from'], env=dispatch_env())
+        options = module.run_choices(param['choices_from'], env=dispatch_env(command))
         value = pick(f'Pick the {param["name"]} for astro {command["name"]}'
                      + (f' ({param["description"]})' if param.get('description') else '') + ':',
                      options, current=shown_default(module, param))
@@ -588,14 +588,43 @@ def shown_default(module, param):
     return module.shown(param['default'], param) if 'default' in param else None
 
 
-def dispatch_env():
+def dispatch_env(command=None):
+    """The env a help.yaml command runs with: this machine's vessel's, as for the built-in verbs; but a command run
+    through the sim backend (its run line starts with the sim profile's astro.sim, e.g. crane sim) gets the sim
+    vessel's, as astro sim does, so a sim never sees a boat's ROS_DOMAIN_ID or state."""
     env = dict(os.environ)
     env.setdefault('ROS_WS', str(config.WS))
-    try:                                  # the vessel's env, as for the built-in verbs
-        env.update(config.Vessel().env())
+    try:
+        vessel = sim_backend_vessel(command) if command else None
+        env.update((vessel or config.Vessel()).env())
     except config.Error:
         pass
     return env
+
+
+def sim_backend_vessel(command):
+    """The sim vessel when COMMAND's run line is its astro.sim backend (or a verb of it), else None."""
+    try:
+        vessel = remote.sim_vessel()
+    except config.Error:
+        return None
+    def words(text):                      # a default may hold $HOME itself: expand twice, compare real paths
+        out = remote.expand(remote.expand(text or '')).split()
+        return [os.path.realpath(out[0]), *out[1:]] if out else []
+    backend, run = words(vessel.astro.get('sim')), words(command.get('run'))
+    return vessel if backend and run[:len(backend)] == backend else None
+
+
+def crane_missing(word):
+    """One line naming how to install crane, when WORD is crane and no crane help.yaml was found."""
+    if word != 'crane':
+        return None
+    home = remote.expand('${CRANE_DIR:-~/crane_ml}')
+    return f'astro: crane is not installed here (no {home}/help.yaml); install it: {CRANE_INSTALL}'
+
+
+CRANE_INSTALL = ('git clone https://github.com/1unarzDev/crane_ml.git ~/crane_ml && ~/crane_ml/install.sh '
+                 '(or set CRANE_DIR to your checkout)')
 
 
 def nouns(packages, word):
@@ -617,7 +646,8 @@ def dispatch(argv):
     if not best:
         subs = nouns(packages, argv[0])
         if not subs:
-            print(f'astro: no verb or help.yaml command {argv[0]!r} (astro help)', file=sys.stderr)
+            print(crane_missing(argv[0]) or f'astro: no verb or help.yaml command {argv[0]!r} (astro help)',
+                  file=sys.stderr)
             return 2
         width = max(len(c['name']) for _, c in subs)
         for _, command in subs:
@@ -675,7 +705,7 @@ def dispatch(argv):
             return 1
         except KeyboardInterrupt:
             return 130
-    return run_logged(command['name'], ['bash', '-c', line], dispatch_env(), plain=command.get('interactive'))
+    return run_logged(command['name'], ['bash', '-c', line], dispatch_env(command), plain=command.get('interactive'))
 
 
 def run_logged(name, argv, env=None, plain=False):
@@ -833,7 +863,12 @@ def main(argv=None):
             return remote.on(args.host or choose('Pick a host to open a shell on:', choices(s, 'on'),
                                                  config.this_host()), args.cmd)
         if verb == 'sim':
-            return remote.sim(args.action, args.args)
+            try:
+                return remote.sim(args.action, args.args)
+            except FileNotFoundError as error:      # the backend's program is not on this machine
+                print(f'astro sim: the sim backend is not installed ({error.filename}); install crane: '
+                      f'{CRANE_INSTALL}', file=sys.stderr)
+                return 2
         if verb == 'up':
             return stacks.main_up(s.vessel, s.root, args)
         if verb == 'down':
