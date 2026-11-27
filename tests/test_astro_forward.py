@@ -18,6 +18,14 @@ from astro import cli, config, remote  # noqa: E402
 from astro.engine import log  # noqa: E402
 
 
+def setUpModule():
+    # These tests stub ssh and docker: which machine runs them must not matter (on a registry host its own
+    # commands would run locally instead).
+    patch = mock.patch.object(config, 'this_host', return_value='')
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
+
+
 class FakeVessel:
     name = 'boat'
     registry = 'devices.yaml'
@@ -266,3 +274,20 @@ class FieldHome(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HereWords(unittest.TestCase):
+    """A host shell on a registry host runs that host's commands in its own container, never ssh to itself."""
+
+    def test_this_host_execs_locally_and_another_host_uses_ssh(self):
+        vessel = mock.Mock(astro={}, env=lambda: {'ROS_DOMAIN_ID': '42'})
+        spec = {'ssh': True, 'container': 'devbox', 'address': '10.0.0.5', 'user': 'crew', 'via': None, 'roles': []}
+        with mock.patch.object(config, 'this_host', return_value='computer'), \
+                mock.patch.object(remote, 'in_container', return_value=False):
+            argv, _ = remote.words(vessel, 'computer', spec, 'astro status')
+            self.assertEqual(argv[:2], ['docker', 'exec'])
+            self.assertIn('devbox', argv)
+            self.assertNotIn('ssh', argv)
+            with mock.patch.object(remote, 'ssh_command', return_value=['ssh', 'other']) as ssh:
+                self.assertEqual(remote.words(vessel, 'other', spec, 'astro status')[0], ['ssh', 'other'])
+                ssh.assert_called_once()

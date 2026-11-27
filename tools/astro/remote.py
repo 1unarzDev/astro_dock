@@ -175,8 +175,9 @@ def place(vessel, host):
 
 
 def words(vessel, host, spec, cmd, tty=False):
-    """(argv, env) running `bash -c cmd` in HOST's dev container: ssh + docker exec, or here (ssh: false)."""
-    if spec['ssh']:
+    """(argv, env) running `bash -c cmd` in HOST's dev container: ssh + docker exec, or here when HOST is this
+    machine (its own host shell must not ssh to itself) or has ssh: false."""
+    if spec['ssh'] and not is_here(host, spec):
         return ssh_command(vessel, host, spec, [cmd] if cmd else [], tty), None
     return local_words(vessel, spec['container'], cmd, tty)
 

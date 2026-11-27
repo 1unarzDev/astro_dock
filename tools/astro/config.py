@@ -265,6 +265,9 @@ def compose_default_container(local_root=WS):
     return run.stdout.strip()
 
 
+_HOSTS = {}     # profile root -> this machine's host: found once per process (it reads interfaces and leases)
+
+
 def this_host():
     """This machine's registry host name as hw.sh whoami finds it (ASTRO_HOST wins), or ''."""
     if os.environ.get('ASTRO_HOST'):
@@ -272,10 +275,12 @@ def this_host():
     root = profiles_root()
     if root is None:
         return ''
-    try:
-        return _assignments(profile.resolve(root)).get('ASTRO_HOST', '')
-    except profile.Error:
-        return ''
+    if str(root) not in _HOSTS:
+        try:
+            _HOSTS[str(root)] = _assignments(profile.resolve(root)).get('ASTRO_HOST', '')
+        except profile.Error:
+            _HOSTS[str(root)] = ''
+    return _HOSTS[str(root)]
 
 
 def have_ros():
