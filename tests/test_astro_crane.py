@@ -23,7 +23,7 @@ class FakeVessel:
 
 class CraneDispatch(unittest.TestCase):
     SIM = FakeVessel('sim', 101, '${CRANE_DIR:-~/crane_ml}/bin/crane sim')
-    BOAT = FakeVessel('blastoise', 42)
+    BOAT = FakeVessel('boat-a', 42)
 
     def env_for(self, run):
         with mock.patch.object(remote, 'sim_vessel', return_value=self.SIM), \

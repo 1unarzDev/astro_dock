@@ -52,6 +52,7 @@ def commands(path):
         line = re.sub(r'#.*$', '', line) if not re.search(r'[\'"].*#', line) else line
         found.update(WHICH.findall(line))
         bare = re.sub(r'"(?:[^"\\]|\\.)*"|\'[^\']*\'', '""', line)
+        bare = re.sub(r'\(\(.*?\)\)', '', bare)     # bash arithmetic ((n == 0)) runs no command
         if bare.strip().startswith('#'):
             continue
         # a command-position word counts when it is an installed program (a function, variable or prose is not)
