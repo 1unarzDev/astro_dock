@@ -12,7 +12,7 @@ deps:
   git:      {cmds: [git], side: host, pacman: git, apt: git, dnf: git, brew: git}
   jq:       {cmds: [jq], side: host, pacman: jq, apt: jq, dnf: jq, brew: jq}
   lsof:     {cmds: [lsof], side: host, pacman: lsof, apt: lsof, dnf: lsof, brew: lsof}
-  python:   {cmds: [python3], side: host, pacman: python, apt: 'python3 python3-venv python3-yaml', dnf: 'python3 python3-pyyaml', brew: python}
+  python:   {cmds: [python3], side: host, pacman: 'python python-yaml', apt: 'python3 python3-venv python3-yaml', dnf: 'python3 python3-pyyaml', brew: python}
   usbutils: {cmds: [lsusb], side: host, pacman: usbutils, apt: usbutils, dnf: usbutils, brew: '-'}
   rsync:    {cmds: [rsync], side: host, pacman: rsync, apt: rsync, dnf: rsync, brew: rsync}
   openssh:  {cmds: [ssh, ssh-keygen], side: host, pacman: openssh, apt: openssh-client, dnf: openssh-clients, brew: '-'}

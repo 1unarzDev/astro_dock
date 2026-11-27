@@ -347,10 +347,30 @@ stage_mdns() {
     COMPLETED+=(mdns)
 }
 
+# link_astro: astro in the host shell, as a link in ~/.local/bin (on the login PATH of the distributions this
+# sets up) to this checkout's tools/bin/astro. A user file, so immutable hosts get it too; a non-link is left.
+# An immutable host gets no packages, so PyYAML (astro's and profile.py's one module) comes from pip --user.
+PYYAML_PIN="pyyaml==6.0.3"
+link_astro() {
+    if $IMMUTABLE && ! python3 -c 'import yaml' 2>/dev/null; then
+        run python3 -m pip install --user --quiet "$PYYAML_PIN"
+    fi
+    local bin="$HOME/.local/bin" target="$SCRIPT_DIR/tools/bin/astro"
+    [[ "$(readlink -f "$bin/astro" 2>/dev/null)" == "$(readlink -f "$target")" ]] && { echo "astro: $bin/astro already links here."; return; }
+    if [[ -e $bin/astro && ! -L $bin/astro ]]; then
+        echo "Leaving $bin/astro: it is not a link (remove it to use this checkout's astro)."
+        return
+    fi
+    run mkdir -p "$bin"
+    run ln -sfn "$target" "$bin/astro"
+    case ":$PATH:" in *":$bin:"*) ;; *) echo "$bin is not on PATH here: add it (e.g. in ~/.profile) to run astro from any shell." ;; esac
+}
+
 stage_devtools() {
     heading "Developer command-line tools"
-    echo "This installs the host tools every repo declares in its deps.yaml (devices/deps.sh names them; config/host-deps.yaml maps them to packages) and mDNS (.local) resolution."
+    echo "This links astro into ~/.local/bin, then installs the host tools every repo declares in its deps.yaml (devices/deps.sh names them; config/host-deps.yaml maps them to packages) and mDNS (.local) resolution."
     echo "It does not install VS Code, Node, or clone repositories."
+    link_astro
     $IMMUTABLE && { echo "Skipping package mutation on immutable host."; SKIPPED+=(devtools); return; }
     approve "Install host developer tools?" || { SKIPPED+=(devtools); return; }
     pkg_install $("$SCRIPT_DIR/devices/deps.sh" packages "$(pkg_mgr)")

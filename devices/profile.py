@@ -52,8 +52,15 @@ import sys
 try:
     import yaml
 except ImportError:
-    sys.exit('profile.py: PyYAML is missing, so the device profiles cannot load '
-             '(install it: python3 -m pip install --user pyyaml).')
+    # python3 -I (how hw.sh runs this) skips the user's site-packages, which is where an immutable host has
+    # PyYAML (pip install --user). Look there too: the user's own files, still not the cwd or the environment.
+    import site
+    sys.path.append(site.getusersitepackages())
+    try:
+        import yaml
+    except ImportError:
+        sys.exit('profile.py: PyYAML is missing, so the device profiles cannot load '
+                 '(install it: python3 -m pip install --user pyyaml).')
 
 KEY = re.compile(r'\$([A-Z][A-Z0-9_]*)')
 NAME = re.compile(r'[a-z0-9][a-z0-9_-]*')
