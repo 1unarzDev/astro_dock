@@ -64,3 +64,37 @@ class Start(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DevContainer(unittest.TestCase):
+    """config.dev_container finds this checkout's container by name, else by its Compose labels (one made
+    under an older default name), and never another checkout's."""
+
+    def lookup(self, running):
+        """dev_container of a checkout whose docker lists RUNNING ({id: (name, working_dir)})."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp, 'ws')
+            (root / '.devcontainer').mkdir(parents=True)
+            (root / 'devices').symlink_to(ROOT / 'devices')
+            (root / '.devcontainer/.env').write_text('ASTRO_CONTAINER=astro_dev\n')
+            docker = Path(tmp, 'docker')
+            rows = ''.join(f'{cid} {name} {wd.replace("ROOT", str(root.resolve()))}\n'
+                           for cid, (name, wd) in running.items())
+            docker.write_text(f'''#!/bin/bash
+name=; wd=; service=
+for a in "$@"; do case $a in name=*) name=${{a#name=^}}; name=${{name%$}};;
+  label=com.docker.compose.project.working_dir=*) wd=${{a#*=}}; wd=${{wd#*=}};;
+  label=com.docker.compose.service=dev) service=dev;; esac; done
+while read -r id n w; do
+  if [[ -n $name && $n == "$name" ]] || [[ -n $wd && $service == dev && $w == "$wd" ]]; then echo "$id"; fi
+done <<'ROWS'
+{rows}ROWS
+''')
+            docker.chmod(0o755)
+            with mock.patch.dict(os.environ, {'HW_DOCKER': str(docker)}):
+                return config.dev_container(root / 'devices' / '..')
+
+    def test_by_name_then_by_label_never_another_checkouts(self):
+        self.assertEqual(self.lookup({'aaa': ('astro_dev', '/elsewhere/.devcontainer')}), 'aaa')
+        self.assertEqual(self.lookup({'bbb': ('old_dev', 'ROOT/.devcontainer')}), 'bbb')   # an older default name
+        self.assertEqual(self.lookup({'ccc': ('old_dev', '/other/ws/.devcontainer')}), '')
